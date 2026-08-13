@@ -1,0 +1,67 @@
+[project]
+name = "meeting-notes-gcp"
+version = "0.1.0"
+description = "GCP-native meeting memory pipeline — Cloud Run, Cloud SQL, Vertex AI, Memgraph"
+requires-python = ">=3.11"
+
+# Pin deliberately. v5 lost time to unpinned-dependency shape drift in a third-party
+# SDK; the fix was pinning. Resolve concrete versions in Phase 1.
+dependencies = [
+    # Web / async
+    "fastapi",
+    "uvicorn[standard]",
+    "httpx",                        # the ONLY HTTP client. Never `requests`.
+    # Models / config
+    "pydantic>=2",
+    "pydantic-settings",
+    # Data
+    "asyncpg",
+    "cloud-sql-python-connector[asyncpg]",
+    "neo4j",                        # Bolt driver for Memgraph
+    # GCP
+    "google-cloud-secret-manager",
+    "google-cloud-pubsub",
+    "google-auth",
+    "google-auth-oauthlib",
+    "google-api-python-client",
+    "google-cloud-aiplatform",      # Vertex AI
+    # Local-dev LLM backend
+    "openai",                       # LM Studio's OpenAI-compatible API only
+    # Logging
+    "structlog",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "anyio",
+    "ruff",
+    "mypy",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["meeting_notes*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Every test must run with no live GCP, no database, no LLM. v5 achieved this for
+# 363 tests. A test needing live credentials is a broken test.
+addopts = "-q"
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+disallow_untyped_defs = true        # CLAUDE.md: type hints on ALL signatures
+ignore_missing_imports = true

@@ -1,0 +1,52 @@
+# Secrets — never commit any of these
+.env
+.env.*
+!.env.example
+client_secret*.json
+token.json
+*credentials*.json
+service-account*.json
+*.pem
+*.key
+
+# Terraform
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+crash.log
+*.tfvars
+!terraform/envs/*.example.tfvars
+override.tf
+override.tf.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# graphify — commit the report and the graph, never the cache.
+# v5 accidentally tracked ~180 cache files. Do not repeat that.
+graphify-out/cache/
+graphify-out/.graphify_python
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Local scratch
+tmp/
+scratch/
+*.local.*
