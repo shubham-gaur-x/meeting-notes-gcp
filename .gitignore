@@ -39,6 +39,8 @@ htmlcov/
 # v5 accidentally tracked ~180 cache files. Do not repeat that.
 graphify-out/cache/
 graphify-out/.graphify_python
+# Absolute path to this checkout — machine-specific, would break a fresh clone.
+graphify-out/.graphify_root
 
 # OS / editor
 .DS_Store
