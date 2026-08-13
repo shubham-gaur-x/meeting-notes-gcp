@@ -5,13 +5,17 @@
 ENV ?= personal
 TFVARS := terraform/envs/$(ENV).tfvars
 
+# Override with `make <target> PYTHON=python3` to use something other than the
+# project venv. Phase 0.6 normalises the remaining targets onto this.
+PYTHON ?= .venv/bin/python
+
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
 	  awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
 # ─── Phase 0.5 ────────────────────────────────────────────────────────────────
-auth-spike:  ## Run the OAuth spike. Do this before anything else.
-	python scripts/auth_spike.py
+auth-spike:  ## Run the OAuth spike. Do this before anything else. (ARGS=--reconsent)
+	$(PYTHON) -m scripts.auth_spike $(ARGS)
 
 # ─── Terraform ────────────────────────────────────────────────────────────────
 tf-init:  ## terraform init

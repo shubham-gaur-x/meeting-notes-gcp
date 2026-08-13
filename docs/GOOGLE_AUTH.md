@@ -129,7 +129,9 @@ Download the JSON. **Never commit it.** `client_secret*.json` is in `.gitignore`
 `scripts/auth_spike.py` should:
 
 1. Run a local loopback consent flow with `access_type=offline` and `prompt=consent`.
-2. Print the refresh token and store it in Secret Manager.
+2. Store the refresh token in `token.json` (mode `0600`, gitignored) and print only
+   its **issue date** and remaining lifetime — never the token itself, per §7.
+   Secret Manager storage arrives in Phase 1; until then the token is local only.
 3. Make one real call against each of:
    - Gmail — `users.messages.list`, `maxResults=1`
    - Calendar — `events.list`, `maxResults=1`

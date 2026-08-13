@@ -52,6 +52,8 @@ testpaths = ["tests"]
 # Every test must run with no live GCP, no database, no LLM. v5 achieved this for
 # 363 tests. A test needing live credentials is a broken test.
 addopts = "-q"
+# async def tests need no per-test marker.
+asyncio_mode = "auto"
 
 [tool.ruff]
 line-length = 110
