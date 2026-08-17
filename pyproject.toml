@@ -29,6 +29,9 @@ dependencies = [
     "openai",                       # LM Studio's OpenAI-compatible API only
     # Logging
     "structlog",
+    # .env loading for local development. Cloud Run injects env vars directly,
+    # so this is a local-only convenience — never a production dependency.
+    "python-dotenv",
 ]
 
 [project.optional-dependencies]

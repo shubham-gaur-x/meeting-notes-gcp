@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import os
 import stat
 import threading
 import urllib.parse
@@ -29,6 +30,7 @@ from scripts.auth_spike import (
     build_parser,
     exchange_code,
     load_client_credentials,
+    load_env_file,
     load_token,
     pkce_pair,
     probe_calendar,
@@ -392,3 +394,35 @@ def test_blank_credentials_are_treated_as_missing() -> None:
 def test_parser_supports_reconsent() -> None:
     assert build_parser().parse_args(["--reconsent"]).reconsent is True
     assert build_parser().parse_args([]).reconsent is False
+
+
+# ─── .env loading ─────────────────────────────────────────────────────────────
+
+
+def test_load_env_file_returns_false_when_absent(tmp_path: Path) -> None:
+    assert load_env_file(tmp_path / "nope.env") is False
+
+
+def test_load_env_file_populates_environ(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("GOOGLE_OAUTH_CLIENT_ID=from-file\n", encoding="utf-8")
+    # setenv first so monkeypatch restores the pre-test state on teardown.
+    monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_ID", "placeholder")
+    monkeypatch.delenv("GOOGLE_OAUTH_CLIENT_ID")
+
+    assert load_env_file(env_file) is True
+    assert os.environ["GOOGLE_OAUTH_CLIENT_ID"] == "from-file"
+
+
+def test_exported_env_beats_the_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """override=False, so `GOOGLE_OAUTH_CLIENT_ID=x make auth-spike` still wins."""
+    env_file = tmp_path / ".env"
+    env_file.write_text("GOOGLE_OAUTH_CLIENT_ID=from-file\n", encoding="utf-8")
+    monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_ID", "from-shell")
+
+    load_env_file(env_file)
+    assert os.environ["GOOGLE_OAUTH_CLIENT_ID"] == "from-shell"

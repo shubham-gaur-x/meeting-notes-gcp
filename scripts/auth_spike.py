@@ -39,6 +39,7 @@ from typing import cast
 
 import httpx
 import structlog
+from dotenv import load_dotenv
 
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -61,6 +62,7 @@ SCOPES: tuple[str, ...] = (
 REFRESH_TOKEN_LIFETIME_DAYS = 7
 
 DEFAULT_TOKEN_PATH = Path(__file__).resolve().parent.parent / "token.json"
+DEFAULT_ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
 
 log = structlog.get_logger(source="auth_spike")
 
@@ -434,6 +436,19 @@ def render_report(results: list[ProbeResult], token: StoredToken) -> str:
 # ─── CLI ──────────────────────────────────────────────────────────────────────
 
 
+def load_env_file(path: Path = DEFAULT_ENV_PATH) -> bool:
+    """Load .env into os.environ if it exists. Returns whether a file was found.
+
+    A real environment variable always wins over the file (override=False), so
+    `GOOGLE_OAUTH_CLIENT_ID=... make auth-spike` behaves as expected. Cloud Run
+    injects env vars directly, so this is a local-development convenience only.
+    """
+    if not path.exists():
+        return False
+    load_dotenv(path, override=False)
+    return True
+
+
 def load_client_credentials(env: Mapping[str, str]) -> tuple[str, str]:
     """Read the OAuth client id and secret, or explain exactly what's missing."""
     client_id = env.get("GOOGLE_OAUTH_CLIENT_ID", "").strip()
@@ -547,6 +562,7 @@ async def _run(args: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    load_env_file()
     try:
         return asyncio.run(_run(args))
     except RuntimeError as exc:
