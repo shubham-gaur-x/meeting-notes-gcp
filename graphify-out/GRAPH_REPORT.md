@@ -1,138 +1,124 @@
-# Graph Report - .  (2026-08-13)
+# Graph Report - .  (2026-08-19)
 
 ## Corpus Check
-- Corpus is ~21,578 words - fits in a single context window. You may not need a graph.
+- Corpus is ~29,982 words - fits in a single context window. You may not need a graph.
 
 ## Summary
-- 220 nodes · 416 edges · 15 communities (14 shown, 1 thin omitted)
-- Extraction: 96% EXTRACTED · 4% INFERRED · 0% AMBIGUOUS · INFERRED: 16 edges (avg confidence: 0.82)
-- Token cost: 160,925 input · 0 output
+- 304 nodes · 752 edges · 13 communities (12 shown, 1 thin omitted)
+- Extraction: 88% EXTRACTED · 12% INFERRED · 0% AMBIGUOUS · INFERRED: 89 edges (avg confidence: 0.9)
+- Token cost: 183,883 input · 0 output
 
 ## Community Hubs (Navigation)
-- Workspace Auth & Project Governance
-- Graph Schema & Data Invariants
-- Memgraph Hosting & Ingestion
-- LLM Seam & Configuration
-- Token Exchange & Refresh
-- Loopback Callback Server
-- Cloud Run Jobs Rearchitecture
-- PKCE & Credential Loading
-- Refresh Token Store
-- Outcome Report Rendering
-- Consent Flow & Auth URL
-- Gmail Calendar Meet Probes
-- Command-Line Entrypoint
+- Preflight Doctor
+- Pipeline Rules & Graph Schema
+- Token Exchange & Credentials
+- GCP Infrastructure & Rejected Options
+- PKCE Consent & Loopback Server
+- Project Governance & Onix Split
+- Reproducibility & Local Stack
+- Token Store & Env Loading
+- API Probes & Consent Flow
+- Expiry Math & Outcome Report
+- Auth Spike Conventions & CLI
 - Project Root
 
 ## God Nodes (most connected - your core abstractions)
-1. `_mock_client()` - 14 edges
-2. `StoredToken` - 11 edges
-3. `ProbeResult` - 11 edges
-4. `_run()` - 11 edges
-5. `render_report()` - 10 edges
-6. `_consent()` - 10 edges
-7. `start_callback_server()` - 9 edges
-8. `probe_gmail()` - 9 edges
-9. `run_probes()` - 9 edges
-10. `_token()` - 9 edges
+1. `Phase 0.6 reproducibility implementation plan` - 27 edges
+2. `CheckResult` - 21 edges
+3. `Phase 0.5 auth spike implementation plan` - 21 edges
+4. `run_checks()` - 20 edges
+5. `Phase 0.6 Reproducibility skeleton` - 15 edges
+6. `check_token_age()` - 14 edges
+7. `_mock_client()` - 14 edges
+8. `doctor.py check contract` - 14 edges
+9. `secret_status()` - 13 edges
+10. `v5 to v6 port map` - 13 edges
 
 ## Surprising Connections (you probably didn't know these)
-- `Rules-based classifier as the cheap pre-LLM gate` --semantically_similar_to--> `Confidence gating on Jira side effects`  [INFERRED] [semantically similar]
-  docs/ARCHITECTURE.md → CLAUDE.md
-- `Phase 0.5 Auth Spike Implementation Plan` --cites--> `structlog reserved event= kwarg rule`  [EXTRACTED]
-  docs/superpowers/plans/2026-08-13-phase-0.5-auth-spike.md → CLAUDE.md
-- `test_pkce_challenge_is_s256_of_verifier()` --calls--> `pkce_pair()`  [EXTRACTED]
-  tests/test_phase05_auth_spike.py → scripts/auth_spike.py
-- `test_pkce_pair_is_random_each_call()` --calls--> `pkce_pair()`  [EXTRACTED]
-  tests/test_phase05_auth_spike.py → scripts/auth_spike.py
-- `test_pkce_verifier_length_is_rfc7636_compliant()` --calls--> `pkce_pair()`  [EXTRACTED]
-  tests/test_phase05_auth_spike.py → scripts/auth_spike.py
+- `The four minimal OAuth scopes` --implements--> `build_auth_url()`  [INFERRED]
+  docs/GOOGLE_AUTH.md → scripts/auth_spike.py
+- `Phase 0.5 auth runbook` --references--> `save_token()`  [INFERRED]
+  docs/GOOGLE_AUTH.md → scripts/auth_spike.py
+- `Phase 0.5 auth runbook` --references--> `probe_gmail()`  [INFERRED]
+  docs/GOOGLE_AUTH.md → scripts/auth_spike.py
+- `Phase 0.5 auth runbook` --references--> `probe_calendar()`  [INFERRED]
+  docs/GOOGLE_AUTH.md → scripts/auth_spike.py
+- `Meet transcripts via Workspace Events` --conceptually_related_to--> `probe_meet()`  [INFERRED]
+  docs/GOOGLE_AUTH.md → scripts/auth_spike.py
 
 ## Import Cycles
 - None detected.
 
 ## Hyperedges (group relationships)
-- **Airbyte removal spans rule, rationale, ADR and residue cleanup** — claude_no_airbyte_rule, docs_architecture_airbyte_removal, docs_decisions_adr_007, docs_migration_from_v5_airbyte_residue, docs_migration_from_v5_source_protocol [EXTRACTED 1.00]
-- **Exactly-once processing under overlapping Cloud Run Jobs** — docs_architecture_skip_locked_claiming, claude_deterministic_uuid5_id, claude_merge_not_create, claude_jira_confidence_gating, docs_decisions_adr_006 [EXTRACTED 1.00]
-- **Phase 0.5 loopback OAuth consent flow end to end** — docs_superpowers_plans_2026_08_13_phase_0_5_auth_spike_pkce_pair, docs_superpowers_plans_2026_08_13_phase_0_5_auth_spike_build_auth_url, docs_superpowers_plans_2026_08_13_phase_0_5_auth_spike_callback_server, docs_superpowers_plans_2026_08_13_phase_0_5_auth_spike_exchange_code, docs_superpowers_plans_2026_08_13_phase_0_5_auth_spike_stored_token, docs_superpowers_plans_2026_08_13_phase_0_5_auth_spike_refresh_access_token, docs_superpowers_plans_2026_08_13_phase_0_5_auth_spike_api_probes [EXTRACTED 1.00]
+- **The Phase 0.5 auth gate** — docs_phase_plan_phase_0_5_auth_spike, docs_google_auth_workspace_admin_block, docs_decisions_adr_009_personal_gcp_project_onix_data, docs_decisions_adr_012_auth_spike_passed, scripts_auth_spike_main [EXTRACTED 1.00]
+- **Cloud Run Job overlap safety net** — docs_architecture_concurrency_idempotency, docs_architecture_skip_locked_claiming, docs_decisions_adr_005_cloud_scheduler_replaces_apscheduler, docs_decisions_adr_006_skip_locked_row_claiming, claude_uuid5_id [EXTRACTED 1.00]
+- **Three-tier reproducibility contract** — docs_decisions_adr_013_three_tier_reproducibility_contract, docs_superpowers_specs_2026_08_13_clone_and_run_design_three_tier_contract, docs_setup_tier_0_local, docs_setup_tier_1_real_llm, docs_setup_tier_2_deploy, scripts_doctor_run_checks, docker_compose_local_postgres_service [EXTRACTED 1.00]
 
-## Communities (15 total, 1 thin omitted)
+## Communities (13 total, 1 thin omitted)
 
-### Community 0 - "Workspace Auth & Project Governance"
-Cohesion: 0.11
-Nodes (30): Intent-to-skill map for non-Claude-Code agents, meeting-notes-gcp (v6), Fully mocked test suite invariant (363 tests), Portability to Onix as a design constraint, v5 airbyte-lm-studio-memgraph read-only reference, Known risks register, ADR-001 Fresh repository, deliberate port, ADR-009 Personal GCP project, Onix Workspace data (+22 more)
+### Community 0 - "Preflight Doctor"
+Cohesion: 0.07
+Nodes (66): datetime, doctor exit code contract, Injected-probe check design, doctor.py check contract, build_parser(), check_command(), check_docker_daemon(), check_llm_backend() (+58 more)
 
-### Community 1 - "Graph Schema & Data Invariants"
-Cohesion: 0.11
-Nodes (29): dev_agent and action_agent deferred to v2, Deterministic uuid5_id node ids, Property Graph Schema (core + memory + governance), Confidence gating on Jira side effects, MERGE never CREATE, one ACID transaction, Edge vocabulary aligned to engagement ontology, Person.tracked governance gate, Provenance Schema (schema v1, writers v2) (+21 more)
-
-### Community 2 - "Memgraph Hosting & Ingestion"
+### Community 1 - "Pipeline Rules & Graph Schema"
 Cohesion: 0.08
-Nodes (27): Cost posture and levers, GCP resource inventory (all Terraform), GKE Autopilot deferred, GCE VM first, Memgraph MAGE on a GCE VM with persistent disk, Spanner Graph rejected, ADR-003 Keep Memgraph; reject Spanner Graph, ADR-004 Memgraph on GCE VM first, GKE later, Meet transcripts via Workspace Events → Pub/Sub pull (+19 more)
+Nodes (45): 768-dimensional embedding invariant, Deferred to v2: dev_agent and action_agent, Environment variable surface, Property graph schema, LLM configuration seam, Person.tracked governance gate, Lowercased Topic MERGE key, Deterministic uuid5_id node ids (+37 more)
 
-### Community 3 - "LLM Seam & Configuration"
-Cohesion: 0.14
-Nodes (20): 768-dimensional embedding invariant, config.py is the only os.environ reader, Privacy claim: never leaves our GCP tenancy, llm_client swappable LLM seam, Module Boundary Rules, Retry semantics: transport retries, JSON parse does not, ADR-002 Vertex AI Gemini default behind a swappable seam, ADR-011 config.py is the only reader of os.environ (+12 more)
+### Community 2 - "Token Exchange & Credentials"
+Cohesion: 0.11
+Nodes (30): Request, exchange_code(), load_client_credentials(), pkce_pair(), Exchange an authorization code for tokens., Mint a fresh access token from a stored refresh token., Read the OAuth client id and secret, or explain exactly what's missing., Return a (code_verifier, code_challenge) pair using S256. (+22 more)
 
-### Community 4 - "Token Exchange & Refresh"
-Cohesion: 0.12
-Nodes (19): Request, _error_of(), exchange_code(), Response, Pull Google's error string out of a response body.      Only the error/message f, Exchange an authorization code for tokens., Mint a fresh access token from a stored refresh token., refresh_access_token() (+11 more)
+### Community 3 - "GCP Infrastructure & Rejected Options"
+Cohesion: 0.10
+Nodes (28): Airbyte removal, APScheduler removal, Budget alert, Cloud Run Jobs (one per source + drain + nightly), Cloud Scheduler triggering, Cost posture, Dataflow/Datastream rejected, FastAPI Cloud Run service (+20 more)
 
-### Community 5 - "Loopback Callback Server"
-Cohesion: 0.13
-Nodes (15): BaseHTTPRequestHandler, HTTPServer, _CallbackHandler, CallbackResult, CallbackServer, An HTTPServer that captures a single OAuth callback., Silence the default stderr access log.          It would echo the query string,, Bind an ephemeral loopback port and return the server and its redirect URI. (+7 more)
+### Community 4 - "PKCE Consent & Loopback Server"
+Cohesion: 0.10
+Nodes (22): BaseHTTPRequestHandler, Loopback redirect and prompt=consent, Ephemeral-port loopback callback server, PKCE S256 authorization-code flow, HTTPServer, build_auth_url(), _CallbackHandler, CallbackResult (+14 more)
 
-### Community 6 - "Cloud Run Jobs Rearchitecture"
+### Community 5 - "Project Governance & Onix Split"
 Cohesion: 0.15
-Nodes (17): Rule: no Airbyte, Rule: no in-process scheduler, Target Architecture (v6), Airbyte removal and tunnel elimination, APScheduler removal — the biggest structural change, BigQuery as staging layer rejected, Cloud Run Jobs + Cloud Scheduler execution model, Dataflow / Datastream ingestion rejected (+9 more)
+Nodes (24): Intent-to-skill map, Project context digest for agents, Absolute rules, Personal-then-Onix deployment context, meeting-notes-gcp v6, Module boundaries, Repository layout, v1-v6 version lineage (+16 more)
 
-### Community 7 - "PKCE & Credential Loading"
+### Community 6 - "Reproducibility & Local Stack"
+Cohesion: 0.22
+Nodes (22): graphify maintenance discipline, Pinned image tags taken from v5, Memgraph Lab service, Local memgraph-mage service, Local Postgres 15 service, BigQuery as staging rejected, Cloud SQL PostgreSQL 15 staging layer, ADR-013 Three-tier reproducibility contract (+14 more)
+
+### Community 7 - "Token Store & Env Loading"
+Cohesion: 0.18
+Nodes (16): MonkeyPatch, load_env_file(), load_token(), Path, Write the token 0600.      The mode is set at open time. A write-then-chmod woul, Load a stored token, or None if there isn't one., Load .env into os.environ if it exists. Returns whether a file was found.      A, save_token() (+8 more)
+
+### Community 8 - "API Probes & Consent Flow"
+Cohesion: 0.32
+Nodes (14): Namespace, _consent(), _error_of(), _probe(), probe_calendar(), probe_gmail(), probe_meet(), ProbeResult (+6 more)
+
+### Community 9 - "Expiry Math & Outcome Report"
 Cohesion: 0.19
-Nodes (14): load_client_credentials(), pkce_pair(), Read the OAuth client id and secret, or explain exactly what's missing., Return a (code_verifier, code_challenge) pair using S256., Phase 0.5 — the auth spike.  Everything here runs with no live GCP, no Google cr, test_blank_credentials_are_treated_as_missing(), test_credentials_come_from_env(), test_gmail_probe_passes_and_counts() (+6 more)
+Nodes (11): A refresh token plus the metadata needed to reason about its expiry., Render the human-readable outcome.      Carries every fact the Phase 0.5 outcome, render_report(), StoredToken, The single most important test in this file. docs/GOOGLE_AUTH.md §7., test_age_and_expiry_math(), test_report_distinguishes_reachable_from_transcripts_present(), test_report_never_contains_the_token() (+3 more)
 
-### Community 8 - "Refresh Token Store"
-Cohesion: 0.19
-Nodes (11): load_token(), Path, A refresh token plus the metadata needed to reason about its expiry., Write the token 0600.      The mode is set at open time. A write-then-chmod woul, Load a stored token, or None if there isn't one., save_token(), StoredToken, Path (+3 more)
-
-### Community 9 - "Outcome Report Rendering"
+### Community 10 - "Auth Spike Conventions & CLI"
 Cohesion: 0.31
-Nodes (9): Render the human-readable outcome.      Carries every fact the Phase 0.5 outcome, render_report(), The single most important test in this file. docs/GOOGLE_AUTH.md §7., test_age_and_expiry_math(), test_report_distinguishes_reachable_from_transcripts_present(), test_report_never_contains_the_token(), test_report_shows_pass_and_fail(), test_report_states_issue_date_and_expiry() (+1 more)
-
-### Community 10 - "Consent Flow & Auth URL"
-Cohesion: 0.25
-Nodes (8): Namespace, build_auth_url(), _consent(), Run the interactive loopback consent flow.      wait_for_code blocks on a thread, Build the Google consent URL.      access_type=offline and prompt=consent are bo, _run(), test_auth_url_carries_offline_and_consent(), test_auth_url_requests_exactly_the_four_scopes()
-
-### Community 11 - "Gmail Calendar Meet Probes"
-Cohesion: 0.79
-Nodes (7): _probe(), probe_calendar(), probe_gmail(), probe_meet(), ProbeResult, AsyncClient, run_probes()
-
-### Community 12 - "Command-Line Entrypoint"
-Cohesion: 0.50
-Nodes (4): ArgumentParser, build_parser(), main(), test_parser_supports_reconsent()
-
-## Ambiguous Edges - Review These
-- `Bug 9 — Leiden community detection collapses to singletons` → `docker-compose.local.yml local stack`  [AMBIGUOUS]
-  docs/superpowers/specs/2026-08-13-clone-and-run-design.md · relation: conceptually_related_to
+Nodes (11): Coding conventions, Never pass event= to structlog, ADR-012 Phase 0.5 auth spike passed, Phase 0.5 auth runbook, The four minimal OAuth scopes, Hand-rolled OAuth over httpx, Phase 0.5 auth spike implementation plan, build_parser() (+3 more)
 
 ## Knowledge Gaps
-- **5 isolated node(s):** `meeting-notes-gcp`, `Bug 10 — test stub pollution and the conftest _REAL_HTTPX fix`, `build_auth_url (access_type=offline, prompt=consent)`, `State validation against CSRF in wait_for_code`, `gemini AI Studio API-key backend`
+- **5 isolated node(s):** `meeting-notes-gcp`, `Repository layout`, `Intent-to-skill map`, `Stack table`, `Cloud Scheduler triggering`
   These have ≤1 connection - possible missing edges or undocumented components.
 - **1 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **What is the exact relationship between `Bug 9 — Leiden community detection collapses to singletons` and `docker-compose.local.yml local stack`?**
-  _Edge tagged AMBIGUOUS (relation: conceptually_related_to) - confidence is low._
-- **Why does `README project overview and stack table` connect `Workspace Auth & Project Governance` to `Cloud Run Jobs Rearchitecture`?**
-  _High betweenness centrality (0.048) - this node is a cross-community bridge._
-- **Why does `v5 → v6 port map (Lift/Adapt/Rewrite/Drop)` connect `Cloud Run Jobs Rearchitecture` to `Workspace Auth & Project Governance`, `Graph Schema & Data Invariants`, `LLM Seam & Configuration`?**
-  _High betweenness centrality (0.044) - this node is a cross-community bridge._
-- **Why does `jobs/refresh_tokens.py scheduled refresh + loud alert` connect `Memgraph Hosting & Ingestion` to `Workspace Auth & Project Governance`, `Cloud Run Jobs Rearchitecture`?**
-  _High betweenness centrality (0.043) - this node is a cross-community bridge._
-- **What connects `meeting-notes-gcp`, `Bug 10 — test stub pollution and the conftest _REAL_HTTPX fix`, `build_auth_url (access_type=offline, prompt=consent)` to the rest of the system?**
+- **Why does `Phase 0.5 auth spike implementation plan` connect `Auth Spike Conventions & CLI` to `Preflight Doctor`, `Token Exchange & Credentials`, `Project Governance & Onix Split`, `Reproducibility & Local Stack`, `Token Store & Env Loading`, `API Probes & Consent Flow`, `Expiry Math & Outcome Report`?**
+  _High betweenness centrality (0.163) - this node is a cross-community bridge._
+- **Why does `Phase 0.6 reproducibility implementation plan` connect `Reproducibility & Local Stack` to `Preflight Doctor`, `Pipeline Rules & Graph Schema`, `Auth Spike Conventions & CLI`?**
+  _High betweenness centrality (0.131) - this node is a cross-community bridge._
+- **Why does `Phase 0.6 Reproducibility skeleton` connect `Reproducibility & Local Stack` to `Preflight Doctor`, `Pipeline Rules & Graph Schema`, `GCP Infrastructure & Rejected Options`, `Project Governance & Onix Split`, `Auth Spike Conventions & CLI`?**
+  _High betweenness centrality (0.104) - this node is a cross-community bridge._
+- **Are the 2 inferred relationships involving `Phase 0.6 Reproducibility skeleton` (e.g. with `Phase 0.6 reproducibility implementation plan` and `Problem: a stranger can run nothing`) actually correct?**
+  _`Phase 0.6 Reproducibility skeleton` has 2 INFERRED edges - model-reasoned connections that need verification._
+- **What connects `meeting-notes-gcp`, `Repository layout`, `Intent-to-skill map` to the rest of the system?**
   _5 weakly-connected nodes found - possible documentation gaps or missing edges._
-- **Should `Workspace Auth & Project Governance` be split into smaller, more focused modules?**
-  _Cohesion score 0.11494252873563218 - nodes in this community are weakly interconnected._
-- **Should `Graph Schema & Data Invariants` be split into smaller, more focused modules?**
-  _Cohesion score 0.10591133004926108 - nodes in this community are weakly interconnected._
+- **Should `Preflight Doctor` be split into smaller, more focused modules?**
+  _Cohesion score 0.06720321931589537 - nodes in this community are weakly interconnected._
+- **Should `Pipeline Rules & Graph Schema` be split into smaller, more focused modules?**
+  _Cohesion score 0.07777777777777778 - nodes in this community are weakly interconnected._
