@@ -246,13 +246,24 @@ Two consequences you must respect while building v1:
 
 ## LLM Configuration
 
-Default is **Vertex AI Gemini**. LM Studio is retained as a local-development backend.
+Default is **Vertex AI Gemini** in production. Three other backends exist for local
+development and testing (ADR-014).
 
 ```
-LLM_BACKEND=vertex          # vertex | lmstudio
+LLM_BACKEND=vertex          # vertex | gemini | lmstudio | fake
 ```
 
-`meeting_notes/llm_client.py` owns both implementations behind one protocol:
+| Backend | Purpose |
+|---|---|
+| `vertex` | Production. GCP project with billing. |
+| `gemini` | Direct AI Studio API key — no GCP project, no billing. Tier 1 of `docs/SETUP.md`. |
+| `lmstudio` | Local models, unchanged from v5. |
+| `fake` | Replays recorded fixtures from `sample_data/llm_fixtures/`. No credentials, no network, deterministic. The tier-0 default and the test suite's mock. |
+
+A `fake` fixture miss **raises**. It never falls through to `None` or a default —
+a silently-wrong extraction is the worst outcome available here.
+
+`meeting_notes/llm_client.py` owns every implementation behind one protocol:
 
 ```python
 async def chat_json(system: str, user: str, *, temperature: float = 0.0) -> dict | None
@@ -347,7 +358,8 @@ GCP_PROJECT_ID=                  # never hardcoded in source
 GCP_REGION=us-central1
 
 # LLM
-LLM_BACKEND=vertex               # vertex | lmstudio
+LLM_BACKEND=vertex               # vertex | gemini | lmstudio | fake
+GEMINI_API_KEY=                  # AI Studio key — tier 1 only, no GCP project needed
 VERTEX_CHAT_MODEL=               # e.g. gemini-2.5-flash — confirm current name at build time
 VERTEX_EMBEDDING_MODEL=text-embedding-005
 LM_STUDIO_BASE_URL=http://localhost:1234/v1   # local dev only

@@ -287,6 +287,126 @@ token's own 7-day expiry; only re-consent or moving to an Internal client does t
 
 ---
 
+## ADR-013 — A three-tier reproducibility contract, with the OAuth console step accepted as permanently manual
+
+**Date:** 2026-08-19 · **Status:** Accepted
+
+**Context.** Nothing in this repository could be run by anyone who is not Shubham. The
+pipeline needs a GCP project with billing, a Workspace tenant whose admin permits an
+unverified OAuth client, a Jira instance, and either Vertex AI or a multi-gigabyte local
+model. Each is a wall, and the first is hit before any of the project's actual value is
+visible. That is bad for a reviewer, bad for a future teammate, and bad for the author six
+months from now on a new laptop.
+
+**Decision.** Three tiers, each one command, each additive, each honest about what it proves:
+
+| Tier | Command | Credentials | Proves |
+|---|---|---|---|
+| 0 | `make demo` | none | pipeline, graph writes, algorithms, memory layers, API, dashboard |
+| 1 | `make demo LLM=gemini` | one AI Studio key | genuine LLM extraction and embeddings |
+| 2 | `make deploy ENV=<env>` | GCP + Workspace + Jira | the deployed product |
+
+`scripts/doctor.py` is the entry point for all three: it reports what is missing for the
+requested tier and attaches a runnable command or a document anchor to every failure.
+
+**And an explicit non-goal: Terraform will never create the OAuth consent screen or client.**
+Google exposes no usable API for an External-type consent screen or a Desktop client with
+restricted Gmail scopes — `google_iap_brand` and `google_iap_client` cover neither case. This
+is accepted as permanently manual and *detected and explained* rather than papered over.
+Pretending otherwise would produce a `terraform apply` that fails confusingly.
+
+**Consequences.** A stranger can evaluate the project offline in about ten minutes with no
+account anywhere. The local stack doubles as the test harness for Phases 3–8, so it is
+exercised continuously rather than rotting between now and Phase 9 — which is the standing
+exit criterion added to every remaining phase.
+
+The cost is a docker-compose path that production never uses, and the risk that a green tier 0
+is misread as evidence that tier 2 works. Both `SETUP.md` and `doctor` state per-tier scope
+explicitly; tier 0 never claims to prove anything about GCP.
+
+**Rejected:**
+- *GCP-deploy only.* Simpler — one path, the real one — but nobody can evaluate the project
+  without a GCP account, billing, and a Workspace tenant. That is the problem, not a solution.
+- *Local demo only.* Least work, but the repo's headline claim is GCP-native and it would stay
+  unclonable indefinitely.
+
+---
+
+## ADR-014 — A `fake` LLM backend that replays fixtures, and a `gemini` backend for tier 1
+
+**Date:** 2026-08-19 · **Status:** Accepted
+
+**Context.** `CLAUDE.md` originally sanctioned two backends, `vertex` and `lmstudio`. Neither
+is usable by a stranger: Vertex needs a GCP project with billing, and LM Studio needs a
+multi-gigabyte model download and realistically a capable Mac. Tier 0 promises a working
+pipeline with **no credentials at all**, and neither existing backend can deliver that.
+
+**Decision.** Two more backends behind the same unchanged `llm_client.py` protocol
+(`chat_json`, `embed`), keeping it the only module that constructs an LLM client:
+
+- **`fake`** — replays recorded responses from `sample_data/llm_fixtures/`, keyed by a hash of
+  (system prompt + user content + temperature). Deterministic, offline, instant. The tier-0
+  default and the mock the test suite needs anyway.
+- **`gemini`** — direct AI Studio API key. No GCP project, no billing. Tier 1.
+
+**A fixture miss raises.** It never falls through to `None`, a default, or an empty
+extraction. A prompt edit changes the hash and therefore produces a loud, immediate failure
+rather than a silently-wrong result. `scripts/record_fixtures.py` regenerates against a real
+backend, so a deliberate prompt change is one command rather than hand-authored JSON.
+
+Embeddings stay **768-dimensional in every backend, `fake` included**, because both Memgraph
+vector indexes are configured for 768.
+
+**Consequences.** `make demo` works offline on a clean clone, and the test suite gets a
+principled mock instead of scattered ad-hoc patches. Four backends is more surface to keep
+working, and fixtures must be re-recorded whenever a prompt changes deliberately.
+
+The raise-on-miss choice will occasionally be annoying — someone will tweak a prompt and get a
+hard failure. That is the intended trade. `CLAUDE.md`'s existing defences (`_is_null_like`,
+fence stripping) exist precisely because quiet LLM misbehaviour cost real debugging time in
+v5; a silently-wrong extraction is the worst outcome available here.
+
+**Rejected:**
+- *Gemini-only for the demo.* One env var is a small ask, but it is not zero, it is not
+  offline, free-tier rate limits make a first run flaky, and a separate mock would still be
+  needed for the tests.
+- *LM Studio only, as v5 did.* No new backend and no ADR needed, but a several-gigabyte
+  download is a far steeper wall than "put in your credentials."
+
+---
+
+## ADR-015 — `db.py` selects its connection mode on configuration
+
+**Date:** 2026-08-19 · **Status:** Accepted
+
+**Context.** Tier 0 runs against a plain Postgres container; tier 2 runs against Cloud SQL
+through the Python connector. These acquire connections differently. Left undecided, the
+question surfaces during Phase 3 — after `db.py` and possibly the connectors already exist.
+
+**Decision.** `db.py` branches on configuration: `CLOUD_SQL_CONNECTION_NAME` set → Cloud SQL
+connector; otherwise a plain DSN from `POSTGRES_HOST`. Decided now, implemented in Phase 3.
+
+**All SQL stays inside `db.py`.** This is a connection-acquisition branch, not a second query
+path — every query is written once and runs unmodified against both.
+
+**Consequences.** The same code path is exercised locally and deployed, so local testing is
+evidence about production rather than about a parallel implementation. One conditional in
+connection setup, and `.env.example` must document that a blank `CLOUD_SQL_CONNECTION_NAME`
+means local — which it now does.
+
+Deciding it now follows the same reasoning `PHASE_PLAN.md` applies to the `StagedRecord`
+question in Phase 2: a data-layer shape settled after the connectors exist is far more
+expensive to change than one settled before.
+
+**Rejected:**
+- *Cloud SQL connector only, with a local proxy.* Keeps one code path, but forces every
+  cloner to install and run `cloud-sql-proxy` — a credentialed GCP tool — which defeats
+  tier 0's entire premise.
+- *Two separate modules.* Would put SQL outside `db.py`, violating the module boundary in
+  `CLAUDE.md` that held perfectly in v5.
+
+---
+
 ## Template
 
 ```

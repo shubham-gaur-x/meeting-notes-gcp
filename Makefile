@@ -1,17 +1,45 @@
-.PHONY: help auth-spike tf-init tf-plan tf-apply tf-destroy secrets-put \
-        build push deploy-api deploy-jobs run-job migrate setup-memgraph \
+.PHONY: help doctor demo demo-down auth-spike tf-init tf-plan tf-apply tf-destroy \
+        secrets-put build push deploy-api deploy-jobs run-job migrate setup-memgraph \
         test lint typecheck logs cypher psql health graphify
 
 ENV ?= personal
 TFVARS := terraform/envs/$(ENV).tfvars
 
 # Override with `make <target> PYTHON=python3` to use something other than the
-# project venv. Phase 0.6 normalises the remaining targets onto this.
+# project venv.
 PYTHON ?= .venv/bin/python
+
+COMPOSE := docker compose -f docker-compose.local.yml
+
+# Which source trees actually exist yet. Phases 2-8 add to this; naming a
+# directory before it exists makes lint/typecheck fail on a clean clone.
+SRC := scripts tests
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
 	  awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
+
+# ─── Preflight ────────────────────────────────────────────────────────────────
+# Tier 0 by default. `make doctor TIER=1` adds the LLM check; `make doctor TIER=2
+# ENV=personal` adds GCP, Workspace and Jira. Start here on a fresh clone.
+TIER ?= 0
+
+# Exit 2 means warnings only — not a failure, so don't let make report one.
+# Exit 1 (a real FAIL) still propagates and stops the build.
+doctor:  ## Preflight: what's missing? (TIER=0|1|2, ENV=personal|onix)
+	@$(PYTHON) -m scripts.doctor --tier $(TIER) --env $(ENV) || [ $$? -eq 2 ]
+
+# ─── Local stack ──────────────────────────────────────────────────────────────
+demo:  ## Tier 0: run the whole pipeline locally, no credentials (Phase 6)
+	@echo "Not ready yet — the pipeline lands in Phase 6, the dashboard in Phase 8."
+	@echo "See docs/SETUP.md. Today you can start the stack with: make demo-up"
+	@exit 1
+
+demo-up:  ## Start the local Postgres + Memgraph stack
+	$(COMPOSE) up -d
+
+demo-down:  ## Stop the local stack (add ARGS=-v to delete its data)
+	$(COMPOSE) down $(ARGS)
 
 # ─── Phase 0.5 ────────────────────────────────────────────────────────────────
 auth-spike:  ## Run the OAuth spike. Do this before anything else. (ARGS=--reconsent)
@@ -53,20 +81,20 @@ run-job:  ## Execute a Cloud Run Job now (JOB=pipeline-drain)
 
 # ─── Data layer ───────────────────────────────────────────────────────────────
 migrate:  ## Apply the Cloud SQL staging schema
-	python -m scripts.migrate
+	$(PYTHON) -m scripts.migrate
 
 setup-memgraph:  ## Constraints, indexes, vector indexes, seeded procedures
-	python scripts/setup_memgraph.py
+	$(PYTHON) -m scripts.setup_memgraph
 
 # ─── Development ──────────────────────────────────────────────────────────────
 test:  ## Full pytest suite — must pass with no live services
-	python -m pytest tests/ -v
+	$(PYTHON) -m pytest tests/ -v
 
-lint:
-	ruff check meeting_notes jobs api scripts tests
+lint:  ## ruff over the source trees that exist
+	$(PYTHON) -m ruff check $(SRC)
 
-typecheck:
-	mypy meeting_notes jobs api
+typecheck:  ## mypy over the source trees that exist
+	$(PYTHON) -m mypy scripts
 
 logs:  ## Tail Cloud Run logs (SERVICE=api)
 	gcloud run services logs tail $(SERVICE) --region $$GCP_REGION

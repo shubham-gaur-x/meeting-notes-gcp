@@ -1,0 +1,74 @@
+# Local stack for tier 0 — `make demo-up`.
+#
+# This is NOT the production topology. Production is Cloud SQL + a Memgraph GCE
+# VM, both built by Terraform (docs/ARCHITECTURE.md §4). This file exists so a
+# fresh clone can run the pipeline end to end with no GCP account at all, and it
+# doubles as the test harness for Phases 3-8.
+#
+# Image tags are taken from v5's docker-compose.yml, which is live-validated with
+# 363 passing tests — not guessed. Two pins matter and must not drift:
+#   * Postgres major version matches Cloud SQL (15).
+#   * The Memgraph tag must match the one Terraform puts on the GCE VM in Phase 1,
+#     or MAGE procedure availability differs between local and deployed and a
+#     nightly job that passes here fails there.
+#
+# The API deliberately does NOT run here — it runs on the host so the
+# edit-reload loop stays fast during Phases 3-8.
+#
+# Port note: these are the conventional ports, which is right for a fresh clone.
+# If v5's stack is running on this machine it already holds 5432/7687/3000 —
+# `make doctor` reports that as a warning. Stop v5's stack before `make demo-up`.
+
+services:
+  postgres:
+    image: postgres:15.8-alpine
+    container_name: mn-postgres
+    environment:
+      POSTGRES_DB: meeting_memory
+      POSTGRES_USER: meeting_notes
+      # Local-only throwaway credential. Nothing here reaches a real system;
+      # deployed environments take this from Secret Manager via Cloud Run.
+      POSTGRES_PASSWORD: local_dev_only
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U meeting_notes -d meeting_memory"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  memgraph:
+    image: memgraph/memgraph-mage:3.11.0
+    container_name: mn-memgraph
+    ports:
+      - "7687:7687"   # Bolt
+      - "7444:7444"   # monitoring
+    volumes:
+      - memgraph_data:/var/lib/memgraph
+    command: ["--log-level=WARNING"]
+    healthcheck:
+      test: ["CMD-SHELL", "echo 'RETURN 1;' | mgconsole --no-history 2>/dev/null || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+    restart: unless-stopped
+
+  lab:
+    image: memgraph/lab:3.11.0
+    container_name: mn-memgraph-lab
+    ports:
+      - "3000:3000"
+    environment:
+      QUICK_CONNECT_MG_HOST: memgraph
+      QUICK_CONNECT_MG_PORT: "7687"
+    depends_on:
+      memgraph:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  memgraph_data:

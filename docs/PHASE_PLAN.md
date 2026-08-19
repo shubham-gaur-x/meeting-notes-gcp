@@ -18,11 +18,20 @@ repo skeleton, config files.
 
 ---
 
-## Phase 0.5 — Auth spike 🟦 **GATES EVERYTHING**
+## Phase 0.5 — Auth spike ✅ DONE (2026-08-19, ADR-012)
 
-**Do this before writing any other code.** If the Onix Workspace admin blocks unverified
-third-party apps, the entire ingestion design changes and everything built before finding out
-is wasted.
+**Outcome: passed on the first attempt. No Workspace admin allowlisting was needed.**
+Gmail, Calendar, and Meet all returned real records. Meet transcription is **enabled** on
+the Onix tenant, so `sources/meet.py` can be built as a first-class source in Phase 5 rather
+than assuming the no-op degradation described in `GOOGLE_AUTH.md` §6.
+
+The OAuth client lives in `meeting-notes-gcp-personal`, a personal-account GCP project,
+reading the Onix Workspace account — the split ADR-009 commits to. Refresh token is on the
+7-day External+Testing clock until Phase 10 makes the client Internal.
+
+**Original gating rationale, kept for the record.** If the Onix Workspace admin blocks
+unverified third-party apps, the entire ingestion design changes and everything built before
+finding out is wasted.
 
 Full runbook: `docs/GOOGLE_AUTH.md`.
 
@@ -44,6 +53,58 @@ Full runbook: `docs/GOOGLE_AUTH.md`.
 **If blocked by the Workspace admin:** stop and escalate. Ask for the client ID to be marked
 Trusted under Security → Access and data control → API controls. Do not work around it, and do
 not proceed to Phase 1 — this is the natural moment to open the Onix GCP conversation.
+*(Did not occur — see the outcome above.)*
+
+---
+
+## Phase 0.6 — Reproducibility skeleton 🟩
+
+Spec: `docs/superpowers/specs/2026-08-13-clone-and-run-design.md`. ADRs 013–015.
+
+A clone plus credentials must run the project end to end. Where a credential is genuinely
+unavoidable, the failure must be loud, specific, and carry the exact fix. This phase builds
+only the scaffolding that stands on its own today — the rest is specified and attributed to
+the phase that owns it.
+
+**Tasks**
+1. `scripts/doctor.py` + `make doctor` — tier-aware preflight (0 local · 1 LLM · 2 cloud).
+   Every check injects its probe, so the suite runs with no Docker, network, or gcloud.
+   Secrets reported as set/unset/expired, never valued.
+2. `docker-compose.local.yml` — Postgres 15 + `memgraph-mage` + Lab, tags taken from v5's
+   proven compose rather than guessed. The Memgraph tag must match Phase 1's Terraform.
+3. `.env.example` — four LLM backends, `GEMINI_API_KEY`, local defaults that match compose.
+4. `terraform/envs/{personal,onix}.example.tfvars` — committed; real `.tfvars` gitignored.
+5. `docs/SETUP.md` — the tiered runbook. README shrinks to a pointer.
+6. `Makefile` — `doctor`, `demo`, `demo-up`, `demo-down`; normalise every target onto
+   `$(PYTHON)`; `lint`/`typecheck` name only directories that exist.
+
+**Deferred by the spec, not built here:** `fake`/`gemini` backends and fixture replay
+(Phase 4) · sample corpus (Phase 6) · dual-mode `db.py` (Phase 3) · a working `make demo`
+(Phase 6 pipeline → Phase 8 dashboard).
+
+**Exit criteria**
+- `make doctor` passes on a clean clone with no `.env` at all.
+- `make doctor TIER=2` names every genuinely missing cloud prerequisite with a runnable fix.
+- No check can emit a secret value — asserted by test, with a canary that cannot collide
+  with a variable name.
+- `docker compose -f docker-compose.local.yml config -q` validates, and every pinned image
+  tag is confirmed to exist rather than assumed.
+
+---
+
+## Standing exit criterion — Phases 1 through 9
+
+**In addition to** each phase's own criteria, every phase from here on must leave the repo
+in this state before it is called done:
+
+- A clean clone still passes `make doctor`.
+- From Phase 6, `make demo` is green.
+- `terraform/envs/*.example.tfvars` are committed; real `.tfvars` remain gitignored.
+- `graphify . --update` has been run, with `GRAPH_REPORT.md` and `graph.json` committed —
+  **never** `cache/` or `.graphify_root`.
+
+This is what stops reproducibility becoming a retrofit at Phase 9. The local stack doubles as
+the test harness for Phases 3–8, so it is exercised continuously rather than rotting.
 
 ---
 

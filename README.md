@@ -54,19 +54,31 @@ Full detail: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 ## Getting started
 
 ```bash
-# 1. Phase 0.5 — the auth spike. Nothing else works until this does.
-cp .env.example .env      # fill in yourself, never commit
-python scripts/auth_spike.py
-
-# 2. Phase 1 — infrastructure
-make tf-plan ENV=personal
-make tf-apply ENV=personal
-
-# 3. Onward — follow docs/PHASE_PLAN.md
+git clone <this repo> && cd meeting-notes-gcp
+python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
+cp .env.example .env
+make doctor
 ```
 
-**Phase 0.5 gates everything.** If the Onix Workspace admin blocks unverified third-party apps,
-the ingestion design changes and anything built beforehand is wasted work.
+`make doctor` tells you exactly what is missing and how to fix it. Full runbook:
+**[`docs/SETUP.md`](docs/SETUP.md)**.
+
+Three tiers, each additive, each honest about what it proves:
+
+| Tier | Command | Credentials | Proves |
+|---|---|---|---|
+| 0 | `make demo` | none | pipeline, graph, memory layers, API, dashboard |
+| 1 | `make demo LLM=gemini` | one free API key | genuine LLM extraction |
+| 2 | `make deploy ENV=personal` | GCP + Workspace + Jira | the deployed product |
+
+Tier 0 runs entirely on local Docker with replayed LLM fixtures, so a fresh clone
+works offline with no account anywhere. Tiers 0 and 1 cost nothing; tier 2 creates
+always-on billable resources and ships with a budget alert from the first apply.
+
+One step is genuinely manual and always will be: Google exposes no API for
+creating an OAuth consent screen or Desktop client, so tier 2 needs a one-time
+console visit. `docs/GOOGLE_AUTH.md` §5 walks through it, and `make doctor TIER=2`
+tells you if it is outstanding.
 
 ## Stack
 
