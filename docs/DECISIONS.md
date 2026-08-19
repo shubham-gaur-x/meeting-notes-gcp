@@ -232,6 +232,61 @@ Secret Manager values as environment variables, which `config.py` reads once.
 
 ---
 
+## ADR-012 — Phase 0.5 auth spike: passed, no admin allowlisting needed
+
+**Date:** 2026-08-19 · **Status:** Accepted
+
+**Context.** Phase 0.5 gates every later phase — see ADR-009's risk register, item 2: the Onix
+Workspace admin might block an unverified third-party OAuth app outright, which would force a
+different ingestion design before any of it got built. The only way to know was to run
+`scripts/auth_spike.py` against a real OAuth client and a real Workspace account.
+
+The OAuth client lives in a **new personal-account GCP project**, `meeting-notes-gcp-personal`
+(under `shubham.gaur.x@gmail.com`), not the pipeline's eventual home. This is the split ADR-009
+already commits to: infrastructure project and data-source account are deliberately different
+accounts. The pre-existing `ehole-benchmark-temp-z8s8` project was ruled out — unrelated,
+named for other work — and `airbyte-meeting` (v3) was never touched, per `CLAUDE.md`'s
+do-not-touch rule.
+
+The consent screen was configured External + Testing, with the four scopes
+(`gmail.readonly`, `calendar.readonly`, `meetings.space.readonly`, `pubsub`) and
+`shubham.gaur@onixnet.com` added as a test user — Google's newer "Google Auth Platform" console
+UI splits this across separate **Audience** (publishing status, test users) and **Data Access**
+(scopes) pages rather than one linear wizard, which is worth knowing if this is ever redone
+from scratch.
+
+**Decision.** Ran `make auth-spike` against the real client and the real Onix account. Result:
+
+```
+[PASS] Gmail     reachable (1 record(s))
+[PASS] Calendar  reachable (1 record(s))
+[PASS] Meet      reachable (1 record(s))
+```
+
+- **No Workspace admin allowlisting was needed.** Consent completed on the first attempt, past
+  the expected "Google hasn't verified this app" warning (External + Testing), with no
+  additional block from the Onix admin console. ADR-009's worst-case risk did not materialize.
+- **Meet transcription is enabled on the Onix tenant.** `conferenceRecords.list` returned a real
+  record, not just a reachable-but-empty 200. The no-op fallback for `sources/meet.py` described
+  in `docs/GOOGLE_AUTH.md` §6 is available if ever needed, but Phase 5 can build the transcript
+  path as a first-class source from the start rather than assuming degradation.
+- Refresh token issued 2026-08-19, on the standard 7-day External+Testing clock (ADR-009 risk
+  item 1). Stored locally at `token.json`, mode 0600, gitignored — Secret Manager storage is
+  Phase 1, per `docs/GOOGLE_AUTH.md` §5.4.
+
+**Consequences.** Phase 0.5's gate is cleared. The ingestion design in `docs/ARCHITECTURE.md`
+stands as written — no redesign forced by admin policy. Phase 0.6 (the clone-and-run
+reproducibility work, already specced) can proceed, followed by Phase 1.
+
+The 7-day token lifetime is still live until the Onix project migration makes the client
+Internal (ADR-009's stated fix). Until then, `--reconsent` is a manual weekly action — Phase 5's
+`jobs/refresh_tokens.py` automates the *access*-token refresh, but cannot extend a refresh
+token's own 7-day expiry; only re-consent or moving to an Internal client does that.
+
+**Rejected:** none — this is a factual outcome, not a design choice between alternatives.
+
+---
+
 ## Template
 
 ```
