@@ -52,3 +52,5 @@ graphify-out/.graphify_root
 tmp/
 scratch/
 *.local.*
+# ...but the local compose stack is a committed, first-class file.
+!docker-compose.local.yml
