@@ -407,6 +407,76 @@ expensive to change than one settled before.
 
 ---
 
+## ADR-016 — Ephemeral compute, durable storage: the system is up only when syncing
+
+**Date:** 2026-08-19 · **Status:** Accepted
+
+**Context.** This is a trial. The owner will not touch it for weeks at a stretch and only
+wants it "on" for the duration of a sync session — build once, test end to end, then go quiet
+for a month, then sync again on demand. `ARCHITECTURE.md` §7 and §8 already identify the two
+always-on resources that dominate cost: the Cloud SQL instance and the Memgraph GCE VM.
+Verified against the live Cloud Billing Catalog API (not estimated): `e2-medium` is
+$0.021812/vCPU-hr + $0.002924/GiB-hr ≈ $40/mo if left running continuously; `db-f1-micro` is
+$0.018/hr ≈ $13/mo. Both are irrelevant if the resources simply don't exist between sessions.
+Cloud Run jobs/services, Secret Manager, Artifact Registry, and Pub/Sub are already
+usage-priced or near-zero idle and need no special handling.
+
+**Stopping instead of destroying does not work.** `gcloud sql instances patch
+--activation-policy=NEVER` halts Cloud SQL billing, but Google auto-restarts a stopped
+instance after ~7 days for maintenance — silently resuming the bill partway through a month of
+inactivity. There is no equivalent forced-restart on a stopped GCE VM, but the asymmetry means
+"stop everything" is not a single reliable pattern. Destroying is the only mode with a
+guaranteed $0 idle cost for both resources, and it is also literally the Phase 1 exit criterion
+already on the books: "`terraform destroy` then `apply` reproduces the environment exactly."
+Treating that as the normal weekly-to-monthly workflow rather than a one-time validation is a
+small reframing, not new scope.
+
+**Decision.** Split every GCP resource into two tiers:
+
+- **Durable** (created once, never destroyed by the normal lifecycle): the GCS backup bucket,
+  Secret Manager secrets, Artifact Registry, the Pub/Sub topic/subscription, service accounts
+  and IAM, the budget alert. All cheap-to-free while idle.
+- **Ephemeral** (created at the start of a sync session, torn down at the end): the Cloud SQL
+  instance and the Memgraph GCE VM (+ its attached disk).
+
+Two new Makefile targets own the lifecycle:
+
+- `make sync-up ENV=personal` — `terraform apply`, which recreates the Cloud SQL instance
+  (importing the latest export from the GCS bucket if one exists) and the Memgraph VM (its disk
+  created `source_snapshot = latest` if a snapshot exists). Then `make doctor TIER=2`, which
+  will report the OAuth refresh token as `expired` — expected, since any gap over 7 days
+  outlives it. The runbook step here is `make auth-spike ARGS=--reconsent`, not a bug to chase.
+- `make sync-down ENV=personal` — `gcloud sql export sql` to the GCS bucket, a
+  `google_compute_snapshot` of the Memgraph disk, then `terraform destroy` scoped to the
+  ephemeral tier only.
+
+Data survives the gap through the export/snapshot, not through the resource staying up.
+
+**Consequences.** Every sync session pays a bring-up cost — Cloud SQL import and a fresh VM
+boot before anything can run — and `sync-down` must actually complete before walking away, or
+the next month's bill is the full always-on rate. A `sync-down` skipped or interrupted is a
+silent cost leak, so `make doctor` should grow a tier-2 check that warns if the ephemeral
+resources are currently up (Terraform state has them) with no active session, once state
+inspection is available (Phase 1 implementation detail, not part of this decision). Backup and
+restore now have to work correctly, not just exist — an export that silently fails means the
+next `sync-up` starts from an empty graph. The OAuth 7-day expiry (`GOOGLE_AUTH.md`, ADR-012)
+compounds with this: a monthly cadence means re-consent is *every* session, not an occasional
+inconvenience, so `docs/SETUP.md`'s tier-2 walkthrough must present it as a normal step of
+`sync-up`, not a troubleshooting footnote.
+
+**Rejected:**
+- *Stop, don't destroy.* Simpler — no export/import, no snapshot/restore — but Cloud SQL's
+  forced restart after 7 days breaks the "$0 for a month" guarantee outright, and relying on it
+  "mostly working" is worse than a design that is honest about the tradeoff.
+- *Leave Cloud SQL running, only tear down Memgraph.* Cloud SQL is the more expensive of the
+  two only at larger tiers; at `db-f1-micro` the two are close enough ($13 vs $40/mo) that
+  half-measures don't earn back the added complexity of an asymmetric lifecycle.
+- *Smaller always-on tiers instead of teardown.* Even the smallest viable tiers still bill
+  24/7. For a system touched a few hours a month, on-demand beats resized-but-permanent on
+  cost by an order of magnitude.
+
+---
+
 ## Template
 
 ```

@@ -112,6 +112,19 @@ the test harness for Phases 3–8, so it is exercised continuously rather than r
 
 Everything in code. No console clicks.
 
+**Lifecycle model (ADR-016): the system is up only while syncing.** This is a trial touched a
+few hours a month, not an always-on service. Every resource splits into durable (created once,
+cheap-to-free while idle) or ephemeral (created at `sync-up`, torn down at `sync-down`):
+
+| Tier | Resources |
+|---|---|
+| Durable | GCS backup bucket · Secret Manager · Artifact Registry · Pub/Sub topic + pull subscription · service accounts/IAM · budget alert |
+| Ephemeral | Cloud SQL instance · Memgraph GCE VM + disk |
+
+Cloud Run jobs/services need no special handling — `min-instances=0` already makes them free
+idle. "Stop" was considered and rejected for the ephemeral tier: Cloud SQL auto-restarts a
+stopped instance after ~7 days, silently resuming the bill mid-gap.
+
 **Tasks**
 1. `terraform/` — providers, backend (GCS state bucket), `variables.tf` with no defaults for
    `project_id` / `region`.
@@ -119,12 +132,20 @@ Everything in code. No console clicks.
    project IDs. Commit `personal.example.tfvars` and `onix.example.tfvars` alongside them so
    the required variables are discoverable. (`.gitignore` excludes `*.tfvars` and re-includes
    `*.example.tfvars`.)
-3. Resources: Artifact Registry · Cloud SQL Postgres 15 (smallest viable tier) · GCE VM for
-   Memgraph with persistent disk and snapshot schedule · Secret Manager secrets · service
-   accounts with least-privilege IAM · Pub/Sub topic and **pull** subscription · **budget
-   alert**.
-4. Memgraph VM bootstrap: Docker Compose with `memgraph-mage`, `lab`, `mcp-memgraph`.
-5. `Makefile` targets: `tf-plan`, `tf-apply`, `tf-destroy`, `secrets-put`.
+3. Durable-tier resources: Artifact Registry · Secret Manager secrets · service accounts with
+   least-privilege IAM · Pub/Sub topic and **pull** subscription · **budget alert** · a GCS
+   bucket for Cloud SQL exports and Memgraph disk snapshots.
+4. Ephemeral-tier resources: Cloud SQL Postgres 15 (smallest viable tier), created importing
+   the latest GCS export when one exists · GCE VM for Memgraph, its disk created with
+   `source_snapshot` set to the latest snapshot when one exists.
+5. Memgraph VM bootstrap: Docker Compose with `memgraph-mage`, `lab`, `mcp-memgraph`.
+6. `Makefile` targets: `tf-plan`, `tf-apply`, `tf-destroy`, `secrets-put`, and the two lifecycle
+   commands —
+   - `sync-up`: `terraform apply` (ephemeral tier) → `make doctor TIER=2` (expect the OAuth
+     token check to report `expired` and point at `make auth-spike ARGS=--reconsent` — a normal
+     step at this cadence, not a failure) → ready to sync.
+   - `sync-down`: `gcloud sql export sql` to the GCS bucket → snapshot the Memgraph disk →
+     `terraform destroy` scoped to the ephemeral tier only.
 
 **Price the design against current GCP rates in this phase and set the budget alert before the
 first `apply`.** Do not trust the estimates in `ARCHITECTURE.md` — they were not verified.
@@ -134,6 +155,9 @@ first `apply`.** Do not trust the estimates in `ARCHITECTURE.md` — they were n
 - Memgraph reachable over Bolt; Cloud SQL reachable from Cloud Run.
 - Budget alert active.
 - `terraform destroy` then `apply` reproduces the environment exactly.
+- `sync-down` then `sync-up` reproduces the environment **with data intact** — proven by
+  writing a marker record before `sync-down` and reading it back after the next `sync-up`, not
+  assumed from the export/import commands succeeding.
 
 ---
 
