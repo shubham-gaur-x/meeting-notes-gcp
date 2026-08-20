@@ -164,14 +164,26 @@ are the only always-on-priced resources, and together they run about **$58/month
 if you leave them up**. So they exist only while you are actually syncing:
 
 ```bash
-make sync-up      # create them, restore the last backup, run doctor
+make sync-up      # create them, restore the last backup, run doctor  (~11 min)
 #   ... sync meetings, query the graph, do the work ...
-make sync-down    # back up, verify the backup, then destroy them
+make sync-down    # back up, verify the backup, then destroy them     (~3 min)
 ```
+
+**Budget about eleven minutes for `sync-up` and three for `sync-down`** — measured,
+not estimated (ADR-017). Nearly all of `sync-up` is Cloud SQL provisioning; the
+Memgraph VM is serving Bolt after roughly two minutes, so the graph is usable
+well before the database is. Start a session before you need it.
 
 Between sessions the billable tier costs **$0**. Your data lives in the durable
 backup bucket (Cloud SQL export) and in a disk snapshot (the graph), and
 `sync-up` restores both.
+
+Memgraph's Bolt port is never exposed publicly. To reach it, open an IAP tunnel:
+
+```bash
+gcloud compute start-iap-tunnel meeting-notes-memgraph 7687 \
+  --local-host-port=localhost:7687 --zone=$GCP_ZONE
+```
 
 `sync-down` will not destroy anything until it has confirmed both backups
 exist — a failed export leaves the tier up and tells you so, rather than
@@ -209,6 +221,24 @@ third-party app access. See `docs/GOOGLE_AUTH.md` §2.
 
 **Everything worked yesterday and fails today.** The 7-day refresh token. Run
 `make auth-spike ARGS=--reconsent`.
+
+**`make psql` says "Cloud SQL Proxy (v2) couldn't be found in PATH".** `gcloud sql
+connect` needs a component that is not installed by default:
+
+```bash
+gcloud components install cloud-sql-proxy
+```
+
+Connecting to the instance's public IP directly with `psql` or `asyncpg` will
+**hang**, and that is by design — there are no authorized networks, so the only
+routes in are the Cloud SQL connector (IAM-authenticated) or the proxy.
+
+**Terraform fails with "requires a quota project, which is not set by default".**
+Your Application Default Credentials are missing or pointed at the wrong account:
+
+```bash
+gcloud auth application-default login
+```
 
 ---
 

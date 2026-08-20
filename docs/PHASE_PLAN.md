@@ -108,7 +108,34 @@ the test harness for Phases 3–8, so it is exercised continuously rather than r
 
 ---
 
-## Phase 1 — Terraform foundation 🟦
+## Phase 1 — Terraform foundation ✅ DONE (2026-08-20, ADR-016 / ADR-017)
+
+**Outcome: the sync lifecycle works, proven end to end against real GCP.** A full
+cycle ran — durable apply → `sync-up` → markers written to both stores → `sync-down`
+→ verified `Listed 0 items` and `$0` → `sync-up` → **both markers returned with their
+original timestamps.** Data survives the gap.
+
+**A `sync-up` costs ~11–12 minutes, a `sync-down` ~3.** Almost the entire `sync-up` is
+Cloud SQL instance provisioning (11m05s measured); the Memgraph VM serves Bolt in about
+two minutes. Fine at a monthly cadence, and ADR-017 records where to cut if that ever
+changes.
+
+Running it found **four bugs review had missed** — all wrong assumptions about Google
+API behaviour, including a unit-test mock that encoded the wrong `gcloud` exit code and
+therefore certified the bug it was meant to catch. Details in ADR-017; fixes in
+`7972f9a`, each with a test that would have caught it.
+
+The backup-before-destroy guarantee also held unrehearsed: one `sync-down` failed at
+the snapshot step and `terraform destroy` correctly never ran.
+
+**Note for the next phase:** billing was the real blocker, not the code. Two personal
+billing accounts were closed and "not in good standing"; the working setup is a billing
+account owned by `work.shubham.gaur.x@gmail.com` with `roles/billing.user` granted to
+`shubham.gaur.x@gmail.com`, which the project links to. $300 trial credit, 90 days.
+
+---
+
+### Original plan
 
 Everything in code. No console clicks.
 

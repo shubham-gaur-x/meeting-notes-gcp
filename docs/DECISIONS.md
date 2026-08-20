@@ -477,6 +477,83 @@ inconvenience, so `docs/SETUP.md`'s tier-2 walkthrough must present it as a norm
 
 ---
 
+## ADR-017 — Phase 1 validated live: the sync lifecycle works, and costs ~11 minutes to start
+
+**Date:** 2026-08-20 · **Status:** Accepted
+
+**Context.** ADR-016 committed to destroying the Cloud SQL instance and Memgraph VM
+between sessions. That decision was made on price-list arithmetic. It was never run.
+Phase 1's exit criterion demanded proof that data actually survives the gap — a marker
+record written before `sync-down` and read back after the next `sync-up` — because
+"destroy then apply worked" only proves Terraform is deterministic and says nothing
+about the data.
+
+**Outcome: the lifecycle works.** A full cycle was executed against real infrastructure:
+durable apply → `sync-up` → write markers to both stores → `sync-down` → verify $0 →
+`sync-up` → **both markers returned with their original timestamps**
+(`2026-08-20T02:19:19` in Memgraph, `2026-08-20T02:21:04` in Postgres). Cloud SQL and
+Compute both reported `Listed 0 items` while torn down.
+
+**Measured timings** (from Cloud SQL operation logs and GCE serial console, not estimated):
+
+| Step | Duration |
+|---|---|
+| `sync-up` — Cloud SQL instance creation | **11m05s** cold, **10m46s** restoring |
+| `sync-up` — Memgraph VM boot to serving Bolt | ~2m13s |
+| `sync-down` — export + verify + snapshot + verify | ~25s |
+| `sync-down` — Cloud SQL deletion | ~1m50s |
+| **Full `sync-up`** | **~11–12 min**, almost entirely Cloud SQL provisioning |
+| **Full `sync-down`** | **~3 min** |
+
+**Consequences.** A sync session costs about **eleven minutes to start and three to
+end**. At the monthly cadence this project is built for that is a fair trade for $0
+idle; at a daily cadence it would be intolerable. The number is worth revisiting only
+if the cadence changes — and the fix would be scoped precisely, because the long pole
+is *entirely* Cloud SQL instance provisioning. The Memgraph VM is serving Bolt in about
+two minutes and is not the problem. Options if it ever matters: keep Cloud SQL running
+and tear down only the VM (~$13/mo), or move staging to something with faster cold
+start.
+
+**The safety property held in production, unrehearsed.** One `sync-down` failed at the
+snapshot step (a missing `--zone`). The export had already succeeded, the snapshot had
+not, and **`terraform destroy` correctly never ran** — the tier stayed up and the error
+said so. That left an orphan export in the backup bucket
+(`meeting-memory-20260820t022231z.sql.gz`) with no matching snapshot. The bucket's
+90-day lifecycle rule reclaims it, so it is untidy rather than a leak, but a partially
+completed `sync-down` is now a known and observed state, not a theoretical one.
+
+**Four real bugs were found by running it that review had not caught** (commit
+`7972f9a`), every one a wrong assumption about how a Google API behaves:
+
+1. The `google` provider needs `user_project_override` + `billing_project`, or
+   `billingbudgets.googleapis.com` rejects user ADC credentials outright.
+2. `cloudresourcemanager.googleapis.com` and `iam.googleapis.com` were missing from the
+   required-APIs list. Service-account *creation* succeeded without the latter; the
+   subsequent *read* of the same resource 403'd.
+3. `gcloud sql export` writes to GCS as the **Cloud SQL instance's own** service
+   account, not the calling identity. That account is regenerated on every instance
+   creation, so the bucket grant has to live in the ephemeral module bound to
+   `service_account_email_address` — a static durable-tier binding would go stale on
+   the first teardown.
+4. `gcloud storage ls` on an empty prefix exits **1** with "matched no objects", not 0
+   with empty output. The unit test had mocked exit 0, so it passed while the first
+   real `sync-up` failed. `gcloud compute disks snapshot` likewise needs an explicit
+   `--zone`.
+
+Bug 4 is the instructive one: a mock encoded an assumption about a tool's behaviour,
+the assumption was wrong, and the test therefore certified the bug. Every fix now
+carries a test that would have caught it, and the mocks match observed CLI behaviour
+rather than expected behaviour.
+
+**Rejected:**
+- *Declaring Phase 1 done on a green `terraform apply`.* It would have shipped all four
+  bugs above, since none of them appear until the second half of a full cycle.
+- *Skipping the marker records.* A destroy/apply that reproduces empty resources proves
+  Terraform is deterministic and proves nothing about backup and restore, which is the
+  only thing standing between a teardown and permanent data loss.
+
+---
+
 ## Template
 
 ```
