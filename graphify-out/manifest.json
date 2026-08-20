@@ -1,9 +1,9 @@
 {
   "pyproject.toml": {
-    "mtime": 1787005988.8789833,
-    "seen": 1787187135.327631,
-    "ast_hash": "443255cf2b4cef054b542a9ee0881858",
-    "semantic_hash": "443255cf2b4cef054b542a9ee0881858"
+    "mtime": 1787210726.8319497,
+    "seen": 1787219616.6118321,
+    "ast_hash": "5420be041b5b16a07debd74bf70ea36a",
+    "semantic_hash": "5420be041b5b16a07debd74bf70ea36a"
   },
   "scripts/__init__.py": {
     "mtime": 1786657789.4204366,
@@ -62,10 +62,10 @@
     "semantic_hash": "b6b5d1217aa2791584d038d2fc50a2fb"
   },
   "docs/PHASE_PLAN.md": {
-    "mtime": 1787208770.2825885,
-    "seen": 1787209888.920053,
-    "ast_hash": "4948b878321dafa6533c93255f5f4489",
-    "semantic_hash": "4948b878321dafa6533c93255f5f4489"
+    "mtime": 1787211144.8461056,
+    "seen": 1787219616.6118531,
+    "ast_hash": "34bd09f013cdb6dd986a4779c937cdec",
+    "semantic_hash": "34bd09f013cdb6dd986a4779c937cdec"
   },
   "docs/superpowers/plans/2026-08-13-phase-0.5-auth-spike.md": {
     "mtime": 1786657064.1348739,
@@ -78,10 +78,10 @@
     "semantic_hash": "9e89f77a72c92613ad8d3b17b3435709"
   },
   "scripts/doctor.py": {
-    "mtime": 1787186336.477473,
-    "seen": 1787187135.327636,
-    "ast_hash": "9d1755e4e5098a3511c357dec2ff4bc0",
-    "semantic_hash": "9d1755e4e5098a3511c357dec2ff4bc0"
+    "mtime": 1787210622.8436153,
+    "seen": 1787219616.611834,
+    "ast_hash": "517a172fe9b18a5e04ee44e17ffd0c93",
+    "semantic_hash": "517a172fe9b18a5e04ee44e17ffd0c93"
   },
   "terraform/envs/onix.example.tfvars": {
     "mtime": 1787168859.8444693,
@@ -96,15 +96,16 @@
     "semantic_hash": "feefc098dfead18b4cd12f7950e9ab4f"
   },
   "tests/test_phase06_doctor.py": {
-    "mtime": 1787186318.6951551,
-    "seen": 1787187135.32765,
-    "ast_hash": "68de44a2d009201f17ffc43a58bf5c83",
-    "semantic_hash": "68de44a2d009201f17ffc43a58bf5c83"
+    "mtime": 1787210595.5682056,
+    "seen": 1787219616.611852,
+    "ast_hash": "330591e2ee43df78776a95b7f618148f",
+    "semantic_hash": "330591e2ee43df78776a95b7f618148f"
   },
   "docker-compose.local.yml": {
-    "mtime": 1787168821.8914502,
-    "ast_hash": "c6e8fb0faecb938c5d91ca41f6e30cd0",
-    "semantic_hash": "c6e8fb0faecb938c5d91ca41f6e30cd0"
+    "mtime": 1787210553.0232587,
+    "seen": 1787219616.6118531,
+    "ast_hash": "44cc4757b2f74214af11d57c8a2c076e",
+    "semantic_hash": "44cc4757b2f74214af11d57c8a2c076e"
   },
   "docs/SETUP.md": {
     "mtime": 1787202015.1921847,
@@ -280,10 +281,10 @@
     "semantic_hash": "0c18f171848fbd461e914191089e0cc2"
   },
   "meeting_notes/config.py": {
-    "mtime": 1787206356.0489557,
-    "seen": 1787209888.9200268,
-    "ast_hash": "766971cff82308804fd9b03851ee9707",
-    "semantic_hash": "766971cff82308804fd9b03851ee9707"
+    "mtime": 1787210566.922038,
+    "seen": 1787219616.611825,
+    "ast_hash": "10e1b88e04731c90b8dc358c0c5f3dce",
+    "semantic_hash": "10e1b88e04731c90b8dc358c0c5f3dce"
   },
   "meeting_notes/dedup.py": {
     "mtime": 1787207957.0575647,
@@ -332,5 +333,35 @@
     "seen": 1787209888.920054,
     "ast_hash": "95ac5a9e82eb54ed901ba5eb39344018",
     "semantic_hash": "95ac5a9e82eb54ed901ba5eb39344018"
+  },
+  "meeting_notes/db.py": {
+    "mtime": 1787210700.2413774,
+    "seen": 1787219616.611827,
+    "ast_hash": "ca68aba3e0d52e9d8e43fedff01d2283",
+    "semantic_hash": "ca68aba3e0d52e9d8e43fedff01d2283"
+  },
+  "meeting_notes/graph_client.py": {
+    "mtime": 1787210994.6746013,
+    "seen": 1787219616.6118279,
+    "ast_hash": "c42450e55759accc712fedefc3f782ac",
+    "semantic_hash": "c42450e55759accc712fedefc3f782ac"
+  },
+  "scripts/setup_memgraph.py": {
+    "mtime": 1787211052.8909628,
+    "seen": 1787219616.6118348,
+    "ast_hash": "7c653b6ee3c4702e172c5701784c359a",
+    "semantic_hash": "7c653b6ee3c4702e172c5701784c359a"
+  },
+  "tests/test_phase03_data_layer.py": {
+    "mtime": 1787211027.2225113,
+    "seen": 1787219616.611851,
+    "ast_hash": "9d86a4f8e2e1c3258a2340aa2ae0c5d3",
+    "semantic_hash": "9d86a4f8e2e1c3258a2340aa2ae0c5d3"
+  },
+  "docs/superpowers/plans/2026-08-20-phase-3-data-layer.md": {
+    "mtime": 1787210262.985478,
+    "seen": 1787219616.611854,
+    "ast_hash": "14a142bbedd029aa02e904b55a6d0ff4",
+    "semantic_hash": "14a142bbedd029aa02e904b55a6d0ff4"
   }
 }
