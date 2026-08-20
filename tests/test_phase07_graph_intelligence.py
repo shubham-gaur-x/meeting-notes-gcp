@@ -860,3 +860,44 @@ async def test_enrichment_is_skipped_for_a_low_score_record() -> None:
 
     assert result.status == "skipped_low_score"
     assert called == [], "a rejected record must not be enriched"
+
+
+# ─── nightly orchestration ────────────────────────────────────────────────────
+
+from meeting_notes import nightly  # noqa: E402
+
+
+async def test_one_failing_nightly_step_does_not_sink_the_others() -> None:
+    """A transient Memgraph conflict in the full algorithm pass must not cost
+    us the night's decay and consolidation."""
+    async def flaky(name: str):
+        if name == "algorithms":
+            raise RuntimeError("Cannot resolve conflicting transactions")
+        return {"ok": name}
+
+    outcome = await nightly.run(step_fn=flaky)
+
+    assert outcome["failures"] == 1
+    assert outcome["results"]["algorithms"] is None
+    assert outcome["results"]["decay"] == {"ok": "decay"}
+    assert outcome["results"]["consolidate"] == {"ok": "consolidate"}
+
+
+async def test_nightly_runs_only_the_requested_steps() -> None:
+    """--step lets Scheduler stagger the expensive passes and lets a single
+    failed stage be re-run alone."""
+    ran: list[str] = []
+
+    async def recording(name: str):
+        ran.append(name)
+        return None
+
+    await nightly.run(("decay",), step_fn=recording)
+    assert ran == ["decay"]
+
+
+async def test_an_unknown_step_is_rejected() -> None:
+    import pytest as _pytest
+
+    with _pytest.raises(ValueError, match="unknown step"):
+        await nightly.run_step("not_a_step")
