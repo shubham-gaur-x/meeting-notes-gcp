@@ -188,7 +188,51 @@ first `apply`.** Do not trust the estimates in `ARCHITECTURE.md` — they were n
 
 ---
 
-## Phase 2 — Pure core 🟩
+## Phase 2 — Pure core ✅ DONE (2026-08-20, ADR-018)
+
+All nine modules ported into `meeting_notes/`. **187 tests green**, ruff and mypy clean over
+`meeting_notes scripts tests`, no live services required by anything.
+
+**Exit criteria met.** `config.py` is verified by AST — not grep — to be the only thing in the
+package that reads the environment: no module imports `os` at all. (grep gives a false positive
+on `person_resolver`'s docstring, which mentions `os.environ` while explaining that it no longer
+uses it.)
+
+**Two behavioural changes beyond the port**, both required by `CLAUDE.md`'s config rule:
+`person_resolver.load_roster` and `access_control.load_policy` take an explicit path instead of
+reading `PERSON_ROSTER_PATH` / `ACCESS_POLICY_FILE` themselves. Both are also now testable
+without touching the process environment.
+
+**A v5 governance bug was found and fixed** — not one of the ten in `MIGRATION_FROM_V5.md`.
+`person_resolver`'s tier-2 branch read `tracked` off the leaked loop variable `p` (the last
+person iterated) rather than the one that matched, so `Person.tracked` — the opt-in gate for
+naming individuals in analytics — was decided by list ordering. Fixed, with a regression test
+verified to fail against v5's line and pass against the fix.
+
+**Reading v5 first corrected four plan assumptions**, each of which would have produced a test
+that passed for the wrong reason: `uuid5_id` is a double uuid5; `priority_from_due(None)` is
+`low`; `dedup.similarity` reads `candidate["task"]` not `["text"]`; `_HINTS["general"]` is
+deliberately the empty string.
+
+**v5 test disposition** — `PHASE_PLAN` requires every dropped test to have a written reason:
+
+| v5 test file | Covers | Disposition |
+|---|---|---|
+| `test_phase31_meeting_quality.py` | `meeting_quality` | ported |
+| `test_phase33_access_control.py` | `access_control` | ported |
+| `test_phase39_person_resolver.py` | `person_resolver` | ported |
+| `test_phase42_dedup.py` | `dedup` | ported |
+| `test_phase43_meeting_type_router.py` | `meeting_type_router` | ported |
+| `test_phase40_person_resolution_upsert.py` | person resolution **into the graph** | **deferred to Phase 3** — needs `graph_client` |
+| — | `classifier` | **none existed in v5**; written here |
+
+**Also deferred to Phase 3:** `meeting_quality.score_all_meetings()`. The plan assumed this
+module was fully pure; it is not — that one function orchestrates `memgraph_client`. Every
+other function in it is pure and ported.
+
+---
+
+### Original plan
 
 The modules with no I/O. These port nearly unchanged and give a green suite early.
 

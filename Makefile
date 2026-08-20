@@ -14,7 +14,7 @@ COMPOSE := docker compose -f docker-compose.local.yml
 
 # Which source trees actually exist yet. Phases 2-8 add to this; naming a
 # directory before it exists makes lint/typecheck fail on a clean clone.
-SRC := scripts tests
+SRC := meeting_notes scripts tests
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -122,7 +122,7 @@ lint:  ## ruff over the source trees that exist
 	$(PYTHON) -m ruff check $(SRC)
 
 typecheck:  ## mypy over the source trees that exist
-	$(PYTHON) -m mypy scripts
+	$(PYTHON) -m mypy meeting_notes scripts
 
 logs:  ## Tail Cloud Run logs (SERVICE=api)
 	gcloud run services logs tail $(SERVICE) --region $$GCP_REGION
