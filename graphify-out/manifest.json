@@ -62,10 +62,10 @@
     "semantic_hash": "b6b5d1217aa2791584d038d2fc50a2fb"
   },
   "docs/PHASE_PLAN.md": {
-    "mtime": 1787246518.9746985,
-    "seen": 1787248093.0653398,
-    "ast_hash": "eed4b1c614d86299ad12510f9d5f7b61",
-    "semantic_hash": "eed4b1c614d86299ad12510f9d5f7b61"
+    "mtime": 1787253344.2239964,
+    "seen": 1787253499.042746,
+    "ast_hash": "d1f2ba06291c520ee78457a3c53826f0",
+    "semantic_hash": "d1f2ba06291c520ee78457a3c53826f0"
   },
   "docs/superpowers/plans/2026-08-13-phase-0.5-auth-spike.md": {
     "mtime": 1786657064.1348739,
@@ -341,10 +341,10 @@
     "semantic_hash": "ac4efeff27864138302e52f6b14afaa7"
   },
   "meeting_notes/graph_client.py": {
-    "mtime": 1787210994.6746013,
-    "seen": 1787219616.6118279,
-    "ast_hash": "c42450e55759accc712fedefc3f782ac",
-    "semantic_hash": "c42450e55759accc712fedefc3f782ac"
+    "mtime": 1787248281.3208604,
+    "seen": 1787253499.0427039,
+    "ast_hash": "76071c742aff8ff9088c2d828c103b52",
+    "semantic_hash": "76071c742aff8ff9088c2d828c103b52"
   },
   "scripts/setup_memgraph.py": {
     "mtime": 1787211052.8909628,
@@ -473,10 +473,10 @@
     "semantic_hash": "6124fb4c4d90abafb3140b21e7d91339"
   },
   "meeting_notes/jira_client.py": {
-    "mtime": 1787245720.08139,
-    "seen": 1787248093.0653,
-    "ast_hash": "cd1a74de529833061791c38735915fa9",
-    "semantic_hash": "cd1a74de529833061791c38735915fa9"
+    "mtime": 1787253174.2510958,
+    "seen": 1787253499.0427048,
+    "ast_hash": "c794e507ad41ae9b9225c113a2e51e2d",
+    "semantic_hash": "c794e507ad41ae9b9225c113a2e51e2d"
   },
   "meeting_notes/sources/__init__.py": {
     "mtime": 1787245499.3060348,
@@ -537,5 +537,47 @@
     "seen": 1787248093.065341,
     "ast_hash": "2d1a6546017be7b1dead5b105ce04d7a",
     "semantic_hash": "2d1a6546017be7b1dead5b105ce04d7a"
+  },
+  "jobs/pipeline_drain.py": {
+    "mtime": 1787249021.246697,
+    "seen": 1787253499.042696,
+    "ast_hash": "d6d2e52ff81808621dc47f99ee4d27ec",
+    "semantic_hash": "d6d2e52ff81808621dc47f99ee4d27ec"
+  },
+  "meeting_notes/jira_pusher.py": {
+    "mtime": 1787248801.0840814,
+    "seen": 1787253499.042706,
+    "ast_hash": "b625a4d5192e5a507818a39d88c682b8",
+    "semantic_hash": "b625a4d5192e5a507818a39d88c682b8"
+  },
+  "meeting_notes/jira_sync.py": {
+    "mtime": 1787248927.4662545,
+    "seen": 1787253499.042706,
+    "ast_hash": "69614f6b13d2d97f83cab9592e27d7f7",
+    "semantic_hash": "69614f6b13d2d97f83cab9592e27d7f7"
+  },
+  "meeting_notes/pipeline.py": {
+    "mtime": 1787248569.7975411,
+    "seen": 1787253499.04271,
+    "ast_hash": "f616877814789881b8b725c6e48ea1ad",
+    "semantic_hash": "f616877814789881b8b725c6e48ea1ad"
+  },
+  "meeting_notes/pipeline_drain.py": {
+    "mtime": 1787249114.4191413,
+    "seen": 1787253499.042711,
+    "ast_hash": "1d486151d570812e77b8793228197934",
+    "semantic_hash": "1d486151d570812e77b8793228197934"
+  },
+  "tests/test_phase06_pipeline.py": {
+    "mtime": 1787253190.1603432,
+    "seen": 1787253499.042745,
+    "ast_hash": "b1287e83359a38d544ce525ba08a3d2c",
+    "semantic_hash": "b1287e83359a38d544ce525ba08a3d2c"
+  },
+  "docs/superpowers/plans/2026-08-20-phase-6-pipeline.md": {
+    "mtime": 1787248253.086984,
+    "seen": 1787253499.042746,
+    "ast_hash": "e855ca2e8af0ca192775e014748bba8e",
+    "semantic_hash": "e855ca2e8af0ca192775e014748bba8e"
   }
 }
