@@ -44,6 +44,10 @@ class Settings(BaseSettings):
     lm_studio_base_url: str = "http://localhost:1234/v1"
     lm_studio_model: str = ""
     lm_studio_embedding_model: str = "text-embedding-nomic-embed-text-v1.5"
+    gemini_embedding_model: str = "text-embedding-004"
+    # Where the `fake` backend reads recorded fixtures from. Blank = the
+    # committed sample_data/llm_fixtures/. Tests point it at a tmp_path.
+    llm_fixture_dir: str = ""
 
     # Both Memgraph vector indexes are configured for 768. Changing this means
     # migrating both indexes, so it is not a knob to turn casually.
