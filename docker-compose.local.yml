@@ -15,9 +15,12 @@
 # The API deliberately does NOT run here — it runs on the host so the
 # edit-reload loop stays fast during Phases 3-8.
 #
-# Port note: these are the conventional ports, which is right for a fresh clone.
-# If v5's stack is running on this machine it already holds 5432/7687/3000 —
-# `make doctor` reports that as a warning. Stop v5's stack before `make demo-up`.
+# Port note: deliberately NOT the conventional 5432/7687/3000. v5's stack
+# (~/Desktop/airbyte-lm-studio-memgraph) is a long-running system on this
+# machine and already holds those, and v5 is read-only reference: pointing
+# v6's migration at localhost:5432 would apply v6 schema INTO v5's database.
+# Shifting by 50000 lets both run side by side with no chance of that.
+# The container-internal ports are unchanged, so only the host side moves.
 
 services:
   postgres:
@@ -30,7 +33,7 @@ services:
       # deployed environments take this from Secret Manager via Cloud Run.
       POSTGRES_PASSWORD: local_dev_only
     ports:
-      - "5432:5432"
+      - "55432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -44,8 +47,8 @@ services:
     image: memgraph/memgraph-mage:3.11.0
     container_name: mn-memgraph
     ports:
-      - "7687:7687"   # Bolt
-      - "7444:7444"   # monitoring
+      - "57687:7687"   # Bolt
+      - "57444:7444"   # monitoring
     volumes:
       - memgraph_data:/var/lib/memgraph
     command: ["--log-level=WARNING"]
@@ -60,7 +63,7 @@ services:
     image: memgraph/lab:3.11.0
     container_name: mn-memgraph-lab
     ports:
-      - "3000:3000"
+      - "53000:3000"
     environment:
       QUICK_CONNECT_MG_HOST: memgraph
       QUICK_CONNECT_MG_PORT: "7687"

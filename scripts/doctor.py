@@ -41,10 +41,15 @@ REFRESH_TOKEN_LIFETIME_DAYS = 7
 TOKEN_WARN_DAYS_REMAINING = 1.0
 
 # Ports the local compose stack binds. Names are user-facing.
+# Must match docker-compose.local.yml. Deliberately offset from the
+# conventional ports: v5's stack is long-running on this machine and holds
+# 5432/7687/3000, and v5 is read-only reference.
 REQUIRED_PORTS: dict[int, str] = {
-    5432: "Postgres",
-    7687: "Memgraph Bolt",
-    7444: "Memgraph monitoring",
+    55432: "Postgres",
+    57687: "Memgraph Bolt",
+    57444: "Memgraph monitoring",
+    53000: "Memgraph Lab",
+    # Not in compose — the API runs on the host during Phases 3-8.
     8080: "API",
 }
 

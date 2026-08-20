@@ -51,7 +51,7 @@ class Settings(BaseSettings):
 
     # ─── Postgres (ADR-015) ───────────────────────────────────────────────
     postgres_host: str = "localhost"
-    postgres_port: int = 5432
+    postgres_port: int = 55432
     postgres_db: str = "meeting_memory"
     postgres_user: str = "meeting_notes"
     postgres_password: str = ""
@@ -60,7 +60,7 @@ class Settings(BaseSettings):
 
     # ─── Memgraph ─────────────────────────────────────────────────────────
     memgraph_host: str = "localhost"
-    memgraph_port: int = 7687
+    memgraph_port: int = 57687
     memgraph_user: str = ""
     memgraph_password: str = ""
 

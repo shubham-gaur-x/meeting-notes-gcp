@@ -130,14 +130,34 @@ def test_port_free_passes() -> None:
 def test_port_occupied_warns_not_fails() -> None:
     """An occupied port is recoverable — the user may already be running the
     stack. It must not hard-fail a clean clone."""
-    result = check_port_free(5432, "Postgres", probe=lambda _: False)
+    port = next(iter(REQUIRED_PORTS))
+    result = check_port_free(port, "Postgres", probe=lambda _: False)
     assert result.status is Status.WARN
     assert result.remediation
-    assert "5432" in result.detail or "5432" in result.remediation
+    assert str(port) in result.detail or str(port) in result.remediation
 
 
-def test_required_ports_cover_the_local_stack() -> None:
-    assert set(REQUIRED_PORTS) == {5432, 7687, 7444, 8080}
+def test_required_ports_match_what_compose_actually_publishes() -> None:
+    """doctor must check the ports the stack really binds, not four magic
+    numbers that can drift from docker-compose.local.yml.
+
+    This caught a real drift: the compose ports were shifted off the
+    conventional 5432/7687/3000 (v5's long-running stack holds those, and v5
+    is read-only reference), and a hardcoded list here would have kept
+    reporting the old ones as free while `make demo-up` failed to bind.
+    """
+    import re
+
+    compose = (Path(__file__).resolve().parent.parent / "docker-compose.local.yml").read_text()
+    published = {int(m) for m in re.findall(r'^\s+-\s+"(\d+):\d+"', compose, re.M)}
+
+    # The API is not in compose -- it runs on the host during Phases 3-8 -- so
+    # doctor checks it in addition to everything compose binds.
+    assert published <= set(REQUIRED_PORTS), (
+        f"compose publishes {sorted(published - set(REQUIRED_PORTS))} "
+        "which doctor does not check"
+    )
+    assert 8080 in REQUIRED_PORTS
 
 
 # ─── tier 1 ───────────────────────────────────────────────────────────────────
