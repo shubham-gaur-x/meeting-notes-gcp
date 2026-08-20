@@ -1,0 +1,6 @@
+{
+  "name": "standup",
+  "source_type": "meet_transcript",
+  "type_hint": "A daily standup. Expect terse per-person updates, several small action items, and few or no formal decisions.",
+  "text": "Daily Standup — 2026-08-18, Google Meet\n\nPriya Raman: Yesterday I finished the retry logic on the ingest job. Today I'm picking up the dead-letter queue. No blockers.\n\nMarcus Webb: I'm still stuck on the Cloud SQL connection pooling — it drops connections under load. I'll pair with Priya after this. That's my blocker.\n\nAnita Desai: Shipped the dashboard filter fix. Starting on the export endpoint today. I'll need the schema frozen by Thursday or the export work slips.\n\nPriya Raman: I can freeze the schema by Wednesday.\n\nMarcus Webb: Also, reminder that the on-call rotation changes Monday."
+}

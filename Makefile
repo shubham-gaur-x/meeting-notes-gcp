@@ -43,6 +43,9 @@ demo-down:  ## Stop the local stack (add ARGS=-v to delete its data)
 	$(COMPOSE) down $(ARGS)
 
 # ─── Phase 0.5 ────────────────────────────────────────────────────────────────
+record-fixtures:  ## Re-record tier-0 LLM fixtures against a real backend (ADR-014)
+	$(PYTHON) -m scripts.record_fixtures $(ARGS)
+
 auth-spike:  ## Run the OAuth spike. Do this before anything else. (ARGS=--reconsent)
 	$(PYTHON) -m scripts.auth_spike $(ARGS)
 

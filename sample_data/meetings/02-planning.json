@@ -1,0 +1,6 @@
+{
+  "name": "planning",
+  "source_type": "meet_transcript",
+  "type_hint": "A planning meeting. Expect explicit decisions with owners and dates, and action items that carry due dates.",
+  "text": "Q4 Planning — 2026-08-19, Zoom, 60 minutes\n\nAttendees: Sofia Alvarez (organizer, sofia.alvarez@northwind.example), Tom Beckett (tom.beckett@northwind.example), Priya Raman (priya.raman@northwind.example)\n\nSofia: We need to decide whether the migration lands in Q4 or slips to Q1. Tom, what's the estimate?\n\nTom: Six weeks of engineering time if we don't hit surprises with the legacy adapter. Eight if we do.\n\nSofia: Then we're deciding to target Q4 with a Q1 buffer. I want that written down. Tom owns the migration plan, due September 5th.\n\nTom: Agreed. I'll have a written plan by the 5th.\n\nPriya: We should also decide on the rollback approach before we start.\n\nSofia: Good call. Decision: we do a dual-write period rather than a hard cutover. Priya, can you spec that by August 29th?\n\nPriya: Yes.\n\nSofia: Last thing — we are not hiring a contractor for this. We tried that last year and onboarding ate the savings."
+}

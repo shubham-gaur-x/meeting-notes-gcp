@@ -1,0 +1,6 @@
+{
+  "name": "email_thread",
+  "source_type": "email",
+  "type_hint": "An email thread rather than a live meeting. Attendees are the participants on the thread; there may be no explicit start or end time.",
+  "text": "Subject: Re: Vendor security review — blocking launch?\nFrom: anita.desai@northwind.example\nTo: sofia.alvarez@northwind.example, legal@northwind.example\nDate: 2026-08-17\n\n> Sofia wrote:\n> Is the vendor review going to block the launch date?\n\nIt might. Legal flagged two items in the DPA: sub-processor notification is 14 days and we asked for 30, and there's no explicit data residency clause.\n\nI've asked the vendor for redlines. If they come back by Wednesday we're fine. If not, I'd rather delay a week than launch on an unreviewed DPA.\n\nCan you let the exec team know the date is at risk? I'll send the redlines round as soon as I have them.\n\n— Anita"
+}

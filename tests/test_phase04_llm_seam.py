@@ -460,3 +460,76 @@ async def test_validation_failure_returns_none_rather_than_raising() -> None:
     result = await extract_meeting("text", "email", settings=_lmstudio_settings(),
                                    transport=wrong_shape)
     assert result is None
+
+
+# ─── fixture recording ────────────────────────────────────────────────────────
+
+from scripts import record_fixtures  # noqa: E402
+
+
+async def test_the_recorder_writes_the_key_the_extractor_reads(tmp_path: Path) -> None:
+    """The invariant this whole mechanism rests on.
+
+    CLAUDE.md calls writer/reader id drift a known v5 bug class that cost real
+    debugging time twice. The same hazard applies here: if the recorder keys a
+    fixture differently from how extract_meeting looks it up, every replay
+    misses and tier 0 is dead — with a confusing "no fixture" error rather
+    than an obvious cause. So the recorder derives its prompts from the
+    extractor's own helper, and this proves the round trip.
+    """
+    record = {"name": "t", "source_type": "email", "type_hint": None, "text": "hello"}
+
+    # what the recorder would write
+    system, user = record_fixtures.prompts_for(record)
+    key = fixture_key(system, user, 0.0)
+    record_fixtures.write_fixture(
+        tmp_path, key,
+        {"title": "Round trip", "kind": "email_thread", "platform": "Email",
+         "date": "2026-08-20", "summary": "s"},
+    )
+
+    # what the extractor actually looks up
+    meeting = await extract_meeting(
+        record["text"], record["source_type"], settings=_fake_settings(tmp_path)
+    )
+
+    assert meeting is not None, "the extractor missed the fixture the recorder just wrote"
+    assert meeting.title == "Round trip"
+
+
+async def test_the_round_trip_holds_with_a_type_hint(tmp_path: Path) -> None:
+    """The hint changes the system prompt, so it must change the key on both
+    sides identically."""
+    record = {
+        "name": "t", "source_type": "meet_transcript",
+        "type_hint": "A standup. Expect terse updates.", "text": "hello",
+    }
+    system, user = record_fixtures.prompts_for(record)
+    record_fixtures.write_fixture(
+        tmp_path, fixture_key(system, user, 0.0),
+        {"title": "Hinted", "kind": "standup", "platform": "Google Meet",
+         "date": "2026-08-20", "summary": "s"},
+    )
+
+    meeting = await extract_meeting(
+        record["text"], record["source_type"], type_hint=record["type_hint"],
+        settings=_fake_settings(tmp_path),
+    )
+    assert meeting is not None and meeting.title == "Hinted"
+
+
+def test_the_corpus_is_loadable_and_well_formed() -> None:
+    """Every corpus entry needs the fields the recorder reads."""
+    corpus = record_fixtures.load_corpus(record_fixtures.CORPUS_DIR)
+    assert corpus, "the sample corpus is empty"
+    for record in corpus:
+        assert record["source_type"], "source_type is required"
+        assert record["text"].strip(), "text is required"
+        assert record.get("name"), "name is used in the recorder's output"
+
+
+def test_the_corpus_covers_more_than_one_meeting_shape() -> None:
+    """PHASE_PLAN Phase 7 warns that v5's graph is 73% standups and its
+    algorithm output is distorted accordingly. Start the corpus diverse."""
+    corpus = record_fixtures.load_corpus(record_fixtures.CORPUS_DIR)
+    assert len({r["source_type"] for r in corpus}) > 1
