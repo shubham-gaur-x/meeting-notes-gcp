@@ -52,7 +52,10 @@ VALID_LLM_BACKENDS = ("fake", "gemini", "lmstudio", "vertex")
 
 INSTALL_HINTS: dict[str, str] = {
     "docker": "Install Docker Desktop: https://docs.docker.com/get-docker/",
-    "terraform": "Install terraform: brew install terraform",
+    # Terraform is BUSL-licensed and no longer in homebrew-core; the plain
+    # `brew install terraform` returns an unrelated fuzzy-match list instead
+    # of installing anything.
+    "terraform": "Install terraform: brew tap hashicorp/tap && brew install hashicorp/tap/terraform",
     "gcloud": "Install the gcloud CLI: https://cloud.google.com/sdk/docs/install",
 }
 

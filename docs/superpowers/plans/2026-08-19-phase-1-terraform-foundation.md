@@ -156,8 +156,14 @@ Terraform is not installed on this machine (`terraform version` → `command not
 
 - [ ] **Step 1: Install Terraform**
 
+HashiCorp moved Terraform to the BUSL license and Homebrew dropped it from
+`homebrew-core`; a plain `brew install terraform` returns a fuzzy-match list of
+unrelated `terraform-*` tools instead of installing anything. Use HashiCorp's
+own tap:
+
 ```bash
-brew install terraform
+brew tap hashicorp/tap
+brew install hashicorp/tap/terraform
 ```
 
 - [ ] **Step 2: Verify the install**
