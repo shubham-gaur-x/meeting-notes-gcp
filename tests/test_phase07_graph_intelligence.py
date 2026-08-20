@@ -192,7 +192,6 @@ async def test_jaccard_returns_zero_when_there_is_no_similarity() -> None:
 
 # ─── memory/vector ────────────────────────────────────────────────────────────
 
-from meeting_notes.config import Settings  # noqa: E402
 from meeting_notes.memory import vector  # noqa: E402
 
 
@@ -456,3 +455,156 @@ async def test_blank_facts_are_skipped() -> None:
         _meeting(), "m1", driver=FakeDriver(session), chat=fake_chat
     )
     assert count == 1
+
+
+# ─── memory/episodic ──────────────────────────────────────────────────────────
+
+from meeting_notes.memory import episodic, procedural  # noqa: E402
+
+
+async def test_temporal_chain_computes_gap_days_on_the_edge() -> None:
+    """'These happened three days apart' is the signal; merely being ordered
+    is not."""
+    session = FakeSession(results={"PRECEDED_BY": [{"prior_id": "m0"}]})
+    linked = await episodic.link_temporal_chain(
+        "m1", "2026-08-20", ["a@corp.com"], driver=FakeDriver(session)
+    )
+
+    assert linked is True
+    assert "gap_days" in session.cypher()
+
+
+async def test_no_attendees_means_no_temporal_link() -> None:
+    session = FakeSession()
+    linked = await episodic.link_temporal_chain("m1", "2026-08-20", [], driver=FakeDriver(session))
+    assert linked is False
+    assert session.calls == []
+
+
+async def test_causality_is_skipped_unless_follow_up_is_needed() -> None:
+    """The cheap gate before an LLM call, mirroring the classifier's role."""
+    calls: list[str] = []
+
+    async def counting_chat(system, user, **kw):
+        calls.append(user)
+        return {"references_prior": True, "reference_description": "x"}
+
+    count = await episodic.detect_causality(
+        _meeting(follow_up_needed=False), "m1",
+        driver=FakeDriver(FakeSession()), chat=counting_chat,
+    )
+    assert count == 0
+    assert calls == [], "no LLM call when follow_up_needed is false"
+
+
+async def test_causality_links_to_the_best_matching_decision() -> None:
+    session = FakeSession(results={"MATCH (d:Decision)": [
+        {"id": "d1", "text": "We decided to migrate the database in Q3"},
+        {"id": "d2", "text": "Lunch is at noon"},
+    ]})
+
+    async def fake_chat(system, user, **kw):
+        return {"references_prior": True,
+                "reference_description": "the database migration decision"}
+
+    count = await episodic.detect_causality(
+        _meeting(follow_up_needed=True), "m1", driver=FakeDriver(session), chat=fake_chat
+    )
+
+    assert count == 1
+    caused = [p for c, p in session.calls if "CAUSED_BY" in c]
+    assert caused and caused[0]["decision_id"] == "d1"
+
+
+async def test_weak_overlap_creates_no_causal_link() -> None:
+    """A spurious CAUSED_BY edge is worse than none — it asserts a causal
+    claim the graph will later present as fact."""
+    assert episodic._best_overlap("completely unrelated words here",
+                                  [{"id": "d1", "text": "database migration quarterly"}]) is None
+
+
+async def test_decay_floors_at_a_tenth_rather_than_zero() -> None:
+    """Decaying to zero would make old meetings invisible to ranking rather
+    than merely less prominent."""
+    session = FakeSession(results={"relevance_weight": [{"updated": 5}]})
+    result = await episodic.decay_relevance(driver=FakeDriver(session))
+
+    assert result["meetings_decayed"] == 5
+    assert "0.1" in session.cypher() and "0.95" in session.cypher()
+
+
+def test_memory_sessions_are_written_only_by_episodic() -> None:
+    """CLAUDE.md: DO NOT write MemorySession nodes outside memory/episodic.py."""
+    import re
+    from pathlib import Path
+
+    package = Path(episodic.__file__).resolve().parent.parent
+
+    # Look for a Cypher WRITE against the label (MERGE/CREATE (x:MemorySession)),
+    # not the bare word -- which legitimately appears in prose describing who
+    # owns it. An earlier draft matched the memory package's own docstring.
+    write = re.compile(r"(MERGE|CREATE)\s*\(\s*\w*\s*:\s*MemorySession")
+    offenders = [
+        path.name for path in package.rglob("*.py")
+        if path.name != "episodic.py" and write.search(path.read_text())
+    ]
+    assert not offenders, f"MemorySession written outside episodic.py: {offenders}"
+
+
+async def test_a_logged_session_records_what_it_accessed() -> None:
+    session = FakeSession()
+    session_id = await episodic.log_session(
+        "who owns billing?", "Alice does.", ["m1", "f2"], driver=FakeDriver(session)
+    )
+
+    assert session_id
+    assert "ACCESSED" in session.cypher()
+
+
+# ─── memory/procedural ────────────────────────────────────────────────────────
+
+
+def test_one_on_one_matches_exactly_two_attendees() -> None:
+    pattern = procedural.KNOWN_PROCEDURE_PATTERNS["one_on_one"]
+    two = _meeting(attendees=[{"name": "A", "email": "a@x.com"}, {"name": "B", "email": "b@x.com"}])
+    three = _meeting(attendees=[{"name": n, "email": f"{n}@x.com"} for n in "abc"])
+
+    assert procedural.matches_pattern(two, pattern) is True
+    assert procedural.matches_pattern(three, pattern) is False
+
+
+def test_client_review_requires_two_distinct_domains() -> None:
+    """requires_multi_org is what separates an internal review from a client
+    one; same-domain attendees must not match."""
+    pattern = procedural.KNOWN_PROCEDURE_PATTERNS["client_review"]
+    internal = _meeting(topics=["demo"], attendees=[
+        {"name": "A", "email": "a@onix.com"}, {"name": "B", "email": "b@onix.com"}])
+    external = _meeting(topics=["demo"], attendees=[
+        {"name": "A", "email": "a@onix.com"}, {"name": "B", "email": "b@client.com"}])
+
+    assert procedural.matches_pattern(internal, pattern) is False
+    assert procedural.matches_pattern(external, pattern) is True
+
+
+def test_topic_keywords_match_case_insensitively() -> None:
+    pattern = procedural.KNOWN_PROCEDURE_PATTERNS["retrospective"]
+    assert procedural.matches_pattern(_meeting(topics=["Sprint RETRO notes"]), pattern) is True
+
+
+def test_a_meeting_matching_nothing_returns_no_procedures() -> None:
+    assert all(
+        not procedural.matches_pattern(_meeting(topics=["unrelated"]), p)
+        for name, p in procedural.KNOWN_PROCEDURE_PATTERNS.items()
+        if name != "one_on_one"
+    )
+
+
+async def test_matching_increments_the_occurrence_count() -> None:
+    """Occurrence count is what turns a pattern into a recognised procedure."""
+    session = FakeSession()
+    matched = await procedural.match_to_procedure(
+        _meeting(topics=["incident", "outage"]), "m1", driver=FakeDriver(session)
+    )
+
+    assert "incident_response" in matched
+    assert "p.occurrence_count + 1" in session.cypher()
