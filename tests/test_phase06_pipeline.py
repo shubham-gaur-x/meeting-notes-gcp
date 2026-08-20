@@ -392,3 +392,179 @@ async def test_move_to_sprint_posts_the_issue_key() -> None:
     await move_to_sprint("SCRUM-1", 42, settings=_jira_settings(), transport=transport)
     assert "sprint/42/issue" in seen["url"]
     assert seen["body"]["issues"] == ["SCRUM-1"]
+
+
+# ─── jira_pusher (exit criteria: confidence gating, dedup) ────────────────────
+#
+# push_action_items takes each graph_client / jira_client call it makes as its
+# own injectable keyword — the same flat-injection style as pipeline.process —
+# rather than a bundled object, so a test only wires the calls it cares about.
+
+from meeting_notes.models import ExtractedMeeting  # noqa: E402
+
+
+def _meeting(**over) -> ExtractedMeeting:
+    base = {"title": "Sync", "kind": "meeting", "platform": "email", "date": "2026-08-20",
+           "summary": "s"}
+    base.update(over)
+    return ExtractedMeeting.model_validate(base)
+
+
+async def test_below_threshold_items_go_to_needs_review_and_create_no_ticket() -> None:
+    """Exit criterion: confidence gating works."""
+    from meeting_notes import jira_pusher
+
+    reviewed: list[tuple] = []
+    created_calls: list[dict] = []
+
+    async def mark_needs_review(action_id, reason, **kw):
+        reviewed.append((action_id, reason))
+
+    async def create_issue(**kw):
+        created_calls.append(kw)
+        return "SCRUM-1"
+
+    settings = _jira_settings(JIRA_ENABLED=True, JIRA_CONFIDENCE_THRESHOLD=0.6)
+    meeting = _meeting(action_items=[
+        {"owner": "alice@corp.com", "task": "low confidence item", "confidence": 0.3}
+    ])
+    keys = await jira_pusher.push_action_items(
+        meeting.action_items, meeting, "src-1", settings=settings,
+        mark_needs_review=mark_needs_review, create_issue=create_issue,
+    )
+
+    assert keys == []
+    assert created_calls == [], "no Jira call for a below-threshold item"
+    assert len(reviewed) == 1
+
+
+async def test_above_threshold_items_create_a_ticket() -> None:
+    from meeting_notes import jira_pusher
+
+    updated_keys: list[tuple] = []
+
+    async def create_issue(**kw):
+        return "SCRUM-1"
+
+    async def update_jira_key(action_id, jira_key, **kw):
+        updated_keys.append((action_id, jira_key))
+
+    settings = _jira_settings(
+        JIRA_ENABLED=True, JIRA_CONFIDENCE_THRESHOLD=0.6, JIRA_DEDUP_ENABLED=False
+    )
+    meeting = _meeting(action_items=[
+        {"owner": "alice@corp.com", "task": "ship it", "confidence": 0.9}
+    ])
+    keys = await jira_pusher.push_action_items(
+        meeting.action_items, meeting, "src-1", settings=settings,
+        create_issue=create_issue, update_jira_key=update_jira_key,
+    )
+
+    assert keys == ["SCRUM-1"]
+    assert updated_keys[0][1] == "SCRUM-1"
+
+
+async def test_a_near_duplicate_links_mentioned_in_instead_of_a_second_ticket() -> None:
+    """Exit criterion: dedup works — the same action item raised twice does
+    not open a second ticket."""
+    from meeting_notes import jira_pusher
+
+    existing = {
+        "id": "action-old", "task": "ship it", "jira_key": "SCRUM-1", "embedding": [1.0, 0.0]
+    }
+    created_calls: list[dict] = []
+    linked: list[tuple] = []
+
+    async def get_open_actions(owner_email, *, exclude_id, **kw):
+        return [existing]
+
+    async def create_issue(**kw):
+        created_calls.append(kw)
+        return "SCRUM-999"
+
+    async def fake_embed(text, **kw):
+        return [1.0, 0.0]  # identical to the existing item -> similarity 1.0
+
+    async def link_mentioned_in(action_id, meeting_id, **kw):
+        linked.append((action_id, meeting_id))
+
+    settings = _jira_settings(JIRA_ENABLED=True, JIRA_DEDUP_ENABLED=True, JIRA_DEDUP_THRESHOLD=0.9)
+    meeting = _meeting(action_items=[
+        {"owner": "alice@corp.com", "task": "ship it", "confidence": 0.9}
+    ])
+    keys = await jira_pusher.push_action_items(
+        meeting.action_items, meeting, "src-1", settings=settings,
+        get_open_actions=get_open_actions, create_issue=create_issue,
+        embed=fake_embed, link_mentioned_in=link_mentioned_in,
+    )
+
+    assert keys == [], "a duplicate must not report a newly-created key"
+    assert created_calls == [], "no second Jira ticket for a near-duplicate"
+    assert linked, "the duplicate must link MENTIONED_IN to the existing item"
+
+
+async def test_disabled_jira_is_a_clean_no_op() -> None:
+    from meeting_notes import jira_pusher
+
+    settings = _jira_settings(JIRA_ENABLED=False)
+    meeting = _meeting(action_items=[{"owner": "a", "task": "t", "confidence": 0.9}])
+    keys = await jira_pusher.push_action_items(meeting.action_items, meeting, "src-1", settings=settings)
+    assert keys == []
+
+
+async def test_no_action_items_is_a_clean_no_op() -> None:
+    from meeting_notes import jira_pusher
+
+    settings = _jira_settings(JIRA_ENABLED=True)
+    meeting = _meeting(action_items=[])
+    keys = await jira_pusher.push_action_items([], meeting, "src-1", settings=settings)
+    assert keys == []
+
+
+# ─── jira_sync ─────────────────────────────────────────────────────────────────
+
+
+async def test_jira_sync_marks_the_record_processed_whether_or_not_it_matched() -> None:
+    from meeting_notes import jira_sync
+
+    async def update_status(key, status, done, **kw):
+        return key == "SCRUM-1"  # only this key exists in the graph
+
+    marked = RecordingMarker()
+    matched = await jira_sync.sync_one(
+        {"key": "SCRUM-999", "status": "Done"}, record_id="rec-2",
+        update_status=update_status, mark_processed=marked,
+    )
+
+    assert matched is False, "an unmatched key is real signal, not a bug"
+    assert marked.ids == ["rec-2"], "still marked processed either way"
+
+
+async def test_jira_sync_reports_a_match() -> None:
+    from meeting_notes import jira_sync
+
+    async def update_status(key, status, done, **kw):
+        return True
+
+    marked = RecordingMarker()
+    matched = await jira_sync.sync_one(
+        {"key": "SCRUM-1", "status": "Done"}, record_id="rec-1",
+        update_status=update_status, mark_processed=marked,
+    )
+    assert matched is True
+
+
+async def test_jira_sync_computes_done_from_status() -> None:
+    from meeting_notes import jira_sync
+
+    seen = {}
+
+    async def update_status(key, status, done, **kw):
+        seen["done"] = done
+        return True
+
+    await jira_sync.sync_one(
+        {"key": "SCRUM-1", "status": "Closed"}, record_id="r",
+        update_status=update_status, mark_processed=RecordingMarker(),
+    )
+    assert seen["done"] is True
