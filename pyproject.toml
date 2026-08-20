@@ -54,9 +54,13 @@ include = ["meeting_notes*"]
 testpaths = ["tests"]
 # Every test must run with no live GCP, no database, no LLM. v5 achieved this for
 # 363 tests. A test needing live credentials is a broken test.
-addopts = "-q"
 # async def tests need no per-test marker.
 asyncio_mode = "auto"
+# Integration tests need the local Docker stack (`make demo-up`). They are
+# excluded from the default run so `make test` stays service-free, per
+# CLAUDE.md: "a test requiring live credentials is a broken test".
+markers = ["integration: needs the local Docker stack (make demo-up)"]
+addopts = "-q -m 'not integration'"
 
 [tool.ruff]
 line-length = 110

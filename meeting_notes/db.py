@@ -228,3 +228,35 @@ async def mark_processed(record_id: str, pool: asyncpg.Pool | None = None) -> No
     pool = pool or await get_pool()
     async with pool.acquire() as conn:
         await conn.execute(_MARK_PROCESSED_SQL, record_id)
+
+
+def _main() -> int:
+    """`make migrate` — apply the schema, then report what exists.
+
+    A thin entrypoint so the migration is runnable without a separate script;
+    all the logic above stays importable and testable.
+    """
+    import asyncio
+
+    async def run() -> int:
+        settings = get_settings()
+        print(f"  applying schema to {safe_dsn_label(settings)}")
+        pool = await get_pool(settings)
+        try:
+            await apply_migrations(pool)
+            async with pool.acquire() as conn:
+                tables = await conn.fetch(
+                    "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename"
+                )
+                staged = await conn.fetchval("SELECT count(*) FROM staged_records")
+            print("  tables: " + ", ".join(t["tablename"] for t in tables))
+            print(f"  staged_records rows: {staged}")
+        finally:
+            await close_pool()
+        return 0
+
+    return asyncio.run(run())
+
+
+if __name__ == "__main__":
+    raise SystemExit(_main())

@@ -8,6 +8,11 @@ marked `integration` and lives at the bottom of this file.
 
 from __future__ import annotations
 
+import os
+import uuid
+
+import pytest
+
 from meeting_notes.config import Settings
 from meeting_notes.db import CLAIM_SQL, SCHEMA_SQL, build_dsn, safe_dsn_label
 
@@ -109,3 +114,107 @@ def test_uses_the_cloud_sql_connector_only_when_configured() -> None:
         )
         is True
     )
+
+
+# ─── integration: needs `make demo-up` ────────────────────────────────────────
+# Excluded from the default run. Execute with:
+#     .venv/bin/python -m pytest -m integration
+
+
+def _local_settings() -> Settings:
+    """Point at the local compose Postgres regardless of the developer's .env."""
+    return Settings(
+        _env_file=None,
+        POSTGRES_HOST=os.environ.get("POSTGRES_HOST", "localhost"),
+        POSTGRES_PORT=int(os.environ.get("POSTGRES_PORT", "55432")),
+        POSTGRES_USER=os.environ.get("POSTGRES_USER", "meeting_notes"),
+        POSTGRES_PASSWORD=os.environ.get("POSTGRES_PASSWORD", "local_dev_only"),
+        POSTGRES_DB=os.environ.get("POSTGRES_DB", "meeting_memory"),
+        CLOUD_SQL_CONNECTION_NAME="",
+    )
+
+
+@pytest.mark.integration
+async def test_two_concurrent_claims_take_disjoint_batches() -> None:
+    """The ADR-006 guarantee, proven against a real Postgres.
+
+    SKIP LOCKED is server-side behaviour: no mock can demonstrate it, which is
+    exactly why PHASE_PLAN says to prove this rather than assume it. Two
+    transactions claim concurrently from the same pool of staged rows. With
+    SKIP LOCKED they take disjoint sets; without it the second blocks on the
+    first's row locks until it commits.
+    """
+    import asyncpg
+
+    settings = _local_settings()
+    pool = await asyncpg.create_pool(build_dsn(settings), min_size=2, max_size=4)
+    marker = f"concurrency-{uuid.uuid4()}"
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute(SCHEMA_SQL)
+            for i in range(20):
+                await conn.execute(
+                    "INSERT INTO staged_records (source_id, source_type, payload) "
+                    "VALUES ($1, 'email', '{}'::jsonb)",
+                    f"{marker}-{i}",
+                )
+
+        # Two connections, two open transactions, overlapping in time.
+        c1 = await pool.acquire()
+        c2 = await pool.acquire()
+        try:
+            t1 = c1.transaction()
+            t2 = c2.transaction()
+            await t1.start()
+            await t2.start()
+            batch1 = await c1.fetch(CLAIM_SQL, 10)
+            batch2 = await c2.fetch(CLAIM_SQL, 10)
+            ids1 = {r["id"] for r in batch1}
+            ids2 = {r["id"] for r in batch2}
+            await t1.rollback()
+            await t2.rollback()
+        finally:
+            await pool.release(c1)
+            await pool.release(c2)
+
+        assert ids1, "first drain claimed nothing"
+        assert ids2, "second drain claimed nothing — it blocked instead of skipping"
+        assert not (ids1 & ids2), (
+            f"the two drains claimed {len(ids1 & ids2)} overlapping rows; "
+            "the same meeting would be processed twice"
+        )
+    finally:
+        async with pool.acquire() as conn:
+            await conn.execute("DELETE FROM staged_records WHERE source_id LIKE $1", f"{marker}-%")
+        await pool.close()
+
+
+@pytest.mark.integration
+async def test_restaging_the_same_source_id_does_not_duplicate() -> None:
+    """A connector re-run must stage no duplicates (PHASE_PLAN Phase 5)."""
+    import asyncpg
+
+    from meeting_notes.db import stage_record
+
+    settings = _local_settings()
+    pool = await asyncpg.create_pool(build_dsn(settings), min_size=1, max_size=2)
+    source_id = f"dup-{uuid.uuid4()}"
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute(SCHEMA_SQL)
+
+        first = await stage_record(source_id, "email", {"subject": "hi"}, pool=pool)
+        second = await stage_record(source_id, "email", {"subject": "hi again"}, pool=pool)
+
+        assert first is not None, "the first stage should insert"
+        assert second is None, "the second stage should be a no-op, not a duplicate row"
+
+        async with pool.acquire() as conn:
+            count = await conn.fetchval(
+                "SELECT count(*) FROM staged_records WHERE source_id = $1", source_id
+            )
+        assert count == 1
+    finally:
+        async with pool.acquire() as conn:
+            await conn.execute("DELETE FROM staged_records WHERE source_id = $1", source_id)
+        await pool.close()

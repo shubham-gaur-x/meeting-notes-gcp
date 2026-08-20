@@ -108,8 +108,8 @@ run-job:  ## Execute a Cloud Run Job now (JOB=pipeline-drain)
 	gcloud run jobs execute $(JOB) --region $$GCP_REGION --wait
 
 # ─── Data layer ───────────────────────────────────────────────────────────────
-migrate:  ## Apply the Cloud SQL staging schema
-	$(PYTHON) -m scripts.migrate
+migrate:  ## Apply the Cloud SQL staging schema (idempotent)
+	$(PYTHON) -m meeting_notes.db
 
 setup-memgraph:  ## Constraints, indexes, vector indexes, seeded procedures
 	$(PYTHON) -m scripts.setup_memgraph
