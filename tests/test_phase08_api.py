@@ -291,3 +291,99 @@ def test_no_route_passes_event_to_structlog() -> None:
         if bad.search(path.read_text())
     ]
     assert not offenders, f"structlog event= kwarg in: {offenders}"
+
+
+# ─── digest ───────────────────────────────────────────────────────────────────
+
+from meeting_notes import digest  # noqa: E402
+
+
+def test_digest_splits_actions_by_state() -> None:
+    """Open vs closed vs high-priority is the whole point of the rollup."""
+    result = digest.shape({
+        "meetings": [{"id": "m1"}],
+        "decisions": [{"id": "d1"}],
+        "action_items": [
+            {"id": "a1", "done": False, "priority": "high"},
+            {"id": "a2", "done": False, "priority": "low"},
+            {"id": "a3", "done": True, "priority": "high"},
+        ],
+    })
+    s = result["summary"]
+    assert s["total_meetings"] == 1
+    assert s["total_action_items"] == 3
+    assert s["open_action_items"] == 2
+    assert s["closed_action_items"] == 1
+    assert s["high_priority_open"] == 1, "a DONE high-priority item is not outstanding work"
+
+
+def test_digest_handles_an_empty_period() -> None:
+    """A quiet week must render zeros, not crash the dashboard's first tab."""
+    result = digest.shape({})
+    assert result["summary"]["total_meetings"] == 0
+    assert result["action_items"]["open"] == []
+
+
+async def test_digest_endpoint_responds(app: Any) -> None:
+    async def fake_activity(days: int = 7, driver: Any = None) -> dict:
+        return {"meetings": [], "decisions": [], "action_items": []}
+
+    import meeting_notes.graph_client as gc
+
+    original = gc.get_period_activity
+    gc.get_period_activity = fake_activity  # type: ignore[assignment]
+    try:
+        response = await _get(app, "/graph/digest/weekly")
+    finally:
+        gc.get_period_activity = original  # type: ignore[assignment]
+
+    assert response.status_code == 200
+    assert response.json()["period"] == "last_7_days"
+
+
+# ─── dashboard ────────────────────────────────────────────────────────────────
+
+
+def test_the_dashboard_is_a_single_file_with_no_build_step() -> None:
+    """CLAUDE.md: keep it single-file, no build step. No bundler, no CDN."""
+    from pathlib import Path
+
+    import api
+
+    html = (Path(api.__file__).parent / "static" / "dashboard.html").read_text()
+    assert "<script" in html and "</script>" in html
+    assert "src=" not in html.split("<script")[1][:200], "no external script tags"
+    assert "cdn." not in html and "unpkg" not in html
+
+
+def test_the_dashboard_calls_only_routes_that_exist(app: Any) -> None:
+    """A dashboard fetching a route that 404s renders an empty tab, which
+    looks like a data problem rather than the wiring problem it is.
+
+    Uses the OpenAPI schema as the route list: FastAPI keeps included routers
+    nested rather than flattening them into app.routes, so walking .routes
+    finds only the six top-level ones.
+    """
+    import re
+    from pathlib import Path
+
+    import api
+
+    html = (Path(api.__file__).parent / "static" / "dashboard.html").read_text()
+    called = {m for m in re.findall(r'(?:get|fetch)\("(/[a-z0-9/_-]+)', html)}
+    known = set(app.openapi()["paths"])
+
+    assert called, "no fetches found in the dashboard -- the regex is wrong"
+    for path in sorted(called):
+        assert path in known, f"dashboard calls {path}, which no route serves"
+
+
+def test_all_four_tabs_are_present() -> None:
+    from pathlib import Path
+
+    import api
+
+    html = (Path(api.__file__).parent / "static" / "dashboard.html").read_text()
+    for panel in ("timeline", "review", "insights", "memory"):
+        assert f'data-panel="{panel}"' in html
+        assert f'id="{panel}"' in html

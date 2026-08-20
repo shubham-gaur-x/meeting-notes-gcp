@@ -1,1 +1,216 @@
-<!doctype html><html><head><title>placeholder</title></head><body>placeholder</body></html>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>meeting-notes-gcp</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --line: #272b35;
+    --ink: #e6e8ec; --muted: #9aa3b2; --accent: #6ea8fe; --warn: #f0b429; --ok: #4ade80;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg:#f6f7f9; --panel:#fff; --line:#e2e5ea; --ink:#1a1d23; --muted:#5b6472; --accent:#2563eb; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+         font:14px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  header { padding:18px 22px; border-bottom:1px solid var(--line); display:flex;
+           align-items:baseline; gap:14px; flex-wrap:wrap; }
+  h1 { font-size:16px; margin:0; font-weight:600; letter-spacing:.2px; }
+  .sub { color:var(--muted); font-size:12px; }
+  nav { display:flex; gap:4px; padding:12px 22px 0; flex-wrap:wrap; }
+  nav button { background:transparent; border:1px solid transparent; color:var(--muted);
+               padding:8px 14px; border-radius:8px 8px 0 0; cursor:pointer; font-size:13px; }
+  nav button.active { color:var(--ink); background:var(--panel);
+                      border-color:var(--line); border-bottom-color:var(--panel); }
+  main { padding:0 22px 40px; }
+  .panel { display:none; background:var(--panel); border:1px solid var(--line);
+           border-radius:0 10px 10px 10px; padding:18px; }
+  .panel.active { display:block; }
+  .row { display:flex; gap:10px; align-items:center; margin-bottom:14px; flex-wrap:wrap; }
+  input, select { background:var(--bg); border:1px solid var(--line); color:var(--ink);
+                  padding:8px 10px; border-radius:7px; font-size:13px; min-width:230px; }
+  button.action { background:var(--accent); border:none; color:#fff; padding:8px 14px;
+                  border-radius:7px; cursor:pointer; font-size:13px; }
+  button.action:hover { filter:brightness(1.08); }
+  .cards { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:10px; margin-bottom:16px; }
+  .card { background:var(--bg); border:1px solid var(--line); border-radius:9px; padding:12px 14px; }
+  .card .n { font-size:22px; font-weight:600; }
+  .card .l { color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.6px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th, td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--muted); font-weight:500; font-size:11px; text-transform:uppercase; letter-spacing:.6px; }
+  .muted { color:var(--muted); }
+  .empty { color:var(--muted); padding:22px; text-align:center; }
+  .err { color:var(--warn); padding:12px; border:1px solid var(--warn); border-radius:8px; }
+  .answer { background:var(--bg); border:1px solid var(--line); border-radius:9px;
+            padding:14px; white-space:pre-wrap; }
+  .scroll { overflow-x:auto; }
+  code { font:12px ui-monospace,SFMono-Regular,Menlo,monospace; color:var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <h1>meeting-notes-gcp</h1>
+  <span class="sub" id="health">checking…</span>
+</header>
+
+<nav>
+  <button data-panel="timeline" class="active">Timeline</button>
+  <button data-panel="review">Review Queue</button>
+  <button data-panel="insights">Insights</button>
+  <button data-panel="memory">Memory</button>
+</nav>
+
+<main>
+  <section class="panel active" id="timeline">
+    <div class="row">
+      <button class="action" onclick="loadTimeline()">Refresh</button>
+      <span class="muted">Last 7 days</span>
+    </div>
+    <div class="cards" id="digest-cards"></div>
+    <div class="scroll"><table id="timeline-table"></table></div>
+  </section>
+
+  <section class="panel" id="review">
+    <div class="row">
+      <button class="action" onclick="loadReview()">Refresh</button>
+      <span class="muted">Items held back for a human — low confidence, unresolved people, blockers</span>
+    </div>
+    <div id="review-body"></div>
+  </section>
+
+  <section class="panel" id="insights">
+    <div class="row">
+      <select id="insight-label">
+        <option value="Person">Person</option>
+        <option value="Topic">Topic</option>
+        <option value="Meeting">Meeting</option>
+      </select>
+      <button class="action" onclick="loadInsights()">Load</button>
+      <span class="muted">People appear only if <code>tracked = true</code></span>
+    </div>
+    <div id="insights-body"></div>
+  </section>
+
+  <section class="panel" id="memory">
+    <div class="row">
+      <input id="q" placeholder="Ask anything — e.g. what's happening with Verizon?" size="52">
+      <button class="action" onclick="askMemory()">Ask</button>
+    </div>
+    <div id="memory-body"></div>
+  </section>
+</main>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const esc = (v) => String(v ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
+  document.querySelectorAll("nav button").forEach(x => x.classList.remove("active"));
+  document.querySelectorAll(".panel").forEach(x => x.classList.remove("active"));
+  b.classList.add("active");
+  $("#" + b.dataset.panel).classList.add("active");
+});
+
+async function get(path) {
+  const r = await fetch(path);
+  if (!r.ok) throw new Error(path + " -> " + r.status);
+  return r.json();
+}
+
+function table(rows, cols) {
+  if (!rows || !rows.length) return '<div class="empty">Nothing here yet.</div>';
+  const head = "<tr>" + cols.map(c => `<th>${esc(c[0])}</th>`).join("") + "</tr>";
+  const body = rows.map(r =>
+    "<tr>" + cols.map(c => `<td>${esc(c[1](r))}</td>`).join("") + "</tr>").join("");
+  return `<table>${head}${body}</table>`;
+}
+
+function fail(el, err) { $(el).innerHTML = `<div class="err">${esc(err.message)}</div>`; }
+
+async function loadHealth() {
+  try {
+    const h = await get("/health");
+    $("#health").textContent =
+      `${h.status} · memgraph ${h.memgraph ? "up" : "down"} · llm ${h.llm_backend}`;
+  } catch { $("#health").textContent = "unreachable"; }
+}
+
+async function loadTimeline() {
+  try {
+    const d = await get("/graph/digest/weekly");
+    const s = d.summary || {};
+    $("#digest-cards").innerHTML = [
+      ["Meetings", s.total_meetings], ["Decisions", s.total_decisions],
+      ["Actions", s.total_action_items], ["Open", s.open_action_items],
+      ["High priority", s.high_priority_open],
+    ].map(([l, n]) => `<div class="card"><div class="n">${esc(n ?? 0)}</div><div class="l">${esc(l)}</div></div>`).join("");
+    $("#timeline-table").outerHTML =
+      `<table id="timeline-table">${table(d.meetings, [
+        ["Date", r => r.date], ["Title", r => r.title], ["Kind", r => r.kind],
+        ["Summary", r => (r.summary || "").slice(0, 110)],
+      ]).replace(/^<table>|<\/table>$/g, "")}</table>`;
+  } catch (e) { fail("#digest-cards", e); }
+}
+
+async function loadReview() {
+  try {
+    const [a, p, b] = await Promise.all([
+      get("/review/actions"), get("/review/people"), get("/review/blockers")]);
+    $("#review-body").innerHTML =
+      `<h3>Low-confidence actions (${a.count})</h3><div class="scroll">` +
+      table(a.actions, [["Task", r => r.task], ["Owner", r => r.owner],
+                        ["Confidence", r => r.confidence], ["Reason", r => r.review_reason]]) +
+      `</div><h3>Unresolved people (${p.count})</h3><div class="scroll">` +
+      table(p.people, [["Name", r => r.name], ["Role", r => r.role],
+                       ["Reason", r => r.reason], ["Meeting", r => r.meeting_title]]) +
+      `</div><h3>Open blockers (${b.count})</h3><div class="scroll">` +
+      table(b.blockers, [["Blocker", r => r.text], ["Raised by", r => r.raised_by],
+                         ["Meeting", r => r.meeting_title]]) + "</div>";
+  } catch (e) { fail("#review-body", e); }
+}
+
+async function loadInsights() {
+  const label = $("#insight-label").value;
+  try {
+    const [inf, com, br] = await Promise.all([
+      get("/graph/insights/influential?label=" + encodeURIComponent(label)),
+      get("/graph/insights/communities"), get("/graph/insights/bridges")]);
+    $("#insights-body").innerHTML =
+      `<h3>Most influential ${esc(label)} (${inf.count})</h3><div class="scroll">` +
+      table(inf.nodes, [["Name", r => r.name],
+                        ["PageRank", r => (r.pagerank_score ?? 0).toFixed?.(5) ?? r.pagerank_score],
+                        ["Community", r => r.community_id]]) +
+      `</div><h3>Communities (${com.count})</h3><div class="scroll">` +
+      table(com.communities.slice(0, 15),
+            [["Community", r => r.community_id], ["Size", r => r.size]]) +
+      `</div><h3>Bridges (${br.count})</h3><div class="scroll">` +
+      table(br.nodes, [["Name", r => r.name], ["Labels", r => (r.labels || []).join(", ")],
+                       ["Betweenness", r => r.betweenness_centrality]]) + "</div>";
+  } catch (e) { fail("#insights-body", e); }
+}
+
+async function askMemory() {
+  const question = $("#q").value.trim();
+  if (!question) return;
+  $("#memory-body").innerHTML = '<div class="empty">Thinking…</div>';
+  try {
+    const r = await fetch("/graph/memory/query", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({question}),
+    });
+    if (!r.ok) throw new Error("query -> " + r.status);
+    const d = await r.json();
+    $("#memory-body").innerHTML =
+      `<div class="answer">${esc(d.answer)}</div>` +
+      `<p class="muted">Grounded in ${esc((d.node_ids || []).length)} graph node(s).</p>`;
+  } catch (e) { fail("#memory-body", e); }
+}
+
+loadHealth();
+loadTimeline();
+</script>
+</body>
+</html>

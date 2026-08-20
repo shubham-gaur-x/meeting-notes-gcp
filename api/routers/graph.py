@@ -7,7 +7,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query
 
 from api.deps import principal
-from meeting_notes import graph_client
+from meeting_notes import digest, graph_client
 from meeting_notes.access_control import Principal
 
 router = APIRouter(prefix="/graph", tags=["graph"])
@@ -56,3 +56,11 @@ async def meeting_provenance(meeting_id: str, _: Principal = Depends(principal))
 @router.get("/provenance/by-ticket/{ticket_key}")
 async def ticket_provenance(ticket_key: str, _: Principal = Depends(principal)) -> dict[str, Any]:
     return await graph_client.get_ticket_provenance(ticket_key)
+
+
+@router.get("/digest/weekly")
+async def digest_weekly(
+    days: int = Query(7, ge=1, le=90), _: Principal = Depends(principal)
+) -> dict[str, Any]:
+    """Rollup of the last week: meetings, decisions, and action items by state."""
+    return await digest.weekly_digest(days=days)

@@ -23,7 +23,7 @@ Two changes from v5:
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import structlog
@@ -792,3 +792,49 @@ async def get_meetings_quality_ranked(limit: int = 20, driver: Any = None) -> li
             limit=limit,
         )
         return [dict(r) async for r in result]
+
+
+async def get_period_activity(days: int = 7, driver: Any = None) -> dict[str, Any]:
+    """Meetings, decisions and action items from the last `days` days.
+
+    Backs the weekly digest. One query per collection rather than a single
+    joined one: collecting three unrelated one-to-many relationships in one
+    MATCH multiplies rows and the counts come out wrong.
+    """
+    driver = driver or get_driver()
+    cutoff = (datetime.now(UTC) - timedelta(days=days)).strftime("%Y-%m-%d")
+
+    async with driver.session() as session:
+        result = await session.run(
+            """
+            MATCH (m:Meeting) WHERE m.date >= $cutoff
+            RETURN m.id AS id, m.title AS title, m.date AS date, m.kind AS kind,
+                   m.summary AS summary
+            ORDER BY m.date DESC
+            """,
+            cutoff=cutoff,
+        )
+        meetings = [dict(r) async for r in result]
+
+        result = await session.run(
+            """
+            MATCH (m:Meeting)-[:PRODUCED]->(d:Decision) WHERE m.date >= $cutoff
+            RETURN d.id AS id, d.text AS text, d.confidence AS confidence,
+                   m.id AS meeting_id, m.title AS meeting_title
+            """,
+            cutoff=cutoff,
+        )
+        decisions = [dict(r) async for r in result]
+
+        result = await session.run(
+            """
+            MATCH (m:Meeting)-[:FOLLOWS_UP]->(a:ActionItem) WHERE m.date >= $cutoff
+            RETURN a.id AS id, a.task AS task, a.owner AS owner, a.due AS due,
+                   coalesce(a.done, false) AS done, a.priority AS priority,
+                   a.jira_key AS jira_key, m.id AS meeting_id
+            """,
+            cutoff=cutoff,
+        )
+        action_items = [dict(r) async for r in result]
+
+    return {"meetings": meetings, "decisions": decisions, "action_items": action_items}
