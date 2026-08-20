@@ -188,3 +188,147 @@ async def test_jaccard_returns_zero_when_there_is_no_similarity() -> None:
         "a", "b", driver=FakeDriver(session)
     )
     assert score == 0.0
+
+
+# ─── memory/vector ────────────────────────────────────────────────────────────
+
+from meeting_notes.config import Settings  # noqa: E402
+from meeting_notes.memory import vector  # noqa: E402
+
+
+def _vec(seed: float = 0.1) -> list[float]:
+    return [seed] * 768
+
+
+async def test_an_embedding_is_written_at_the_configured_dimension() -> None:
+    session = FakeSession()
+
+    async def fake_embed(text, **kw):
+        return _vec()
+
+    ok = await vector.embed_meeting(
+        "m1", "a budget discussion", driver=FakeDriver(session), embed=fake_embed
+    )
+
+    assert ok is True
+    _, params = session.calls[0]
+    assert len(params["embedding"]) == 768
+
+
+async def test_a_none_embedding_is_skipped_rather_than_written_as_null() -> None:
+    """A null embedding in the index is worse than none: vector search would
+    return it as a spurious neighbour."""
+    session = FakeSession()
+
+    async def failing_embed(text, **kw):
+        return None
+
+    ok = await vector.embed_meeting(
+        "m1", "text", driver=FakeDriver(session), embed=failing_embed
+    )
+
+    assert ok is False
+    assert session.calls == [], "nothing should have been written"
+
+
+async def test_embed_text_returns_none_rather_than_raising() -> None:
+    """Enrichment must never block or roll back a meeting already committed."""
+    async def exploding_embed(text, **kw):
+        raise RuntimeError("model unavailable")
+
+    assert await vector.embed_text("hello", embed=exploding_embed) is None
+
+
+async def test_empty_text_is_not_embedded() -> None:
+    calls: list[str] = []
+
+    async def counting_embed(text, **kw):
+        calls.append(text)
+        return _vec()
+
+    assert await vector.embed_text("   ", embed=counting_embed) is None
+    assert calls == [], "no API call for empty text"
+
+
+async def test_only_unembedded_action_items_are_fetched() -> None:
+    """Idempotent by construction: a MERGE-matched item from an earlier meeting
+    must not be re-embedded on every ingestion."""
+    session = FakeSession(results={"FOLLOWS_UP": [{"id": "a1", "task": "ship it"}]})
+
+    async def fake_embed(text, **kw):
+        return _vec()
+
+    count = await vector.embed_action_items_for_meeting(
+        "m1", driver=FakeDriver(session), embed=fake_embed
+    )
+
+    assert count == 1
+    assert "a.embedding IS NULL" in session.cypher()
+
+
+async def test_search_returns_hits_ordered_by_similarity() -> None:
+    session = FakeSession(results={"UNWIND": [
+        {"id": "m2", "title": "Budget", "date": "2026-08-20", "summary": "s", "kind": "meeting"},
+        {"id": "m1", "title": "Planning", "date": "2026-08-19", "summary": "s", "kind": "meeting"},
+    ]})
+
+    async def fake_embed(text, **kw):
+        return _vec()
+
+    async def fake_search(index, vec, limit, driver=None):
+        return [{"node_id": "m1", "similarity": 0.95}, {"node_id": "m2", "similarity": 0.80}]
+
+    hits = await vector.search_similar_meetings(
+        "anything", driver=FakeDriver(session), embed=fake_embed, search=fake_search
+    )
+
+    assert [h["id"] for h in hits] == ["m1", "m2"], "search order must win over fetch order"
+    assert hits[0]["similarity"] == 0.95
+
+
+async def test_a_hit_whose_node_vanished_is_dropped_not_half_empty() -> None:
+    session = FakeSession(results={"UNWIND": [
+        {"id": "m1", "title": "Planning", "date": "d", "summary": "s", "kind": "meeting"},
+    ]})
+
+    async def fake_embed(text, **kw):
+        return _vec()
+
+    async def fake_search(index, vec, limit, driver=None):
+        return [{"node_id": "m1", "similarity": 0.9}, {"node_id": "deleted", "similarity": 0.8}]
+
+    hits = await vector.search_similar_meetings(
+        "q", driver=FakeDriver(session), embed=fake_embed, search=fake_search
+    )
+    assert [h["id"] for h in hits] == ["m1"]
+
+
+async def test_search_returns_empty_when_the_query_cannot_be_embedded() -> None:
+    async def failing_embed(text, **kw):
+        return None
+
+    hits = await vector.search_similar_meetings(
+        "q", driver=FakeDriver(FakeSession()), embed=failing_embed
+    )
+    assert hits == []
+
+
+def test_only_graph_algorithms_issues_mage_calls() -> None:
+    """CLAUDE.md: MAGE CALL procedures appear in graph_algorithms.py and
+    nowhere else. Checks for the actual call SYNTAX (`CALL module.proc(`)
+    rather than the word "CALL", which legitimately appears in prose.
+    """
+    import re
+    from pathlib import Path
+
+    pattern = re.compile(r"CALL\s+[a-z_]+\.[a-z_]+\s*\(")
+    package = Path(vector.__file__).resolve().parent.parent
+
+    offenders = []
+    for path in package.rglob("*.py"):
+        if path.name == "graph_algorithms.py":
+            continue
+        if pattern.search(path.read_text()):
+            offenders.append(path.name)
+
+    assert not offenders, f"MAGE CALL syntax outside graph_algorithms.py: {offenders}"
