@@ -5,6 +5,7 @@ Every test here runs with no GCP, no Postgres, no Memgraph and no LLM.
 
 from __future__ import annotations
 
+import re
 from datetime import date, timedelta
 
 import pytest
@@ -15,10 +16,19 @@ from meeting_notes.dedup import best_match, cosine, similarity
 from meeting_notes.meeting_type_router import TYPES, prompt_hint, route
 from meeting_notes.models import (
     ActionItem,
+    Attendee,
     Decision,
     ExtractedMeeting,
     RawEmail,
     StagedRecord,
+)
+from meeting_notes.person_resolver import (
+    Roster,
+    RosterEntry,
+    load_roster,
+    normalize_email,
+    resolve,
+    resolve_attendees,
 )
 from meeting_notes.utils import (
     extract_ticket_keys,
@@ -415,3 +425,97 @@ def test_best_match_returns_the_winner_with_its_score() -> None:
 
 def test_best_match_on_no_candidates_is_none() -> None:
     assert best_match("anything", None, [], 0.9) is None
+
+
+# ─── person resolver ──────────────────────────────────────────────────────────
+
+
+def test_normalize_email_lowercases_and_strips() -> None:
+    assert normalize_email("  Alice@Corp.COM ") == "alice@corp.com"
+
+
+def test_normalize_email_drops_plus_tags() -> None:
+    """alice+jira@corp.com and alice@corp.com are one person. Not collapsing
+    them is how v5 grew duplicate Person nodes and split its PageRank."""
+    assert normalize_email("alice+jira@corp.com") == "alice@corp.com"
+
+
+def test_normalize_email_on_none_is_empty() -> None:
+    assert normalize_email(None) == ""
+
+
+def test_email_match_beats_fuzzy_name_match() -> None:
+    """Deterministic resolution first, probabilistic second (CLAUDE.md).
+    An exact roster email must never lose to a similar-looking name."""
+    roster = Roster(
+        [
+            RosterEntry(name="Alice Smith", email="alice@corp.com", tracked=True),
+            RosterEntry(name="Alicia Smyth", email="alicia@corp.com"),
+        ]
+    )
+    res = resolve(Attendee(name="Alicia Smyth", email="alice@corp.com"), roster)
+    assert res.name == "Alice Smith"
+    assert res.reason == "roster-email"
+
+
+def test_an_unresolvable_attendee_is_held_for_review_not_dropped() -> None:
+    """Attendees are never silently dropped — an unresolved one becomes a
+    PersonReview node downstream (CLAUDE.md)."""
+    res = resolve(Attendee(name="Nobody Known"), Roster([]))
+    assert res.status == "review"
+    assert res.email is None
+
+
+def test_an_unknown_email_still_resolves_to_the_normalized_address() -> None:
+    """A real email that is simply not on the roster is a new person, not a
+    review case."""
+    res = resolve(Attendee(name="New Hire", email="New+tag@Corp.com"), Roster([]))
+    assert res.status == "resolved"
+    assert res.email == "new@corp.com"
+
+
+def test_tracked_comes_from_the_matched_person_not_the_last_one_iterated() -> None:
+    """Regression test for a real v5 bug found during this port.
+
+    v5's tier-2 branch read `bool(p.get("tracked"))` where `p` is the leaked
+    loop variable — the LAST entry in known_people, not the one that matched.
+    `Person.tracked` is the governance gate: per-person analytics must filter
+    on it, and naming individuals is opt-in (CLAUDE.md). So the bug could mark
+    somebody tracked who never opted in, decided purely by list ordering.
+    """
+    known = [
+        {"name": "Alice Smith", "email": "alice@corp.com", "tracked": True},
+        {"name": "Zebedee Nomatch", "email": "zeb@corp.com", "tracked": False},
+    ]
+    res = resolve(Attendee(name="Alice Smith"), Roster([]), known_people=known)
+
+    assert res.email == "alice@corp.com"
+    assert res.tracked is True, "tracked was taken from the last iterated person, not the match"
+
+
+def test_resolve_attendees_splits_resolved_from_review() -> None:
+    roster = Roster([RosterEntry(name="Alice Smith", email="alice@corp.com")])
+    resolved, reviews = resolve_attendees(
+        [Attendee(name="Alice Smith", email="alice@corp.com"), Attendee(name="Ghost")],
+        roster,
+    )
+    assert [r.name for r in resolved] == ["Alice Smith"]
+    assert [r.name for r in reviews] == ["Ghost"]
+
+
+def test_load_roster_takes_an_explicit_path_not_the_environment() -> None:
+    """CLAUDE.md: nothing outside config.py reads os.environ. v5 read
+    PERSON_ROSTER_PATH here directly."""
+    import inspect
+
+    from meeting_notes import person_resolver
+
+    assert "path" in inspect.signature(person_resolver.load_roster).parameters
+    # Check for the import rather than the string "os.environ": the module
+    # docstring legitimately mentions it while explaining the change, and a
+    # module cannot reach the environment without importing os.
+    assert not re.search(r"^import os$", inspect.getsource(person_resolver), re.M)
+
+
+def test_load_roster_with_no_path_is_empty_not_an_error() -> None:
+    assert load_roster(None).entries == []
