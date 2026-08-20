@@ -69,11 +69,14 @@ Three tiers, each additive, each honest about what it proves:
 |---|---|---|---|
 | 0 | `make demo` | none | pipeline, graph, memory layers, API, dashboard |
 | 1 | `make demo LLM=gemini` | one free API key | genuine LLM extraction |
-| 2 | `make deploy ENV=personal` | GCP + Workspace + Jira | the deployed product |
+| 2 | `make sync-up` … `make sync-down` | GCP + Workspace + Jira | the deployed product |
 
 Tier 0 runs entirely on local Docker with replayed LLM fixtures, so a fresh clone
-works offline with no account anywhere. Tiers 0 and 1 cost nothing; tier 2 creates
-always-on billable resources and ships with a budget alert from the first apply.
+works offline with no account anywhere. Tiers 0 and 1 cost nothing. Tier 2 splits
+its resources into a durable tier that costs cents a month and a billable tier
+that exists **only while you are syncing** — `make sync-up` creates it and
+restores your data, `make sync-down` backs it up and destroys it. Idle cost
+between sessions is $0. A budget alert ships from the first apply either way.
 
 One step is genuinely manual and always will be: Google exposes no API for
 creating an OAuth consent screen or Desktop client, so tier 2 needs a one-time

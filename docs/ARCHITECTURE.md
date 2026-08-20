@@ -138,7 +138,7 @@ Everything below is created by Terraform. Nothing by hand.
 | `pipeline-drain` | Cloud Run **job** | Scheduler `*/5 * * * *`. The main workhorse. |
 | `nightly` | Cloud Run **job** | Scheduler `0 2 * * *`, `--step` argument per stage |
 | `refresh-tokens` | Cloud Run **job** | Scheduler `0 */6 * * *`. See `GOOGLE_AUTH.md`. |
-| `memgraph` | GCE VM (`e2-medium` start) | Memgraph MAGE + Lab + MCP via Docker Compose, persistent disk |
+| `memgraph` | GCE VM (`e2-medium` start) | Memgraph MAGE + Lab + MCP via Docker Compose, persistent disk. **Ephemeral — destroyed between sync sessions (ADR-016).** |
 
 Only one job runs the pipeline at a time. Cloud Run Jobs do not deduplicate executions by
 default, so `pipeline_drain` must claim rows with `SELECT ... FOR UPDATE SKIP LOCKED` — see §6.
@@ -147,8 +147,9 @@ default, so `pipeline_drain` must claim rows with `SELECT ... FOR UPDATE SKIP LO
 
 | Resource | Notes |
 |---|---|
-| Cloud SQL PostgreSQL 15 | Smallest viable tier while on personal billing. Private IP preferred; Cloud SQL connector from Cloud Run. |
-| Persistent disk on the Memgraph VM | Snapshot schedule for backup |
+| Cloud SQL PostgreSQL 15 | Smallest viable tier while on personal billing. Public IP + Cloud SQL connector (IAM-authenticated, no allowlist needed). **Ephemeral — destroyed between sync sessions (ADR-016).** |
+| Persistent disk on the Memgraph VM | Snapshotted on every `sync-down`; the snapshot is what survives the teardown, not the disk itself |
+| GCS backup bucket | Durable. Cloud SQL exports land here on sync-down; sync-up restores from the newest. |
 | Artifact Registry (Docker) | One repo, images for api + jobs |
 
 ### Messaging and scheduling
@@ -228,22 +229,40 @@ Set `max-retries` on the Cloud Run Jobs deliberately. With the above, a retry is
 
 ## 7. Cost posture
 
-Two always-on resources dominate: the Memgraph VM and the Cloud SQL instance. Everything else
-is genuinely usage-priced, and inference on a handful of meetings a day is small.
+**The system is up only while syncing (ADR-016).** This is a trial touched a few hours a
+month, so the design target is $0 when idle rather than "cheap when running".
 
-Levers, in the order to pull them:
+Every resource is in one of two tiers:
 
-1. Smallest viable Cloud SQL tier while on personal billing.
-2. `e2-small` or `e2-medium` for Memgraph; resize when the graph grows.
+| Tier | Resources | Idle cost |
+|---|---|---|
+| **Durable** — applied once | VPC · Artifact Registry · Secret Manager · service accounts · Pub/Sub · backup bucket · budget alert | cents/month |
+| **Ephemeral** — `sync-up` / `sync-down` | Cloud SQL instance · Memgraph GCE VM + data disk | **$0 when destroyed** |
+
+Verified against the Cloud Billing Catalog API on 2026-08-19:
+
+| Resource | Rate | Monthly if left up |
+|---|---|---|
+| `e2-medium` | $0.021812/vCPU-hr + $0.002924/GiB-hr | ~$40 |
+| Cloud SQL `db-f1-micro` | $0.018/hr | ~$13 |
+| Balanced PD, 50GiB | $0.10/GiB-month | $5 |
+| Gemini 2.5 Flash | $0.30/M input, $2.50/M output tokens | pennies at this volume |
+
+Data crosses the gap between sessions as a Cloud SQL export in the durable bucket and a
+snapshot of the Memgraph data disk. `sync-down` verifies both before it destroys anything.
+
+Levers, if a session's cost ever matters:
+
+1. Smallest viable Cloud SQL tier — already `db-f1-micro`.
+2. `e2-small` instead of `e2-medium` for Memgraph; resize when the graph grows.
 3. `min-instances=0` on the API service, always.
-4. A Flash-tier Gemini model for extraction. A Pro-tier model is not needed to fill a JSON
-   schema.
-5. Scheduler frequencies are config, not architecture. 15-minute ingest is fine; 5-minute is a
-   preference.
+4. A Flash-tier Gemini model for extraction. Pro is not needed to fill a JSON schema.
+5. Scheduler frequencies are config, not architecture — and under this lifecycle nothing is
+   scheduled while the system is down anyway.
 
-**Price this properly in Phase 1 against current rates and put a budget alert in Terraform
-before the first `apply`.** Do not rely on estimates in this document — they were not verified
-against live pricing.
+**Stopping instead of destroying does not work**, and was rejected: Cloud SQL auto-restarts a
+stopped instance after ~7 days for maintenance, silently resuming the bill partway through a
+month of inactivity.
 
 ---
 

@@ -141,22 +141,54 @@ The permanent fix is moving to an Onix-owned project where the client can be
 
 ```bash
 cp terraform/envs/personal.example.tfvars terraform/envs/personal.tfvars
+cp terraform/envs/personal.backend.example.hcl terraform/envs/personal.backend.hcl
 $EDITOR terraform/envs/personal.tfvars     # project id, region, billing account
 
+make tf-bootstrap                          # create the state bucket, once
 make doctor TIER=2                         # verify before spending money
-make tf-init
-make tf-plan  ENV=personal
-make tf-apply ENV=personal
+
+make tf-init  MODULE=durable
+make tf-apply MODULE=durable               # once. Cheap, and stays up.
 ```
 
-Real `.tfvars` files are gitignored because they carry project ids; the
-`*.example.tfvars` alongside them are committed so the required variables are
-discoverable.
+The durable tier — VPC, Artifact Registry, Secret Manager, service accounts,
+Pub/Sub, the backup bucket, the budget alert — costs cents per month and is
+applied once. Real `.tfvars` and `.backend.hcl` files are gitignored because they
+carry project ids; the `*.example.*` alongside them are committed so the required
+variables are discoverable.
 
-> **Cost warning.** Tiers 0 and 1 cost nothing. Tier 2 creates **always-on**
-> resources — Cloud SQL and the Memgraph VM bill 24/7 whether you use them or not.
-> The Terraform includes a budget alert from the first apply. Set
-> `budget_amount_usd` to a number you are actually comfortable with.
+### Sync sessions — the part that costs money
+
+**The system is not meant to be up all the time.** Cloud SQL and the Memgraph VM
+are the only always-on-priced resources, and together they run about **$58/month
+if you leave them up**. So they exist only while you are actually syncing:
+
+```bash
+make sync-up      # create them, restore the last backup, run doctor
+#   ... sync meetings, query the graph, do the work ...
+make sync-down    # back up, verify the backup, then destroy them
+```
+
+Between sessions the billable tier costs **$0**. Your data lives in the durable
+backup bucket (Cloud SQL export) and in a disk snapshot (the graph), and
+`sync-up` restores both.
+
+`sync-down` will not destroy anything until it has confirmed both backups
+exist — a failed export leaves the tier up and tells you so, rather than
+silently discarding a month of work.
+
+> **Expect to re-consent every session.** The OAuth refresh token dies after 7
+> days (`docs/GOOGLE_AUTH.md`), so any gap longer than a week means `sync-up`'s
+> doctor run reports the token as expired. That is normal at this cadence, not a
+> fault:
+>
+> ```bash
+> make auth-spike ARGS=--reconsent
+> ```
+
+> **If you forget `sync-down`,** the budget alert emails you at
+> `budget_alert_threshold_ratio` of `budget_amount_usd`. `make doctor TIER=2`
+> also reports the tier as UP with its burn rate.
 
 ---
 

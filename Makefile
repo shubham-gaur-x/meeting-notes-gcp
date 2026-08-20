@@ -1,4 +1,5 @@
-.PHONY: help doctor demo demo-down auth-spike tf-init tf-plan tf-apply tf-destroy \
+.PHONY: help doctor demo demo-up demo-down auth-spike tf-bootstrap tf-init tf-plan \
+        tf-apply tf-destroy tf-validate sync-up sync-down \
         secrets-put build push deploy-api deploy-jobs run-job migrate setup-memgraph \
         test lint typecheck logs cypher psql health graphify
 
@@ -46,17 +47,40 @@ auth-spike:  ## Run the OAuth spike. Do this before anything else. (ARGS=--recon
 	$(PYTHON) -m scripts.auth_spike $(ARGS)
 
 # ─── Terraform ────────────────────────────────────────────────────────────────
-tf-init:  ## terraform init
-	cd terraform && terraform init
+# Two root modules, two states (ADR-016). MODULE selects which one; the default
+# is `ephemeral` because that is the one touched every session.
+MODULE ?= ephemeral
+TF := terraform -chdir=terraform/$(MODULE)
 
-tf-plan:  ## terraform plan (ENV=personal|onix)
-	cd terraform && terraform plan -var-file=envs/$(ENV).tfvars
+tf-bootstrap:  ## Create the GCS state bucket. Run once per project.
+	./scripts/tf_bootstrap.sh $$GCP_PROJECT_ID $${GCP_REGION:-us-central1}
 
-tf-apply:  ## terraform apply (ENV=personal|onix)
-	cd terraform && terraform apply -var-file=envs/$(ENV).tfvars
+tf-init:  ## terraform init (MODULE=durable|ephemeral)
+	$(TF) init -backend-config=../envs/$(ENV).backend.hcl
 
-tf-destroy:  ## terraform destroy — careful
-	cd terraform && terraform destroy -var-file=envs/$(ENV).tfvars
+tf-plan:  ## terraform plan (MODULE=durable|ephemeral, ENV=personal|onix)
+	$(TF) plan -var-file=../envs/$(ENV).tfvars
+
+tf-apply:  ## terraform apply (MODULE=durable|ephemeral)
+	$(TF) apply -var-file=../envs/$(ENV).tfvars
+
+tf-destroy:  ## terraform destroy — prefer `make sync-down` for the ephemeral tier
+	$(TF) destroy -var-file=../envs/$(ENV).tfvars
+
+tf-validate:  ## Validate both modules without touching a backend
+	terraform -chdir=terraform/durable init -backend=false >/dev/null && \
+	  terraform -chdir=terraform/durable validate
+	terraform -chdir=terraform/ephemeral init -backend=false >/dev/null && \
+	  terraform -chdir=terraform/ephemeral validate
+
+# ─── Sync sessions (ADR-016) ──────────────────────────────────────────────────
+# The system is up only while syncing. Everything else is durable and near-free.
+sync-up:  ## Bring the billable tier up and restore the last backup
+	$(PYTHON) -m scripts.sync up --env $(ENV)
+	@$(MAKE) doctor TIER=2 ENV=$(ENV)
+
+sync-down:  ## Back up, VERIFY, then destroy the billable tier
+	$(PYTHON) -m scripts.sync down --env $(ENV)
 
 secrets-put:  ## Interactively write a secret to Secret Manager
 	@read -p "Secret id: " id; \
@@ -99,8 +123,9 @@ typecheck:  ## mypy over the source trees that exist
 logs:  ## Tail Cloud Run logs (SERVICE=api)
 	gcloud run services logs tail $(SERVICE) --region $$GCP_REGION
 
-cypher:  ## Memgraph console on the VM
-	gcloud compute ssh memgraph --command "docker exec -it memgraph mgconsole"
+cypher:  ## Memgraph console on the VM (via IAP — no public Bolt port)
+	gcloud compute ssh $${MEMGRAPH_VM:-meeting-notes-memgraph} \
+	  --tunnel-through-iap --command "docker exec -it memgraph mgconsole"
 
 psql:  ## Cloud SQL console
 	gcloud sql connect $$CLOUD_SQL_INSTANCE --user=$$POSTGRES_USER --database=$$POSTGRES_DB
