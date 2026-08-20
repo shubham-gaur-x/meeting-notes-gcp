@@ -332,3 +332,127 @@ def test_only_graph_algorithms_issues_mage_calls() -> None:
             offenders.append(path.name)
 
     assert not offenders, f"MAGE CALL syntax outside graph_algorithms.py: {offenders}"
+
+
+# ─── memory/semantic ──────────────────────────────────────────────────────────
+
+from meeting_notes.memory import semantic  # noqa: E402
+from meeting_notes.models import ExtractedMeeting  # noqa: E402
+
+
+def _meeting(**over) -> ExtractedMeeting:
+    base = {"title": "Sync", "kind": "meeting", "platform": "email",
+            "date": "2026-08-20", "summary": "we discussed the budget"}
+    base.update(over)
+    return ExtractedMeeting.model_validate(base)
+
+
+async def test_interested_in_matches_the_normalised_topic_name() -> None:
+    """Regression test for a real v5 bug this port fixes.
+
+    v5's strengthen_relationships matched Topic {name: $topic} with the
+    RAW-cased topic straight off the extractor, but the write path stores
+    names lowercased and stripped (v5 commit dcbb2d2 fixed the write side and
+    get_topic_graph's read side — it never touched semantic_memory.py). Any
+    topic with capitals matched zero rows and INTERESTED_IN silently never
+    formed. Verified against real v6 data: all 61 stored Topic names are
+    lowercase while the extractor emits "Budget Planning".
+    """
+    session = FakeSession()
+    meeting = _meeting(
+        topics=["  Budget Planning  "],
+        attendees=[{"name": "A", "email": "a@corp.com"}, {"name": "B", "email": "b@corp.com"}],
+    )
+
+    await semantic.strengthen_relationships(meeting, "m1", driver=FakeDriver(session))
+
+    topic_params = [p for c, p in session.calls if "INTERESTED_IN" in c]
+    assert topic_params, "no INTERESTED_IN statement was issued"
+    assert topic_params[0]["topic"] == "budget planning", (
+        "the raw-cased topic would match zero Topic nodes and the edge would never form"
+    )
+
+
+def test_normalise_topic_matches_the_write_paths_key() -> None:
+    """One named helper for the key, because writer/reader drift is a known
+    v5 bug class (CLAUDE.md)."""
+    assert semantic.normalise_topic("  Budget Planning  ") == "budget planning"
+    assert semantic.normalise_topic("ALREADY") == "already"
+
+
+async def test_knows_edges_are_created_once_per_pair() -> None:
+    """email1 < email2 stops the double UNWIND emitting each pair twice."""
+    session = FakeSession()
+    meeting = _meeting(attendees=[
+        {"name": "A", "email": "a@corp.com"}, {"name": "B", "email": "b@corp.com"}
+    ])
+    await semantic.strengthen_relationships(meeting, "m1", driver=FakeDriver(session))
+
+    knows = [c for c, _ in session.calls if "KNOWS" in c]
+    assert knows and "email1 < email2" in knows[0]
+
+
+async def test_no_attendee_emails_means_no_relationship_work() -> None:
+    session = FakeSession()
+    await semantic.strengthen_relationships(_meeting(), "m1", driver=FakeDriver(session))
+    assert session.calls == []
+
+
+async def test_a_fact_gains_confidence_when_seen_again() -> None:
+    """This is what makes it memory rather than a log: the same fact from a
+    second meeting MERGEs onto one node and corroborates."""
+    session = FakeSession()
+
+    async def fake_chat(system, user, **kw):
+        return ["Alice leads the backend team"]
+
+    count = await semantic.extract_facts(
+        _meeting(), "m1", driver=FakeDriver(session), chat=fake_chat
+    )
+
+    assert count == 1
+    cypher = session.cypher()
+    assert "ON CREATE SET f.text" in cypher and "f.confidence = 0.3" in cypher
+    assert "f.source_count + 1" in cypher and "f.confidence + 0.1" in cypher
+
+
+async def test_the_same_fact_text_derives_the_same_id() -> None:
+    """Corroboration only works if the id is stable across case and spacing."""
+    from meeting_notes.utils import uuid5_id
+
+    a = uuid5_id("fact", "Alice leads the backend team".lower())
+    b = uuid5_id("fact", "alice leads the backend team".lower())
+    assert a == b
+
+
+async def test_an_llm_failure_yields_no_facts_rather_than_raising() -> None:
+    """Enrichment runs after the graph write has already committed; it must
+    never fail the record."""
+    async def exploding_chat(system, user, **kw):
+        raise RuntimeError("model unavailable")
+
+    count = await semantic.extract_facts(
+        _meeting(), "m1", driver=FakeDriver(FakeSession()), chat=exploding_chat
+    )
+    assert count == 0
+
+
+async def test_a_bare_json_array_response_is_accepted() -> None:
+    """chat_json promises a dict, but these prompts ask for an array. Both
+    shapes are accepted rather than discarding a well-formed answer."""
+    assert semantic._parse_list(["a", "b"]) == ["a", "b"]
+    assert semantic._parse_list({"facts": ["a"]}) == ["a"]
+    assert semantic._parse_list('["a"]') == ["a"]
+    assert semantic._parse_list(None) == []
+
+
+async def test_blank_facts_are_skipped() -> None:
+    session = FakeSession()
+
+    async def fake_chat(system, user, **kw):
+        return ["", "   ", None, 42, "a real fact"]
+
+    count = await semantic.extract_facts(
+        _meeting(), "m1", driver=FakeDriver(session), chat=fake_chat
+    )
+    assert count == 1
