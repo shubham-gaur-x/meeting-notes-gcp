@@ -40,6 +40,13 @@ SYNTHESIS_SYSTEM_PREFIX = (
     "Answer the question using ONLY the context below. "
     "Be specific and cite names and dates when available. "
     "If the context does not contain enough information, say so — do not guess.\n"
+    # The shape is pinned because the Vertex and Gemini backends set
+    # responseMimeType=application/json, so the model MUST return JSON. Without
+    # naming the key it invents its own nested structure and the caller ends up
+    # stringifying a dict into the answer field -- observed live against real
+    # graph data before this line existed.
+    'Respond ONLY with JSON of exactly this shape: {"answer": "your prose answer here"}. '
+    "The answer value must be plain readable prose, not nested objects or lists.\n"
     "Context: "
 )
 
