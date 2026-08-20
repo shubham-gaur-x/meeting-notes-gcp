@@ -438,3 +438,243 @@ async def test_an_all_day_event_does_not_crash_the_batch() -> None:
 
     records = await CalendarSource(access_token="at", transport=transport).fetch(since=None)
     assert records[0].payload["start"] == "2026-08-20"
+
+
+# ─── jira ─────────────────────────────────────────────────────────────────────
+
+from meeting_notes.jira_client import adf_to_text  # noqa: E402
+from meeting_notes.sources.jira import JiraSource  # noqa: E402
+
+
+def test_adf_flattens_a_simple_paragraph() -> None:
+    doc = {"type": "doc", "content": [
+        {"type": "paragraph", "content": [{"type": "text", "text": "hello"}]}
+    ]}
+    assert adf_to_text(doc).strip() == "hello"
+
+
+def test_adf_flattens_nested_lists() -> None:
+    doc = {"type": "doc", "content": [
+        {"type": "bulletList", "content": [
+            {"type": "listItem", "content": [
+                {"type": "paragraph", "content": [{"type": "text", "text": "first"}]}
+            ]},
+            {"type": "listItem", "content": [
+                {"type": "paragraph", "content": [{"type": "text", "text": "second"}]}
+            ]},
+        ]}
+    ]}
+    text = adf_to_text(doc)
+    assert "first" in text and "second" in text
+
+
+def test_adf_of_a_non_dict_is_empty_not_a_crash() -> None:
+    """Jira sends null descriptions constantly."""
+    assert adf_to_text(None) == ""
+    assert adf_to_text("already a string") == ""
+
+
+def test_adf_handles_hard_breaks_and_code_blocks() -> None:
+    doc = {"type": "doc", "content": [
+        {"type": "paragraph", "content": [
+            {"type": "text", "text": "a"}, {"type": "hardBreak"}, {"type": "text", "text": "b"},
+        ]},
+        {"type": "codeBlock", "content": [{"type": "text", "text": "x = 1"}]},
+    ]}
+    text = adf_to_text(doc)
+    assert "a\nb" in text
+    assert "x = 1" in text
+
+
+async def test_disabled_jira_stages_nothing_and_does_not_raise() -> None:
+    """Tiers 0 and 1 must run the whole pipeline with no Jira account."""
+    settings = Settings(_env_file=None, JIRA_ENABLED=False)
+    records = await JiraSource(settings=settings).fetch(since=None)
+    assert records == []
+
+
+async def test_the_jql_carries_the_watermark() -> None:
+    seen: dict[str, Any] = {}
+
+    async def transport(method, url, headers, params, json_body):
+        seen.update(params or {})
+        return 200, {"issues": []}
+
+    settings = Settings(_env_file=None, JIRA_ENABLED=True, JIRA_DOMAIN="x.atlassian.net",
+                        JIRA_EMAIL="e", JIRA_API_TOKEN="t", JIRA_PROJECT_KEY="SCRUM")
+    await JiraSource(settings=settings, transport=transport).fetch(since="2026-08-01T10:30:00.000+0000")
+
+    assert "updated >=" in seen["jql"]
+    assert "SCRUM" in seen["jql"]
+
+
+async def test_an_issue_stages_with_its_key_as_the_dedup_id() -> None:
+    async def transport(method, url, headers, params, json_body):
+        return 200, {"issues": [{
+            "key": "SCRUM-42",
+            "fields": {
+                "summary": "Fix the thing",
+                "description": {"type": "doc", "content": [
+                    {"type": "paragraph", "content": [{"type": "text", "text": "details here"}]}
+                ]},
+                "status": {"name": "In Progress"},
+                "issuetype": {"name": "Task"},
+                "assignee": {"emailAddress": "alice@corp.com"},
+                "updated": "2026-08-20T10:00:00.000+0000",
+            },
+        }]}
+
+    settings = Settings(_env_file=None, JIRA_ENABLED=True, JIRA_DOMAIN="x.atlassian.net",
+                        JIRA_EMAIL="e", JIRA_API_TOKEN="t")
+    records = await JiraSource(settings=settings, transport=transport).fetch(since=None)
+
+    assert len(records) == 1
+    assert records[0].source_id == "SCRUM-42"
+    assert records[0].payload["description"].strip() == "details here"
+    assert records[0].payload["status"] == "In Progress"
+    assert records[0].watermark == "2026-08-20T10:00:00.000+0000"
+
+
+# ─── meet ─────────────────────────────────────────────────────────────────────
+
+from meeting_notes.sources.meet import MeetSource, decode_event, entries_to_text  # noqa: E402
+
+
+def _pubsub_message(name: str, ack_id: str = "ack-1", **extra: Any) -> dict:
+    payload = {"name": name, **extra}
+    data = base64.b64encode(json.dumps(payload).encode()).decode()
+    return {"ackId": ack_id, "message": {"data": data}}
+
+
+def test_decodes_a_file_generated_event() -> None:
+    msg = _pubsub_message("conferenceRecords/cr123/transcripts/t456", title="Weekly sync")
+    event = decode_event(msg)
+    assert event is not None
+    assert event["conference_record"] == "cr123"
+    assert event["transcript"] == "t456"
+    assert event["title"] == "Weekly sync"
+
+
+def test_a_malformed_event_returns_none_rather_than_raising() -> None:
+    """A bad event must be skipped and logged, not crash the pull loop and
+    block every other transcript behind it."""
+    assert decode_event({"message": {"data": "!!!not base64!!!"}}) is None
+    assert decode_event({"message": {"data": ""}}) is None
+    assert decode_event({}) is None
+
+
+def test_an_event_with_an_unexpected_resource_name_is_rejected() -> None:
+    assert decode_event(_pubsub_message("something/else")) is None
+
+
+def test_entries_become_speaker_tagged_text() -> None:
+    entries = [
+        {"participant": "conferenceRecords/cr/participants/alice", "text": "hello"},
+        {"participant": "conferenceRecords/cr/participants/bob", "text": "hi"},
+    ]
+    assert entries_to_text(entries) == "alice: hello\nbob: hi"
+
+
+def test_an_entry_with_no_participant_still_produces_a_line() -> None:
+    assert entries_to_text([{"text": "anonymous words"}]) == "speaker: anonymous words"
+
+
+async def test_no_subscription_configured_is_a_clean_no_op() -> None:
+    """.env.example promises transcript ingestion disables cleanly."""
+    source = MeetSource(access_token="at", subscription="")
+    assert await source.fetch(since=None) == []
+
+
+async def test_a_pulled_transcript_becomes_a_staged_record() -> None:
+    async def transport(method, url, headers, params, json_body):
+        if ":pull" in url:
+            return {"receivedMessages": [
+                _pubsub_message("conferenceRecords/cr1/transcripts/t1", title="Planning")
+            ]}
+        if "/entries" in url:
+            return {"transcriptEntries": [
+                {"participant": "x/participants/alice", "text": "we decided to ship"}
+            ]}
+        return {}
+
+    source = MeetSource(access_token="at", subscription="projects/p/subscriptions/s",
+                        transport=transport)
+    records = await source.fetch(since=None)
+
+    assert len(records) == 1
+    assert records[0].source_id == "cr1/t1"
+    assert "alice: we decided to ship" in records[0].payload["text"]
+
+
+async def test_entries_are_paginated_until_exhausted() -> None:
+    pages = [
+        {"transcriptEntries": [{"participant": "p/alice", "text": "one"}],
+         "nextPageToken": "tok"},
+        {"transcriptEntries": [{"participant": "p/bob", "text": "two"}]},
+    ]
+    calls = {"n": 0}
+
+    async def transport(method, url, headers, params, json_body):
+        if ":pull" in url:
+            return {"receivedMessages": [
+                _pubsub_message("conferenceRecords/cr1/transcripts/t1")
+            ]}
+        if "/entries" in url:
+            page = pages[calls["n"]]
+            calls["n"] += 1
+            return page
+        return {}
+
+    source = MeetSource(access_token="at", subscription="projects/p/subscriptions/s",
+                        transport=transport)
+    records = await source.fetch(since=None)
+
+    text = records[0].payload["text"]
+    assert "one" in text and "two" in text, "pagination stopped early and lost entries"
+
+
+async def test_fetch_does_not_acknowledge_on_its_own() -> None:
+    """Acking inside fetch would lose a transcript permanently on a staging
+    failure: Pub/Sub never redelivers an acked message, and a Meet transcript
+    cannot be re-fetched once the event is gone."""
+    acked: list[str] = []
+
+    async def transport(method, url, headers, params, json_body):
+        if ":acknowledge" in url:
+            acked.extend((json_body or {}).get("ackIds", []))
+            return {}
+        if ":pull" in url:
+            return {"receivedMessages": [
+                _pubsub_message("conferenceRecords/cr1/transcripts/t1")
+            ]}
+        return {"transcriptEntries": []}
+
+    source = MeetSource(access_token="at", subscription="projects/p/subscriptions/s",
+                        transport=transport)
+    await source.fetch(since=None)
+    assert acked == [], "fetch acknowledged before the caller could stage"
+
+    await source.acknowledge()
+    assert acked == ["ack-1"], "acknowledge() did not ack the pulled message"
+
+
+async def test_a_malformed_event_is_still_acked_so_it_cannot_block_forever() -> None:
+    acked: list[str] = []
+
+    async def transport(method, url, headers, params, json_body):
+        if ":acknowledge" in url:
+            acked.extend((json_body or {}).get("ackIds", []))
+            return {}
+        if ":pull" in url:
+            return {"receivedMessages": [
+                {"ackId": "bad-1", "message": {"data": "!!!garbage!!!"}}
+            ]}
+        return {}
+
+    source = MeetSource(access_token="at", subscription="projects/p/subscriptions/s",
+                        transport=transport)
+    records = await source.fetch(since=None)
+    await source.acknowledge()
+
+    assert records == []
+    assert acked == ["bad-1"], "a permanently-malformed event would block the subscription"
