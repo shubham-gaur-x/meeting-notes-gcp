@@ -26,7 +26,9 @@ log = structlog.get_logger()
 
 CALENDAR_API = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
 
-Transport = Callable[[str, dict[str, str]], Awaitable[dict[str, Any]]]
+# (url, headers) -> (status, parsed json). The status is surfaced because
+# a 410 is meaningful here rather than merely an error — see fetch().
+Transport = Callable[[str, dict[str, str]], Awaitable[tuple[int, dict[str, Any]]]]
 
 
 def event_time(slot: dict[str, Any] | None) -> str:
@@ -51,18 +53,34 @@ class CalendarSource:
         self._max_results = max_results
 
     @with_retry(max_attempts=3, base_delay=2.0)
-    async def _get(self, url: str) -> dict[str, Any]:
+    async def _get(self, url: str) -> tuple[int, dict[str, Any]]:
         return await self._transport(url, {"Authorization": f"Bearer {self._token}"})
 
-    async def fetch(self, since: str | None) -> list[FetchedRecord]:
+    def _url(self, since: str | None) -> str:
         url = (
             f"{CALENDAR_API}?maxResults={self._max_results}"
             "&singleEvents=true&orderBy=updated"
         )
-        if since:
-            url += f"&updatedMin={since}"
+        return f"{url}&updatedMin={since}" if since else url
 
-        body = await self._get(url)
+    async def fetch(self, since: str | None) -> list[FetchedRecord]:
+        status, body = await self._get(self._url(since))
+
+        # 410 Gone means updatedMin is outside Calendar's incremental window.
+        # Google's documented remedy is a full sync, and without this the
+        # connector is permanently broken after its first successful run --
+        # every subsequent call sends a watermark the API refuses. Found by
+        # running it for real, not by review.
+        if status == 410 and since:
+            log.warning(
+                "calendar.incremental_window_expired",
+                source_event="410",
+                discarded_watermark=since,
+            )
+            status, body = await self._get(self._url(None))
+
+        if status >= 400:
+            raise RuntimeError(f"Calendar API returned HTTP {status}")
 
         records: list[FetchedRecord] = []
         skipped_cancelled = 0
@@ -105,11 +123,13 @@ class CalendarSource:
         return records
 
 
-async def _default_transport(url: str, headers: dict[str, str]) -> dict[str, Any]:
+async def _default_transport(url: str, headers: dict[str, str]) -> tuple[int, dict[str, Any]]:
+    """Returns the status rather than raising, so fetch() can act on a 410."""
     import httpx
 
     async with httpx.AsyncClient(timeout=60.0) as client:
         response = await client.get(url, headers=headers)
-        response.raise_for_status()
-        result: dict[str, Any] = response.json()
-        return result
+        if response.status_code >= 500:
+            response.raise_for_status()  # transient: let with_retry handle it
+        body: dict[str, Any] = response.json() if response.content else {}
+        return response.status_code, body

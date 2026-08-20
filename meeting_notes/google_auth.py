@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Any
 
 import structlog
@@ -25,6 +26,12 @@ from meeting_notes.utils import with_retry
 log = structlog.get_logger()
 
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+
+# Where scripts/auth_spike.py stores the token it obtains. Deployed, the
+# refresh token arrives as an env var from Secret Manager; locally it lives
+# here, and without this fallback every local run would need it copied by
+# hand into .env.
+DEFAULT_TOKEN_PATH = Path(__file__).resolve().parent.parent / "token.json"
 
 RECONSENT_HINT = (
     "Run `make auth-spike ARGS=--reconsent` to re-consent. On the personal GCP "
@@ -48,6 +55,26 @@ async def _default_transport(url: str, data: dict[str, str]) -> tuple[int, str]:
         return response.status_code, response.text
 
 
+def load_refresh_token(settings: Settings, *, path: Path | None = None) -> str:
+    """The refresh token, preferring configuration over the local file.
+
+    Settings win because that is what Cloud Run injects from Secret Manager;
+    token.json is the local-development fallback that auth_spike writes.
+    """
+    from_settings = settings.google_refresh_token.strip()
+    if from_settings:
+        return from_settings
+
+    token_path = path or DEFAULT_TOKEN_PATH
+    if not token_path.exists():
+        return ""
+    try:
+        stored: str = json.loads(token_path.read_text(encoding="utf-8")).get("refresh_token", "")
+        return stored.strip()
+    except (json.JSONDecodeError, ValueError, OSError):
+        return ""
+
+
 @with_retry(max_attempts=3, base_delay=2.0)
 async def _post_token(url: str, data: dict[str, str], transport: Transport) -> tuple[int, str]:
     """Retried transport boundary. A 5xx is transient; an invalid_grant is not,
@@ -59,14 +86,25 @@ async def _post_token(url: str, data: dict[str, str], transport: Transport) -> t
 
 
 async def get_access_token(
-    settings: Settings | None = None, *, transport: Transport | None = None
+    settings: Settings | None = None,
+    *,
+    transport: Transport | None = None,
+    token_path: Path | None = None,
 ) -> str:
-    """Exchange the stored refresh token for a short-lived access token."""
+    """Exchange the stored refresh token for a short-lived access token.
+
+    `token_path` is injected the same way every other probe in this codebase
+    is, so a test can prove the no-token path without depending on whether
+    the developer running it happens to have a real token.json.
+    """
     settings = settings or get_settings()
-    refresh_token = settings.google_refresh_token.strip()
+    refresh_token = load_refresh_token(settings, path=token_path)
 
     if not refresh_token:
-        raise TokenExpired(f"GOOGLE_REFRESH_TOKEN is unset. {RECONSENT_HINT}")
+        raise TokenExpired(
+            "No refresh token: GOOGLE_REFRESH_TOKEN is unset and there is no "
+            f"token.json. {RECONSENT_HINT}"
+        )
 
     transport = transport or _default_transport
     status, body = await _post_token(

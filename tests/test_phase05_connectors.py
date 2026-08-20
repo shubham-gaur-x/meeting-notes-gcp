@@ -183,9 +183,13 @@ async def test_the_refresh_token_is_never_in_the_error_message() -> None:
     assert "leakcanary" not in str(exc.value)
 
 
-async def test_a_missing_refresh_token_is_a_clear_error_not_a_crash() -> None:
+async def test_a_missing_refresh_token_is_a_clear_error_not_a_crash(tmp_path) -> None:
+    """token_path is injected so this proves the no-token path regardless of
+    whether the machine running it has a real token.json."""
     with pytest.raises(TokenExpired) as exc:
-        await get_access_token(_google_settings(GOOGLE_REFRESH_TOKEN=""))
+        await get_access_token(
+            _google_settings(GOOGLE_REFRESH_TOKEN=""), token_path=tmp_path / "absent.json"
+        )
     assert "auth-spike" in str(exc.value)
 
 
@@ -357,9 +361,9 @@ def test_event_time_of_a_missing_slot_is_empty() -> None:
 async def test_updated_min_carries_the_watermark() -> None:
     seen: list[str] = []
 
-    async def transport(url: str, headers: dict) -> dict:
+    async def transport(url: str, headers: dict) -> tuple[int, dict]:
         seen.append(url)
-        return {"items": []}
+        return 200, {"items": []}
 
     await CalendarSource(access_token="at", transport=transport).fetch(
         since="2026-08-01T00:00:00Z"
@@ -382,8 +386,8 @@ async def test_a_cancelled_event_is_skipped() -> None:
         ]
     }
 
-    async def transport(url: str, headers: dict) -> dict:
-        return body
+    async def transport(url: str, headers: dict) -> tuple[int, dict]:
+        return 200, body
 
     records = await CalendarSource(access_token="at", transport=transport).fetch(since=None)
     assert [r.source_id for r in records] == ["e2"]
@@ -407,8 +411,8 @@ async def test_attendees_and_description_survive_into_the_payload() -> None:
         ]
     }
 
-    async def transport(url: str, headers: dict) -> dict:
-        return body
+    async def transport(url: str, headers: dict) -> tuple[int, dict]:
+        return 200, body
 
     records = await CalendarSource(access_token="at", transport=transport).fetch(since=None)
     payload = records[0].payload
@@ -433,8 +437,8 @@ async def test_an_all_day_event_does_not_crash_the_batch() -> None:
         ]
     }
 
-    async def transport(url: str, headers: dict) -> dict:
-        return body
+    async def transport(url: str, headers: dict) -> tuple[int, dict]:
+        return 200, body
 
     records = await CalendarSource(access_token="at", transport=transport).fetch(since=None)
     assert records[0].payload["start"] == "2026-08-20"
@@ -774,3 +778,91 @@ async def test_the_token_value_never_reaches_the_health_report() -> None:
     health = await token_health.check(_google_settings(), transport=expired)
     blob = token_health.render(health) + health.detail + (health.remediation or "")
     assert "leakcanary" not in blob
+
+
+def test_settings_win_over_the_token_file(tmp_path: _Path) -> None:
+    """Cloud Run injects the token from Secret Manager; that must take
+    precedence over a stale local token.json."""
+    from meeting_notes.google_auth import load_refresh_token
+
+    token_file = tmp_path / "token.json"
+    token_file.write_text(json.dumps({"refresh_token": "from-file"}))
+    settings = _google_settings(GOOGLE_REFRESH_TOKEN="from-settings")
+
+    assert load_refresh_token(settings, path=token_file) == "from-settings"
+
+
+def test_the_token_file_is_the_local_fallback(tmp_path: _Path) -> None:
+    """Phase 0.5 writes the token to token.json, not .env. Without this
+    fallback every local connector run needs it copied across by hand."""
+    from meeting_notes.google_auth import load_refresh_token
+
+    token_file = tmp_path / "token.json"
+    token_file.write_text(json.dumps({"refresh_token": "from-file"}))
+    settings = _google_settings(GOOGLE_REFRESH_TOKEN="")
+
+    assert load_refresh_token(settings, path=token_file) == "from-file"
+
+
+def test_a_missing_or_corrupt_token_file_is_empty_not_a_crash(tmp_path: _Path) -> None:
+    from meeting_notes.google_auth import load_refresh_token
+
+    settings = _google_settings(GOOGLE_REFRESH_TOKEN="")
+    assert load_refresh_token(settings, path=tmp_path / "nope.json") == ""
+
+    corrupt = tmp_path / "corrupt.json"
+    corrupt.write_text("{not json")
+    assert load_refresh_token(settings, path=corrupt) == ""
+
+
+async def test_a_410_falls_back_to_a_full_sync() -> None:
+    """Regression test for a bug found by running the connector for real.
+
+    Google returns 410 Gone when updatedMin is outside Calendar's incremental
+    window, and its documented remedy is a full sync. Without this fallback
+    the connector is permanently broken after its FIRST successful run: every
+    later call sends a watermark the API refuses, so ingestion silently stops
+    at exactly the point it starts working.
+    """
+    urls: list[str] = []
+
+    async def transport(url: str, headers: dict) -> tuple[int, dict]:
+        urls.append(url)
+        if "updatedMin" in url:
+            return 410, {"error": {"message": "Sync token is no longer valid"}}
+        return 200, {"items": [{
+            "id": "e1", "status": "confirmed", "summary": "After full resync",
+            "updated": "2026-08-20T11:00:00Z",
+            "start": {"dateTime": "2026-08-20T10:00:00Z"},
+            "end": {"dateTime": "2026-08-20T11:00:00Z"},
+        }]}
+
+    records = await CalendarSource(access_token="at", transport=transport).fetch(
+        since="2026-01-01T00:00:00Z"
+    )
+
+    assert len(urls) == 2, "expected a retry without updatedMin"
+    assert "updatedMin" in urls[0]
+    assert "updatedMin" not in urls[1]
+    assert records[0].payload["summary"] == "After full resync"
+
+
+async def test_a_410_on_a_full_sync_is_not_retried_forever() -> None:
+    """Only the incremental call can be recovered by dropping the watermark."""
+    calls: list[str] = []
+
+    async def transport(url: str, headers: dict) -> tuple[int, dict]:
+        calls.append(url)
+        return 410, {}
+
+    with pytest.raises(RuntimeError, match="410"):
+        await CalendarSource(access_token="at", transport=transport).fetch(since=None)
+    assert len(calls) == 1
+
+
+async def test_other_4xx_errors_still_surface() -> None:
+    async def transport(url: str, headers: dict) -> tuple[int, dict]:
+        return 403, {"error": {"message": "insufficient permissions"}}
+
+    with pytest.raises(RuntimeError, match="403"):
+        await CalendarSource(access_token="at", transport=transport).fetch(since=None)
