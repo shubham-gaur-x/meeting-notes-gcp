@@ -568,3 +568,76 @@ async def test_jira_sync_computes_done_from_status() -> None:
         update_status=update_status, mark_processed=RecordingMarker(),
     )
     assert seen["done"] is True
+
+
+# ─── pipeline_drain (Task 5: the drain loop) ───────────────────────────────────
+
+from meeting_notes.pipeline_drain import drain_batch  # noqa: E402
+
+
+def _staged(source_type: str, record_id: str = "r1", payload: dict | None = None) -> StagedRecord:
+    return StagedRecord(
+        id=record_id, source_id=f"src-{record_id}", source_type=source_type,
+        payload=payload or {}, fetched_at="2026-08-20T00:00:00Z",
+    )
+
+
+async def test_drain_routes_jira_records_to_jira_sync() -> None:
+    calls: list[str] = []
+
+    async def fake_process(record, adapter, **kw):
+        calls.append("pipeline")
+        return None
+
+    async def fake_sync(payload, *, record_id, **kw):
+        calls.append("jira_sync")
+        return True
+
+    await drain_batch(
+        [_staged("jira", payload={"key": "SCRUM-1", "status": "Done"})],
+        process=fake_process, sync_jira=fake_sync,
+    )
+    assert calls == ["jira_sync"]
+
+
+async def test_drain_routes_meeting_sources_to_the_pipeline() -> None:
+    calls: list[str] = []
+
+    async def fake_process(record, adapter, **kw):
+        calls.append(record.source_type)
+        return None
+
+    for source_type in ("email", "calendar", "meet"):
+        await drain_batch([_staged(source_type)], process=fake_process, sync_jira=None)
+    assert calls == ["email", "calendar", "meet"]
+
+
+async def test_one_bad_record_does_not_stop_the_batch() -> None:
+    """v5's process_new_emails used asyncio.gather(..., return_exceptions=True)
+    for exactly this reason: one exploding record must not silently drop
+    every other record behind it in the same batch."""
+    processed: list[str] = []
+
+    async def flaky_process(record, adapter, **kw):
+        if record.id == "bad":
+            raise RuntimeError("boom")
+        processed.append(record.id)
+        return None
+
+    records = [_staged("email", "ok1"), _staged("email", "bad"), _staged("email", "ok2")]
+    result = await drain_batch(records, process=flaky_process, sync_jira=None)
+
+    assert processed == ["ok1", "ok2"]
+    assert result.errors == 1
+    assert result.processed == 2
+
+
+async def test_drain_reports_batch_counters() -> None:
+    async def fake_process(record, adapter, **kw):
+        return None
+
+    result = await drain_batch(
+        [_staged("email"), _staged("calendar")], process=fake_process, sync_jira=None
+    )
+    assert result.processed == 2
+    assert result.errors == 0
