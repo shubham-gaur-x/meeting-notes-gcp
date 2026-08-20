@@ -10,6 +10,19 @@ from datetime import date, timedelta
 
 import pytest
 
+from meeting_notes.access_control import (
+    ADMIN,
+    LEAD,
+    MEMBER,
+    AccessDenied,
+    Principal,
+    Scope,
+    aggregates_only,
+    authorize,
+    load_policy,
+    parse_scope,
+    scope_predicate,
+)
 from meeting_notes.classifier import classify
 from meeting_notes.config import Settings
 from meeting_notes.dedup import best_match, cosine, similarity
@@ -519,3 +532,97 @@ def test_load_roster_takes_an_explicit_path_not_the_environment() -> None:
 
 def test_load_roster_with_no_path_is_empty_not_an_error() -> None:
     assert load_roster(None).entries == []
+
+
+# ─── access control ───────────────────────────────────────────────────────────
+
+
+def _policy(**people: Principal) -> dict[str, Principal]:
+    return dict(people)
+
+
+def test_parse_scope_accepts_the_four_shapes() -> None:
+    assert parse_scope("all").kind == "all"
+    assert parse_scope("org").kind == "org"
+    assert parse_scope("team:platform") == Scope("team", "platform")
+    assert parse_scope("project:SCRUM") == Scope("project", "SCRUM")
+
+
+def test_parse_scope_rejects_garbage() -> None:
+    """An unparseable scope must raise, not silently widen access."""
+    with pytest.raises(ValueError):
+        parse_scope("team:")
+    with pytest.raises(ValueError):
+        parse_scope("nonsense")
+
+
+def test_a_member_cannot_reach_another_team() -> None:
+    policy = _policy(bob=Principal(name="bob", role=MEMBER, team="platform"))
+    with pytest.raises(AccessDenied):
+        authorize("bob", "team:payments", policy=policy)
+
+
+def test_a_member_can_reach_their_own_team() -> None:
+    policy = _policy(bob=Principal(name="bob", role=MEMBER, team="platform"))
+    assert authorize("bob", "team:platform", policy=policy) == Scope("team", "platform")
+
+
+def test_a_member_cannot_reach_org_level() -> None:
+    policy = _policy(bob=Principal(name="bob", role=MEMBER, team="platform"))
+    with pytest.raises(AccessDenied):
+        authorize("bob", "org", policy=policy)
+
+
+def test_an_admin_can_reach_everything() -> None:
+    policy = _policy(root=Principal(name="root", role=ADMIN))
+    assert authorize("root", "team:payments", policy=policy)
+    assert authorize("root", "all", policy=policy)
+
+
+def test_an_unknown_principal_is_denied_not_defaulted() -> None:
+    """Failing open here would hand a stranger whatever the default role is."""
+    with pytest.raises(AccessDenied):
+        authorize("nobody", "org", policy=_policy())
+
+
+def test_a_lead_gets_aggregates_not_row_level_detail_at_org_scope() -> None:
+    """The governance promise: aggregates are the default and naming
+    individuals is opt-in (CLAUDE.md, Person.tracked)."""
+    policy = _policy(lead=Principal(name="lead", role=LEAD, team="platform"))
+    assert aggregates_only("lead", "org", policy=policy) is True
+
+
+def test_an_admin_is_not_restricted_to_aggregates() -> None:
+    policy = _policy(root=Principal(name="root", role=ADMIN))
+    assert aggregates_only("root", "org", policy=policy) is False
+
+
+def test_an_explicit_allow_list_beats_the_role_derived_rule() -> None:
+    policy = _policy(
+        bob=Principal(name="bob", role=MEMBER, team="platform", allowed_scopes=("team:payments",))
+    )
+    assert authorize("bob", "team:payments", policy=policy) == Scope("team", "payments")
+
+
+def test_scope_predicate_filters_team_and_project_but_not_org() -> None:
+    """This dict is injected into generated Cypher — an empty dict for org is
+    deliberate (rollups filter later), not a missing filter."""
+    assert scope_predicate(Scope("team", "platform")) == {"scope_team": "platform"}
+    assert scope_predicate(Scope("project", "SCRUM")) == {"scope_project": "SCRUM"}
+    assert scope_predicate(Scope("org")) == {}
+
+
+def test_load_policy_takes_an_explicit_path_not_the_environment() -> None:
+    """CLAUDE.md: nothing outside config.py reads os.environ."""
+    import inspect
+
+    from meeting_notes import access_control
+
+    assert "path" in inspect.signature(access_control.load_policy).parameters
+    assert not re.search(r"^import os$", inspect.getsource(access_control), re.M)
+
+
+def test_load_policy_with_no_path_returns_the_in_code_default() -> None:
+    policy = load_policy(None)
+    assert policy
+    assert all(isinstance(p, Principal) for p in policy.values())
