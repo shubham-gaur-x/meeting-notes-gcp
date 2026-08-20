@@ -11,6 +11,7 @@ import pytest
 
 from meeting_notes.classifier import classify
 from meeting_notes.config import Settings
+from meeting_notes.meeting_type_router import TYPES, prompt_hint, route
 from meeting_notes.models import (
     ActionItem,
     Decision,
@@ -289,3 +290,62 @@ def test_attendees_raise_the_score() -> None:
     """Signal 2 accepts either a list or a count."""
     assert classify("weekly sync", {"attendees": ["a"]}) > classify("weekly sync", {})
     assert classify("weekly sync", {"attendees_count": 3}) > classify("weekly sync", {})
+
+
+# ─── meeting type router ──────────────────────────────────────────────────────
+
+
+def test_email_source_always_routes_to_email_thread() -> None:
+    """Source type wins over any keyword in the subject."""
+    assert route("sprint planning", source_type="email") == "email_thread"
+
+
+def test_standup_is_matched_before_the_generic_review_keywords() -> None:
+    """Order matters: 'session' lives in review's keywords and would otherwise
+    swallow titles that are really standups."""
+    assert route("daily standup session") == "standup"
+
+
+def test_unmatched_titles_fall_back_to_general() -> None:
+    assert route("misc") == "general"
+
+
+def test_every_type_has_a_defined_hint() -> None:
+    """A type missing from _HINTS would silently extract with no type-specific
+    instruction. Note `general` maps to the empty string ON PURPOSE — it means
+    'append nothing' — so this asserts the key exists, not that it is truthy."""
+    from meeting_notes.meeting_type_router import _HINTS
+
+    for meeting_type in TYPES:
+        assert meeting_type in _HINTS
+
+
+def test_specific_types_carry_real_instructions() -> None:
+    """Everything except the deliberate `general` no-op must actually say
+    something, or type routing buys nothing."""
+    for meeting_type in TYPES:
+        if meeting_type == "general":
+            continue
+        assert prompt_hint(meeting_type).strip()
+
+
+def test_prompt_hint_is_safe_for_an_unknown_type() -> None:
+    assert prompt_hint("not-a-type") == ""
+
+
+def test_router_types_and_extracted_meeting_kind_are_deliberately_different() -> None:
+    """These two vocabularies are NOT interchangeable and must not be merged.
+
+    `ExtractedMeeting.kind` is what the LLM reports the meeting was.
+    `route()` picks which extraction prompt to use. route() can return
+    'planning', 'one_on_one' or 'general', none of which validate as a kind —
+    so `meeting.kind = route(...)` raises. This test exists to make that
+    failure appear here rather than in production.
+    """
+    import typing
+
+    kinds = set(typing.get_args(ExtractedMeeting.model_fields["kind"].annotation))
+    router_only = set(TYPES) - kinds
+
+    assert router_only, "the vocabularies have been merged — see this test's docstring"
+    assert {"planning", "one_on_one", "general"} <= router_only
