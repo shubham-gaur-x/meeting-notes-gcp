@@ -554,6 +554,60 @@ rather than expected behaviour.
 
 ---
 
+## ADR-018 — One `StagedRecord` with a JSONB payload, not four typed raw tables
+
+**Date:** 2026-08-20 · **Status:** Accepted
+
+**Context.** v5 stages four near-identical models — `RawEmail`, `RawCalendarEvent`,
+`RawMeetTranscript`, `RawJiraIssue` — each with its own table and each carrying a
+`source_table` string so downstream code can tell them apart. The shapes overlap heavily
+(`id`, `source_id`, `processed`, plus a body-ish text field and some context), and the
+differences are exactly the parts only that source's adapter cares about.
+`MIGRATION_FROM_V5.md` §3 flags this as a decision to make **before** `db.py`, `models.py`,
+and the connectors exist, because changing it afterwards means touching all three.
+
+**Decision.** One staging table:
+
+```
+StagedRecord:
+    id, source_id, source_type, payload (JSONB), fetched_at, processed
+```
+
+A per-source adapter parses `payload` into the corresponding typed Pydantic model and
+produces the extraction text and context. **The typed models survive** — `RawEmail` and
+friends remain the adapters' parse targets, so validation stays exactly as strict as v5's.
+This is a change to how rows are *stored*, not a loss of typing.
+
+**Consequences.** One table means one `SELECT ... FOR UPDATE SKIP LOCKED` claiming query
+rather than four or a UNION, which is what ADR-006 wants, and one drain path, which is what
+ADR-010 wants. Adding a fifth source later is a new adapter and no migration at all.
+
+The cost is real and worth stating plainly: `payload` is opaque to SQL. "Every email from
+X" needs JSON operators or a graph query rather than a plain `WHERE`. That is acceptable
+here because **nothing queries staging analytically** — staging exists to be drained into
+Memgraph, and the graph is where questions get asked. If that assumption ever breaks, the
+fix is to promote specific fields into real indexed columns, which is an additive migration
+rather than a redesign.
+
+Validation also moves from write time to read time. A malformed payload is caught by the
+adapter during the drain, not by Postgres on insert. The drain already has to handle a
+record it cannot process, so this adds no new failure mode — but it does mean connectors
+must not assume the database will reject bad data for them.
+
+`AirbyteWebhookPayload` is deleted outright rather than ported (`MIGRATION_FROM_V5.md` §4).
+
+**Rejected:**
+- *Keep the four typed tables.* Strict SQL columns and directly queryable fields, but it
+  carries v5's overlapping shapes and the `source_table` field forward unchanged, needs a
+  migration per new source, and forces the claiming query to become four queries or a UNION
+  — pushing against both ADR-006 and ADR-010 for a queryability benefit nothing currently
+  uses.
+- *Hybrid: JSONB plus promoted columns.* The right answer *if* a concrete query needs a
+  column, and reachable additively later. Doing it now would mean guessing which fields
+  matter across four sources before a single connector exists.
+
+---
+
 ## Template
 
 ```
