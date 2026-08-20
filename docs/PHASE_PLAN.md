@@ -250,7 +250,58 @@ before writing `db.py`. Deciding this after the connectors exist is much more ex
 
 ---
 
-## Phase 3 — Data layer 🟩
+## Phase 3 — Data layer ✅ DONE (2026-08-20)
+
+**All three exit criteria met, and the two that matter were proven rather than assumed.**
+
+**Schema applies cleanly and idempotently.** `make migrate` creates `staged_records` +
+`watermarks`; run twice, second run exit 0, and Postgres confirms the partial index and the
+`(source_type, source_id)` unique constraint were actually built. `scripts/setup_memgraph.py`
+applies 26/26 statements, and 26/26 again on re-run.
+
+**Concurrent claiming proven against real Postgres**, not a mock — `SKIP LOCKED` is
+server-side behaviour no mock can demonstrate. Against the same 20 staged rows:
+
+| claim | result |
+|---|---|
+| plain `FOR UPDATE` (v5's shape) | second drain **blocked**, timed out on row locks |
+| `FOR UPDATE SKIP LOCKED` (ADR-006) | batch1=10, batch2=10, **overlap=0** |
+
+**Smoke write against real Memgraph** verified by Cypher count: Meeting 1 · Person 1 ·
+PersonReview 1 · **Topic 1 (from two case variants)** · Decision 1 · ActionItem 1 ·
+**ASSIGNED_TO 1**.
+
+**`db.py` is a rewrite, not a port.** v5's is shaped end to end by Airbyte — `information_schema`
+discovery of a hash-suffixed Jira table, `ALTER`s against Airbyte's own tables, four per-source
+getters each with an Airbyte-preferred branch — and it has **no `SKIP LOCKED` anywhere**, safe
+only because v5 ran a single container.
+
+**Two v5 bugs fixed, each with a regression test verified to fail against v5's line:**
+
+- **MIGRATION bug #1 — `ASSIGNED_TO` never formed.** v5 bound
+  `owner_email = action.owner if "@" in action.owner else None`; the extractor emits display
+  names, so the live edge count was **zero**. Owners now go through the same resolver the
+  attendees use. The smoke write above shows the edge forming from the name "Alice Smith".
+- **doctor never checked Memgraph Lab's port** — a pre-existing gap surfaced by replacing a
+  hardcoded port list with one derived from `docker-compose.local.yml`.
+
+**The local stack now runs on 55432 / 57687 / 57444 / 53000**, not the conventional ports. v5's
+stack has been up for weeks holding 5432/7687/3000, and v5 is read-only reference: pointing
+v6's migration at `localhost:5432` would have applied v6 schema **into v5's database**.
+
+**Deferred, with reasons:**
+
+| Deferred | To | Why |
+|---|---|---|
+| ~16 read/query functions (`get_timeline`, `get_person_graph`, `get_influential_nodes`, …) | **Phase 8** | Only the API calls them; testable properly there via `httpx.ASGITransport` |
+| `get_meetings_quality_inputs`, `set_meeting_quality` | **Phase 7** | Land with the nightly quality job and `score_all_meetings` |
+| `write_run_provenance`, `write_commits_and_files`, `merge_ticket_resolved_by_pr` | **v2** | ADR-008 — schema in v1, writers in v2. The **schema ships now**. |
+| `migrate_schema_v5` | **dropped** | A v5-specific one-off migration |
+| `watermarks` accessors | **Phase 5** | The table ships now; adding it later would be a second migration |
+
+---
+
+### Original plan
 
 **Tasks**
 1. `db.py` — Cloud SQL connector, staging schema as a **migration** (not a 5-minute heartbeat),
