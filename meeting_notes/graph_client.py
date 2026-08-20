@@ -322,18 +322,26 @@ async def update_action_jira_key(action_id: str, jira_key: str, driver: Any | No
 
 
 async def get_open_actions_for_owner(
-    owner_email: str, driver: Any | None = None
+    owner_email: str, *, exclude_id: str, driver: Any | None = None
 ) -> list[dict[str, Any]]:
-    """Same-owner open items, the dedup candidate set jira_pusher scores against."""
+    """Same-owner open items, the dedup candidate set jira_pusher scores against.
+
+    `exclude_id` matters: by the time jira_pusher runs, upsert_meeting_graph
+    has already written every action item in the meeting, including the one
+    currently being evaluated. Without excluding it, an item can match itself
+    at similarity 1.0 and link MENTIONED_IN to its own node (v5 excluded this
+    for the same reason, via a.id <> $exclude_id).
+    """
     driver = driver or get_driver()
     async with driver.session() as session:
         result = await session.run(
             """
             MATCH (a:ActionItem)-[:ASSIGNED_TO]->(p:Person {email: $email})
-            WHERE coalesce(a.done, false) = false
+            WHERE coalesce(a.done, false) = false AND a.id <> $exclude_id
             RETURN a.id AS id, a.task AS task, a.jira_key AS jira_key, a.embedding AS embedding
             """,
             email=owner_email,
+            exclude_id=exclude_id,
         )
         return [dict(r) async for r in result]
 
@@ -383,11 +391,19 @@ async def get_action_confidence(action_id: str, driver: Any | None = None) -> fl
 
 async def update_action_jira_status(
     jira_key: str, status: str, done: bool, driver: Any | None = None
-) -> None:
-    """Jira status syncing back into the graph (jira_sync, Phase 6)."""
+) -> bool:
+    """Jira status syncing back into the graph. Returns whether a node matched.
+
+    Derived from the write summary's counters rather than guessed — jira_sync
+    needs to know whether this key existed in the graph so its matched/
+    unmatched batch counters mean something. A silent no-op used to be
+    reported as a match in an earlier draft of this file; a Jira ticket
+    created outside this pipeline is real signal, not a bug, and jira_sync's
+    caller should be able to tell the two apart.
+    """
     driver = driver or get_driver()
     async with driver.session() as session:
-        await session.run(
+        result = await session.run(
             """
             MATCH (a:ActionItem {jira_key: $key})
             SET a.jira_status = $status, a.done = $done
@@ -396,6 +412,8 @@ async def update_action_jira_status(
             status=status,
             done=done,
         )
+        summary = await result.consume()
+        return bool(summary.counters.properties_set)
 
 
 async def merge_blocker(
