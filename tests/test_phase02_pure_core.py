@@ -9,6 +9,7 @@ from datetime import date, timedelta
 
 import pytest
 
+from meeting_notes.classifier import classify
 from meeting_notes.config import Settings
 from meeting_notes.models import (
     ActionItem,
@@ -226,3 +227,65 @@ def test_extracted_meeting_ignores_unknown_fields() -> None:
         }
     )
     assert not hasattr(meeting, "invented_field")
+
+
+# ─── classifier (no v5 tests existed) ─────────────────────────────────────────
+
+
+def test_marketing_noise_short_circuits_to_zero() -> None:
+    """Two or more noise markers return 0.0 immediately, before any positive
+    signal is counted — a newsletter that happens to say 'meeting' and list
+    attendees must not score its way past the threshold."""
+    text = "Unsubscribe from our newsletter. Marketing meeting agenda, action item, deadline."
+    assert classify(text, {"attendees": ["a@b.c"], "start_time": "10:00"}) == 0.0
+
+
+def test_a_single_noise_marker_does_not_short_circuit() -> None:
+    """The gate is >= 2. One stray 'unsubscribe' in a genuine thread is not
+    enough to discard it."""
+    assert classify("Standup agenda. Unsubscribe link at the bottom.", {}) > 0.0
+
+
+def test_a_real_meeting_scores_above_the_default_threshold() -> None:
+    """CLASSIFIER_SCORE_THRESHOLD defaults to 0.40."""
+    text = (
+        "Sprint planning meeting agenda. We decided to ship on Friday. "
+        "Action item: alice@corp.com to review by the deadline. Duration 60 minutes."
+    )
+    score = classify(text, {"attendees": ["alice@corp.com", "bob@corp.com"], "start_time": "10:00"})
+    assert score > 0.40
+
+
+def test_unrelated_text_scores_below_the_threshold() -> None:
+    assert classify("The parcel was delivered to your porch.", {}) < 0.40
+
+
+def test_empty_text_scores_zero() -> None:
+    assert classify("", {}) == 0.0
+
+
+def test_score_never_exceeds_one() -> None:
+    """Every signal is individually capped and the total is clamped. Without
+    the clamp a keyword-dense email could exceed 1.0 and break any caller
+    treating this as a probability."""
+    text = (
+        "meeting call standup sync review demo interview discussion workshop agenda "
+        "action item todo deadline owner assigned to next step "
+        "we decided we agreed approved going forward we will "
+        "10:00 am duration 60 minutes hours "
+        "a@b.com c@d.com e@f.com"
+    )
+    assert classify(text, {"attendees": ["x"], "start_time": "t", "end_time": "u"}) <= 1.0
+
+
+def test_calendar_metadata_raises_the_score() -> None:
+    """Signal 7: a record with real calendar times is more likely a meeting."""
+    bare = classify("weekly sync", {})
+    with_times = classify("weekly sync", {"start_time": "10:00", "end_time": "11:00"})
+    assert with_times > bare
+
+
+def test_attendees_raise_the_score() -> None:
+    """Signal 2 accepts either a list or a count."""
+    assert classify("weekly sync", {"attendees": ["a"]}) > classify("weekly sync", {})
+    assert classify("weekly sync", {"attendees_count": 3}) > classify("weekly sync", {})
