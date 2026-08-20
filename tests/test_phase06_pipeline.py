@@ -267,3 +267,128 @@ async def test_calendar_adapter_shapes_text_and_context() -> None:
     ctx = adapter.extract_context(payload)
     assert ctx["date"] == "2026-08-20"
     assert ctx["platform"] == "google_calendar"
+
+
+# ─── jira_client additions (Task 3) ────────────────────────────────────────────
+
+from meeting_notes.jira_client import active_sprint_id, create_issue, move_to_sprint  # noqa: E402
+
+
+def _jira_settings(**over) -> Settings:
+    base = dict(_env_file=None, JIRA_DOMAIN="x.atlassian.net", JIRA_EMAIL="e",
+               JIRA_API_TOKEN="t", JIRA_PROJECT_KEY="SCRUM", JIRA_BOARD_ID=1,
+               JIRA_ISSUE_TYPE="Task")
+    base.update(over)
+    return Settings(**base)
+
+
+async def test_priority_maps_to_jiras_three_levels() -> None:
+    seen: dict = {}
+
+    async def transport(method, url, headers, params, json_body):
+        seen.update(json_body or {})
+        return 200, {"key": "SCRUM-1"}
+
+    await create_issue(
+        summary="s", description="d", priority="high", sprint_id=None,
+        is_engineering_task=False, settings=_jira_settings(), transport=transport,
+    )
+    assert seen["fields"]["priority"]["name"] == "High"
+
+
+async def test_a_non_engineering_task_gets_the_meeting_action_item_label() -> None:
+    seen: dict = {}
+
+    async def transport(method, url, headers, params, json_body):
+        seen.update(json_body or {})
+        return 200, {"key": "SCRUM-1"}
+
+    await create_issue(
+        summary="s", description="d", priority="medium", sprint_id=None,
+        is_engineering_task=False, settings=_jira_settings(), transport=transport,
+    )
+    assert seen["fields"]["labels"] == ["meeting-action-item"]
+
+
+async def test_an_engineering_task_gets_no_label() -> None:
+    """Engineering tasks flow through the normal board, not a meeting-derived
+    holding label -- carried from v5 exactly."""
+    seen: dict = {}
+
+    async def transport(method, url, headers, params, json_body):
+        seen.update(json_body or {})
+        return 200, {"key": "SCRUM-1"}
+
+    await create_issue(
+        summary="s", description="d", priority="medium", sprint_id=None,
+        is_engineering_task=True, settings=_jira_settings(), transport=transport,
+    )
+    assert "labels" not in seen["fields"]
+
+
+async def test_a_high_priority_issue_is_moved_to_the_active_sprint() -> None:
+    calls: list[str] = []
+
+    async def transport(method, url, headers, params, json_body):
+        calls.append(url)
+        return 200, {"key": "SCRUM-1"}
+
+    await create_issue(
+        summary="s", description="d", priority="high", sprint_id=42,
+        is_engineering_task=False, settings=_jira_settings(), transport=transport,
+    )
+    assert any("sprint/42/issue" in u for u in calls)
+
+
+async def test_a_medium_priority_issue_is_not_moved_to_the_sprint() -> None:
+    calls: list[str] = []
+
+    async def transport(method, url, headers, params, json_body):
+        calls.append(url)
+        return 200, {"key": "SCRUM-1"}
+
+    await create_issue(
+        summary="s", description="d", priority="medium", sprint_id=42,
+        is_engineering_task=False, settings=_jira_settings(), transport=transport,
+    )
+    assert not any("sprint/42/issue" in u for u in calls)
+
+
+async def test_a_sprint_move_failure_does_not_fail_issue_creation() -> None:
+    """The issue already exists and is more valuable un-sprinted than lost."""
+    async def transport(method, url, headers, params, json_body):
+        if "sprint" in url:
+            return 500, {}
+        return 200, {"key": "SCRUM-1"}
+
+    key = await create_issue(
+        summary="s", description="d", priority="high", sprint_id=42,
+        is_engineering_task=False, settings=_jira_settings(), transport=transport,
+    )
+    assert key == "SCRUM-1"
+
+
+async def test_active_sprint_id_returns_none_when_no_sprint_is_active() -> None:
+    async def transport(method, url, headers, params, json_body):
+        return 200, {"values": []}
+
+    assert await active_sprint_id(settings=_jira_settings(), transport=transport) is None
+
+
+async def test_active_sprint_id_returns_the_first_active_sprint() -> None:
+    async def transport(method, url, headers, params, json_body):
+        return 200, {"values": [{"id": 7}, {"id": 8}]}
+
+    assert await active_sprint_id(settings=_jira_settings(), transport=transport) == 7
+
+
+async def test_move_to_sprint_posts_the_issue_key() -> None:
+    seen: dict = {}
+
+    async def transport(method, url, headers, params, json_body):
+        seen["url"], seen["body"] = url, json_body
+        return 200, {}
+
+    await move_to_sprint("SCRUM-1", 42, settings=_jira_settings(), transport=transport)
+    assert "sprint/42/issue" in seen["url"]
+    assert seen["body"]["issues"] == ["SCRUM-1"]

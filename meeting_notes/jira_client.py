@@ -155,3 +155,97 @@ async def add_comment(
         },
     )
     log.info("jira.comment_added", issue_key=key)
+
+
+# ─── issue creation and sprint handling ────────────────────────────────────────
+# Ported from v5's jira_pusher.py, where these lived inline. All Jira REST
+# belongs in this file (CLAUDE.md), so the move is a boundary fix, not a
+# rewrite.
+
+MEETING_ACTION_ITEM_LABEL = "meeting-action-item"
+
+_PRIORITY_MAP = {"high": "High", "medium": "Medium", "low": "Low"}
+
+
+@with_retry(max_attempts=3, base_delay=2.0)
+async def active_sprint_id(
+    *, settings: Settings | None = None, transport: Transport | None = None
+) -> int | None:
+    """The current active sprint on the configured board, or None."""
+    settings = settings or get_settings()
+    transport = transport or _default_transport
+    url = f"https://{settings.jira_domain}/rest/agile/1.0/board/{settings.jira_board_id}/sprint"
+    _, body = await transport("GET", url, jira_headers(settings), {"state": "active"}, None)
+    sprints = (body or {}).get("values", [])
+    return int(sprints[0]["id"]) if sprints else None
+
+
+@with_retry(max_attempts=3, base_delay=2.0)
+async def move_to_sprint(
+    issue_key: str,
+    sprint_id: int,
+    *,
+    settings: Settings | None = None,
+    transport: Transport | None = None,
+) -> None:
+    settings = settings or get_settings()
+    transport = transport or _default_transport
+    url = f"https://{settings.jira_domain}/rest/agile/1.0/sprint/{sprint_id}/issue"
+    status, _ = await transport("POST", url, jira_headers(settings), None, {"issues": [issue_key]})
+    if status >= 400:
+        raise RuntimeError(f"sprint move returned HTTP {status}")
+
+
+async def create_issue(
+    *,
+    summary: str,
+    description: str,
+    priority: str,
+    sprint_id: int | None,
+    is_engineering_task: bool,
+    settings: Settings | None = None,
+    transport: Transport | None = None,
+) -> str:
+    """Create one Jira issue. Returns its key.
+
+    Non-engineering items (meeting follow-ups the extractor raised) get the
+    `meeting-action-item` label so they are visibly distinct from work
+    reported through normal channels; engineering tasks flow through the
+    board unlabelled, exactly as v5 did.
+
+    A high-priority item is moved to the active sprint. **A sprint-move
+    failure does not fail issue creation** — the issue already exists at that
+    point and is more valuable un-sprinted than lost.
+    """
+    settings = settings or get_settings()
+    transport = transport or _default_transport
+
+    fields: dict[str, Any] = {
+        "project": {"key": settings.jira_project_key},
+        "summary": summary,
+        "description": {
+            "type": "doc",
+            "version": 1,
+            "content": [{"type": "paragraph", "content": [{"type": "text", "text": description}]}],
+        },
+        "issuetype": {"name": settings.jira_issue_type},
+        "priority": {"name": _PRIORITY_MAP.get(priority, "Medium")},
+    }
+    if not is_engineering_task:
+        fields["labels"] = [MEETING_ACTION_ITEM_LABEL]
+
+    status, body = await transport(
+        "POST", f"{jira_base_url(settings)}/issue", jira_headers(settings), None, {"fields": fields}
+    )
+    if status >= 400:
+        raise RuntimeError(f"Jira issue creation returned HTTP {status}")
+    issue_key: str = (body or {})["key"]
+
+    if sprint_id and priority == "high":
+        try:
+            await move_to_sprint(issue_key, sprint_id, settings=settings, transport=transport)
+        except Exception as exc:  # noqa: BLE001 - reported, issue creation still succeeds
+            log.warning("jira.sprint_move_failed", issue_key=issue_key, error=str(exc))
+
+    log.info("jira.issue_created", issue_key=issue_key, priority=priority)
+    return issue_key
