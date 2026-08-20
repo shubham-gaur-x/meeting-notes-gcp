@@ -1,0 +1,70 @@
+{
+  "action_items": [
+    {
+      "confidence": 0.95,
+      "done": false,
+      "due": null,
+      "is_engineering_task": false,
+      "owner": "Sofia Alvarez",
+      "priority": "high",
+      "task": "Let the exec team know the launch date is at risk."
+    },
+    {
+      "confidence": 0.95,
+      "done": false,
+      "due": null,
+      "is_engineering_task": false,
+      "owner": "Anita Desai",
+      "priority": "high",
+      "task": "Send the redlines round as soon as they are received from the vendor."
+    }
+  ],
+  "attendees": [
+    {
+      "email": "anita.desai@northwind.example",
+      "name": "Anita Desai",
+      "role": "organizer"
+    },
+    {
+      "email": "sofia.alvarez@northwind.example",
+      "name": "Sofia Alvarez",
+      "role": "attendee"
+    },
+    {
+      "email": "legal@northwind.example",
+      "name": "Legal Department",
+      "role": "attendee"
+    }
+  ],
+  "confidence": 0.98,
+  "date": "2026-08-17",
+  "decisions": [
+    {
+      "confidence": 0.9,
+      "text": "Delay launch by a week if vendor redlines for DPA are not received by Wednesday."
+    }
+  ],
+  "duration_minutes": null,
+  "end_time": null,
+  "follow_up_needed": true,
+  "key_quotes": [
+    "Is the vendor review going to block the launch date?",
+    "It might. Legal flagged two items in the DPA: sub-processor notification is 14 days and we asked for 30, and there's no explicit data residency clause.",
+    "If they come back by Wednesday we're fine. If not, I'd rather delay a week than launch on an unreviewed DPA."
+  ],
+  "kind": "email_thread",
+  "links": [],
+  "location": null,
+  "platform": "Email",
+  "sentiment": "negative",
+  "start_time": null,
+  "summary": "Anita informs Sofia that the vendor security review might block the launch due to two flagged items in the DPA: sub-processor notification period and lack of a data residency clause. She has requested redlines from the vendor and suggests delaying the launch if they are not received by Wednesday.",
+  "title": "Re: Vendor security review \u2014 blocking launch?",
+  "topics": [
+    "Vendor security review",
+    "Launch date risk",
+    "DPA issues",
+    "Sub-processor notification",
+    "Data residency clause"
+  ]
+}

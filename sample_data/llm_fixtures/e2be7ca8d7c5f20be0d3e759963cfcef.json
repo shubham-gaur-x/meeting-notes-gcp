@@ -1,0 +1,76 @@
+{
+  "action_items": [
+    {
+      "confidence": 1.0,
+      "done": false,
+      "due": "2026-09-05",
+      "is_engineering_task": true,
+      "owner": "Tom Beckett",
+      "priority": "medium",
+      "task": "Develop the migration plan."
+    },
+    {
+      "confidence": 1.0,
+      "done": false,
+      "due": "2026-08-29",
+      "is_engineering_task": true,
+      "owner": "Priya Raman",
+      "priority": "medium",
+      "task": "Spec out the dual-write period for rollback."
+    }
+  ],
+  "attendees": [
+    {
+      "email": "sofia.alvarez@northwind.example",
+      "name": "Sofia Alvarez",
+      "role": "organizer"
+    },
+    {
+      "email": "tom.beckett@northwind.example",
+      "name": "Tom Beckett",
+      "role": "attendee"
+    },
+    {
+      "email": "priya.raman@northwind.example",
+      "name": "Priya Raman",
+      "role": "attendee"
+    }
+  ],
+  "confidence": 1.0,
+  "date": "2026-08-19",
+  "decisions": [
+    {
+      "confidence": 1.0,
+      "text": "Migration will target Q4 with a Q1 buffer."
+    },
+    {
+      "confidence": 1.0,
+      "text": "Rollback approach will be a dual-write period rather than a hard cutover."
+    },
+    {
+      "confidence": 1.0,
+      "text": "No contractor will be hired for this project."
+    }
+  ],
+  "duration_minutes": 60,
+  "end_time": null,
+  "follow_up_needed": true,
+  "key_quotes": [
+    "We need to decide whether the migration lands in Q4 or slips to Q1.",
+    "Then we're deciding to target Q4 with a Q1 buffer.",
+    "Decision: we do a dual-write period rather than a hard cutover."
+  ],
+  "kind": "meeting",
+  "links": [],
+  "location": null,
+  "platform": "Zoom",
+  "sentiment": "neutral",
+  "start_time": null,
+  "summary": "The team discussed the Q4 migration timeline, deciding to target Q4 with a Q1 buffer. They also agreed on a dual-write period for the rollback strategy and opted against hiring a contractor for the project. Action items were assigned to Tom and Priya with specific due dates.",
+  "title": "Q4 Planning",
+  "topics": [
+    "Migration timeline",
+    "Rollback strategy",
+    "Contractor hiring"
+  ]
+}

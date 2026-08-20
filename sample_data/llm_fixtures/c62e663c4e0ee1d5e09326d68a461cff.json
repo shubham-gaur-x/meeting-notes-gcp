@@ -1,0 +1,91 @@
+{
+  "action_items": [
+    {
+      "confidence": 1.0,
+      "done": false,
+      "due": null,
+      "is_engineering_task": true,
+      "owner": "Priya Raman",
+      "priority": "medium",
+      "task": "Pick up the dead-letter queue task."
+    },
+    {
+      "confidence": 1.0,
+      "done": false,
+      "due": null,
+      "is_engineering_task": true,
+      "owner": "Marcus Webb",
+      "priority": "high",
+      "task": "Pair with Priya on Cloud SQL connection pooling issue."
+    },
+    {
+      "confidence": 1.0,
+      "done": false,
+      "due": null,
+      "is_engineering_task": true,
+      "owner": "Anita Desai",
+      "priority": "medium",
+      "task": "Start on the export endpoint."
+    },
+    {
+      "confidence": 1.0,
+      "done": false,
+      "due": "2026-08-20",
+      "is_engineering_task": true,
+      "owner": "Priya Raman",
+      "priority": "high",
+      "task": "Freeze the schema."
+    }
+  ],
+  "attendees": [
+    {
+      "email": "",
+      "name": "Priya Raman",
+      "role": "attendee"
+    },
+    {
+      "email": "",
+      "name": "Marcus Webb",
+      "role": "attendee"
+    },
+    {
+      "email": "",
+      "name": "Anita Desai",
+      "role": "attendee"
+    }
+  ],
+  "confidence": 0.95,
+  "date": "2026-08-18",
+  "decisions": [
+    {
+      "confidence": 1.0,
+      "text": "Priya will freeze the schema by Wednesday."
+    }
+  ],
+  "duration_minutes": null,
+  "end_time": null,
+  "follow_up_needed": true,
+  "key_quotes": [
+    "I'm still stuck on the Cloud SQL connection pooling \u2014 it drops connections under load.",
+    "I'll need the schema frozen by Thursday or the export work slips.",
+    "I can freeze the schema by Wednesday."
+  ],
+  "kind": "standup",
+  "links": [],
+  "location": null,
+  "platform": "Google Meet",
+  "sentiment": "mixed",
+  "start_time": null,
+  "summary": "The team provided updates on their current tasks. Priya completed retry logic and is moving to dead-letter queues. Marcus is blocked by Cloud SQL connection pooling issues and plans to pair with Priya. Anita shipped a dashboard fix and needs the schema frozen by Thursday for her export work.",
+  "title": "Daily Standup",
+  "topics": [
+    "Retry logic",
+    "Ingest job",
+    "Dead-letter queue",
+    "Cloud SQL connection pooling",
+    "Dashboard filter fix",
+    "Export endpoint",
+    "Schema freeze",
+    "On-call rotation"
+  ]
+}
