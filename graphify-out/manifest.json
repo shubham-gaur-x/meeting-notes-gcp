@@ -1,21 +1,25 @@
 {
   "pyproject.toml": {
     "mtime": 1787005988.8789833,
+    "seen": 1787187135.327631,
     "ast_hash": "443255cf2b4cef054b542a9ee0881858",
     "semantic_hash": "443255cf2b4cef054b542a9ee0881858"
   },
   "scripts/__init__.py": {
     "mtime": 1786657789.4204366,
+    "seen": 1787187135.3276339,
     "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
     "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
   },
   "scripts/auth_spike.py": {
     "mtime": 1787006024.7599514,
+    "seen": 1787187135.327635,
     "ast_hash": "0253c7b761b35eadcd9963117b1f3159",
     "semantic_hash": "0253c7b761b35eadcd9963117b1f3159"
   },
   "tests/test_phase05_auth_spike.py": {
     "mtime": 1787006054.1434665,
+    "seen": 1787187135.327649,
     "ast_hash": "2af808958aae6de91d0feab7b65487ff",
     "semantic_hash": "2af808958aae6de91d0feab7b65487ff"
   },
@@ -30,19 +34,22 @@
     "semantic_hash": "8741ce44ad6402e646c0bcbf4e4fc3df"
   },
   "README.md": {
-    "mtime": 1787168951.619067,
-    "ast_hash": "8f1dec1b1ecf246187f29b8b82a1bc1d",
-    "semantic_hash": "8f1dec1b1ecf246187f29b8b82a1bc1d"
+    "mtime": 1787186499.3376515,
+    "seen": 1787187135.32765,
+    "ast_hash": "90524f99e3716aa3b15098c3e455e72e",
+    "semantic_hash": "90524f99e3716aa3b15098c3e455e72e"
   },
   "docs/ARCHITECTURE.md": {
-    "mtime": 1786654043.2252169,
-    "ast_hash": "77f9a95c2ce9858179c258b6c3b470b5",
-    "semantic_hash": "77f9a95c2ce9858179c258b6c3b470b5"
+    "mtime": 1787186494.1275396,
+    "seen": 1787187135.327651,
+    "ast_hash": "630d81f18712d6b5dc6c46b223aa79b4",
+    "semantic_hash": "630d81f18712d6b5dc6c46b223aa79b4"
   },
   "docs/DECISIONS.md": {
-    "mtime": 1787169014.6801236,
-    "ast_hash": "c473d5f5e7478389c0ec4ff9093e5a53",
-    "semantic_hash": "c473d5f5e7478389c0ec4ff9093e5a53"
+    "mtime": 1787183854.5708587,
+    "seen": 1787187135.327651,
+    "ast_hash": "30188f3ba78d1828cfaeedbcba53354a",
+    "semantic_hash": "30188f3ba78d1828cfaeedbcba53354a"
   },
   "docs/GOOGLE_AUTH.md": {
     "mtime": 1786658000.1731567,
@@ -55,9 +62,10 @@
     "semantic_hash": "b6b5d1217aa2791584d038d2fc50a2fb"
   },
   "docs/PHASE_PLAN.md": {
-    "mtime": 1787168979.9363394,
-    "ast_hash": "3644b6778b3b793842cc43b0cc78f46c",
-    "semantic_hash": "3644b6778b3b793842cc43b0cc78f46c"
+    "mtime": 1787183871.1759517,
+    "seen": 1787187135.327652,
+    "ast_hash": "93035d437b746bc79c714d5da4abab25",
+    "semantic_hash": "93035d437b746bc79c714d5da4abab25"
   },
   "docs/superpowers/plans/2026-08-13-phase-0.5-auth-spike.md": {
     "mtime": 1786657064.1348739,
@@ -70,24 +78,28 @@
     "semantic_hash": "9e89f77a72c92613ad8d3b17b3435709"
   },
   "scripts/doctor.py": {
-    "mtime": 1787168667.1227484,
-    "ast_hash": "2e34584ecc3e3f66c56b95a1263e88a1",
-    "semantic_hash": "2e34584ecc3e3f66c56b95a1263e88a1"
+    "mtime": 1787186336.477473,
+    "seen": 1787187135.327636,
+    "ast_hash": "9d1755e4e5098a3511c357dec2ff4bc0",
+    "semantic_hash": "9d1755e4e5098a3511c357dec2ff4bc0"
   },
   "terraform/envs/onix.example.tfvars": {
     "mtime": 1787168859.8444693,
+    "seen": 1787187135.327643,
     "ast_hash": "a07705f8d031da2d38b207b5b2b057eb",
     "semantic_hash": "a07705f8d031da2d38b207b5b2b057eb"
   },
   "terraform/envs/personal.example.tfvars": {
     "mtime": 1787168851.3014703,
+    "seen": 1787187135.3276439,
     "ast_hash": "feefc098dfead18b4cd12f7950e9ab4f",
     "semantic_hash": "feefc098dfead18b4cd12f7950e9ab4f"
   },
   "tests/test_phase06_doctor.py": {
-    "mtime": 1787168653.6651564,
-    "ast_hash": "ddd668b679b1f2bdf89fd42200e9cb41",
-    "semantic_hash": "ddd668b679b1f2bdf89fd42200e9cb41"
+    "mtime": 1787186318.6951551,
+    "seen": 1787187135.32765,
+    "ast_hash": "68de44a2d009201f17ffc43a58bf5c83",
+    "semantic_hash": "68de44a2d009201f17ffc43a58bf5c83"
   },
   "docker-compose.local.yml": {
     "mtime": 1787168821.8914502,
@@ -95,13 +107,158 @@
     "semantic_hash": "c6e8fb0faecb938c5d91ca41f6e30cd0"
   },
   "docs/SETUP.md": {
-    "mtime": 1787168927.814048,
-    "ast_hash": "2a5c9ec56ba68aedc546f4b20f09240b",
-    "semantic_hash": "2a5c9ec56ba68aedc546f4b20f09240b"
+    "mtime": 1787186473.6856048,
+    "seen": 1787187135.327652,
+    "ast_hash": "1e778d6abaf1fb20a2ddd744365f7bfe",
+    "semantic_hash": "1e778d6abaf1fb20a2ddd744365f7bfe"
   },
   "docs/superpowers/plans/2026-08-19-phase-0.6-reproducibility.md": {
     "mtime": 1787169045.1934545,
     "ast_hash": "7739f16a15f9aadab95b42d4dd523705",
     "semantic_hash": "7739f16a15f9aadab95b42d4dd523705"
+  },
+  "scripts/sync.py": {
+    "mtime": 1787186064.4579544,
+    "seen": 1787187135.327636,
+    "ast_hash": "097f4ace3ddf6930bd95fceea16148f1",
+    "semantic_hash": "097f4ace3ddf6930bd95fceea16148f1"
+  },
+  "scripts/tf_bootstrap.sh": {
+    "mtime": 1787185552.9546607,
+    "seen": 1787187135.327637,
+    "ast_hash": "a8c20cbce01770dd84f19e604e342f79",
+    "semantic_hash": "a8c20cbce01770dd84f19e604e342f79"
+  },
+  "terraform/durable/apis.tf": {
+    "mtime": 1787185676.9387562,
+    "seen": 1787187135.327638,
+    "ast_hash": "d7e66ac33d944818c989c8638c025a1f",
+    "semantic_hash": "d7e66ac33d944818c989c8638c025a1f"
+  },
+  "terraform/durable/budget.tf": {
+    "mtime": 1787185743.4511616,
+    "seen": 1787187135.327638,
+    "ast_hash": "3cc8cad8ff3e41dbc88c029979aa34fd",
+    "semantic_hash": "3cc8cad8ff3e41dbc88c029979aa34fd"
+  },
+  "terraform/durable/iam.tf": {
+    "mtime": 1787185719.888106,
+    "seen": 1787187135.327639,
+    "ast_hash": "d17679a62550fd6207d98a75b7b7ad78",
+    "semantic_hash": "d17679a62550fd6207d98a75b7b7ad78"
+  },
+  "terraform/durable/network.tf": {
+    "mtime": 1787185683.4852216,
+    "seen": 1787187135.327639,
+    "ast_hash": "f83809405e8f3e2bb89c398ea6afab97",
+    "semantic_hash": "f83809405e8f3e2bb89c398ea6afab97"
+  },
+  "terraform/durable/outputs.tf": {
+    "mtime": 1787185729.611416,
+    "seen": 1787187135.327639,
+    "ast_hash": "18fb48f66f6f4221d2d04b0f45a227ce",
+    "semantic_hash": "18fb48f66f6f4221d2d04b0f45a227ce"
+  },
+  "terraform/durable/pubsub.tf": {
+    "mtime": 1787185724.6401227,
+    "seen": 1787187135.32764,
+    "ast_hash": "15bb3a3a7a7176fdb18a9ff2a2328fcf",
+    "semantic_hash": "15bb3a3a7a7176fdb18a9ff2a2328fcf"
+  },
+  "terraform/durable/registry.tf": {
+    "mtime": 1787185701.9445925,
+    "seen": 1787187135.32764,
+    "ast_hash": "d8811b92ea0a5af21051b06b5617dc7c",
+    "semantic_hash": "d8811b92ea0a5af21051b06b5617dc7c"
+  },
+  "terraform/durable/secrets.tf": {
+    "mtime": 1787185710.8940978,
+    "seen": 1787187135.327641,
+    "ast_hash": "10e402a255000b489104b708a3a4b280",
+    "semantic_hash": "10e402a255000b489104b708a3a4b280"
+  },
+  "terraform/durable/storage.tf": {
+    "mtime": 1787185706.6391366,
+    "seen": 1787187135.327641,
+    "ast_hash": "cb01dbdcad5f174df4dfc39fc5eee12f",
+    "semantic_hash": "cb01dbdcad5f174df4dfc39fc5eee12f"
+  },
+  "terraform/durable/variables.tf": {
+    "mtime": 1787185672.5585587,
+    "seen": 1787187135.3276422,
+    "ast_hash": "9b922761360fadc29ef3c70e09b22ead",
+    "semantic_hash": "9b922761360fadc29ef3c70e09b22ead"
+  },
+  "terraform/durable/versions.tf": {
+    "mtime": 1787185664.0799508,
+    "seen": 1787187135.3276422,
+    "ast_hash": "d6ec5983196b6b3c671ec4a08c21e35c",
+    "semantic_hash": "d6ec5983196b6b3c671ec4a08c21e35c"
+  },
+  "terraform/envs/onix.backend.example.hcl": {
+    "mtime": 1787185560.2902076,
+    "seen": 1787187135.327643,
+    "ast_hash": "1f1ea317246aa9812c80aa71537253d8",
+    "semantic_hash": "1f1ea317246aa9812c80aa71537253d8"
+  },
+  "terraform/envs/personal.backend.example.hcl": {
+    "mtime": 1787185557.1595714,
+    "seen": 1787187135.3276439,
+    "ast_hash": "ca414904da3f705d2e10928c4b76ce5e",
+    "semantic_hash": "ca414904da3f705d2e10928c4b76ce5e"
+  },
+  "terraform/ephemeral/cloudsql.tf": {
+    "mtime": 1787185776.9195838,
+    "seen": 1787187135.3276448,
+    "ast_hash": "e246cd208254a0e761fed2efc6f047f3",
+    "semantic_hash": "e246cd208254a0e761fed2efc6f047f3"
+  },
+  "terraform/ephemeral/data.tf": {
+    "mtime": 1787185763.4471307,
+    "seen": 1787187135.3276448,
+    "ast_hash": "c206b225d93f2a3c7c0fb132e029f18d",
+    "semantic_hash": "c206b225d93f2a3c7c0fb132e029f18d"
+  },
+  "terraform/ephemeral/memgraph.tf": {
+    "mtime": 1787185803.8701649,
+    "seen": 1787187135.327646,
+    "ast_hash": "27c424519b427073d0236f9b152de46e",
+    "semantic_hash": "27c424519b427073d0236f9b152de46e"
+  },
+  "terraform/ephemeral/outputs.tf": {
+    "mtime": 1787185851.08845,
+    "seen": 1787187135.327646,
+    "ast_hash": "f88df8986dbed4ed958035798e30e621",
+    "semantic_hash": "f88df8986dbed4ed958035798e30e621"
+  },
+  "terraform/ephemeral/startup.sh": {
+    "mtime": 1787185819.1177325,
+    "seen": 1787187135.327647,
+    "ast_hash": "39c500c3dfffa1641a3a19788bda8052",
+    "semantic_hash": "39c500c3dfffa1641a3a19788bda8052"
+  },
+  "terraform/ephemeral/variables.tf": {
+    "mtime": 1787185759.1544394,
+    "seen": 1787187135.327647,
+    "ast_hash": "9b922761360fadc29ef3c70e09b22ead",
+    "semantic_hash": "9b922761360fadc29ef3c70e09b22ead"
+  },
+  "terraform/ephemeral/versions.tf": {
+    "mtime": 1787185753.5741587,
+    "seen": 1787187135.327648,
+    "ast_hash": "9390d4b0e086d8d512a37b6a76f2e407",
+    "semantic_hash": "9390d4b0e086d8d512a37b6a76f2e407"
+  },
+  "tests/test_phase01_sync.py": {
+    "mtime": 1787186034.152398,
+    "seen": 1787187135.327648,
+    "ast_hash": "88bc9748c02e1c2e1f16ed6b5878458d",
+    "semantic_hash": "88bc9748c02e1c2e1f16ed6b5878458d"
+  },
+  "docs/superpowers/plans/2026-08-19-phase-1-terraform-foundation.md": {
+    "mtime": 1787185615.8532891,
+    "seen": 1787187135.3276532,
+    "ast_hash": "763e2e62c9c33a03ce8988190d62bd8c",
+    "semantic_hash": "763e2e62c9c33a03ce8988190d62bd8c"
   }
 }
