@@ -1,0 +1,112 @@
+"""Typed settings — the ONLY module in this package that reads os.environ.
+
+Every other module imports `get_settings()` rather than reaching for the
+environment itself (CLAUDE.md). That rule is what makes the rest of the
+package testable without a .env file: a test constructs `Settings(...)`
+with explicit values and never touches the process environment.
+
+Deployed environments get these from Secret Manager, injected by Cloud Run.
+Locally they come from .env. Either way this is the single seam.
+"""
+
+from __future__ import annotations
+
+from functools import lru_cache
+from typing import Literal
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+LLMBackend = Literal["fake", "gemini", "lmstudio", "vertex"]
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+        case_sensitive=False,
+    )
+
+    # ─── GCP ──────────────────────────────────────────────────────────────
+    gcp_project_id: str = ""
+    gcp_region: str = "us-central1"
+    gcp_zone: str = "us-central1-a"
+
+    # ─── LLM (ADR-002, ADR-014) ───────────────────────────────────────────
+    # `fake` replays recorded fixtures: no credentials, no network. It is the
+    # tier-0 default and the test suite's backend.
+    llm_backend: LLMBackend = "fake"
+    gemini_api_key: str = ""
+    gemini_chat_model: str = "gemini-2.5-flash"
+    vertex_chat_model: str = ""
+    vertex_embedding_model: str = "text-embedding-005"
+    vertex_location: str = "us-central1"
+    lm_studio_base_url: str = "http://localhost:1234/v1"
+    lm_studio_model: str = ""
+    lm_studio_embedding_model: str = "text-embedding-nomic-embed-text-v1.5"
+
+    # Both Memgraph vector indexes are configured for 768. Changing this means
+    # migrating both indexes, so it is not a knob to turn casually.
+    embedding_dimension: int = 768
+
+    # ─── Postgres (ADR-015) ───────────────────────────────────────────────
+    postgres_host: str = "localhost"
+    postgres_port: int = 5432
+    postgres_db: str = "meeting_memory"
+    postgres_user: str = "meeting_notes"
+    postgres_password: str = ""
+    # Blank means local Postgres; set means the Cloud SQL connector.
+    cloud_sql_connection_name: str = ""
+
+    # ─── Memgraph ─────────────────────────────────────────────────────────
+    memgraph_host: str = "localhost"
+    memgraph_port: int = 7687
+    memgraph_user: str = ""
+    memgraph_password: str = ""
+
+    # ─── Google Workspace OAuth ───────────────────────────────────────────
+    google_oauth_client_id: str = ""
+    google_oauth_client_secret: str = ""
+    google_refresh_token: str = ""
+    google_workspace_user: str = ""
+    meet_pubsub_subscription: str = ""
+
+    # ─── Jira ─────────────────────────────────────────────────────────────
+    # False by default so tiers 0 and 1 run the pipeline fully and write no
+    # tickets to a real Jira.
+    jira_enabled: bool = False
+    jira_domain: str = ""
+    jira_email: str = ""
+    jira_api_token: str = ""
+    jira_project_key: str = "SCRUM"
+    jira_board_id: int = 1
+    jira_issue_type: str = "Task"
+    jira_confidence_threshold: float = 0.6
+    jira_dedup_enabled: bool = True
+    jira_dedup_threshold: float = 0.9
+
+    # ─── Governance ───────────────────────────────────────────────────────
+    fact_min_confidence: float = 0.5
+    person_roster_path: str = ""
+    access_policy_file: str = ""
+
+    # ─── Pipeline tuning ──────────────────────────────────────────────────
+    classifier_score_threshold: float = 0.40
+    pipeline_batch_size: int = 50
+    graph_write_concurrency: int = 3
+
+    # ─── Service ──────────────────────────────────────────────────────────
+    log_level: str = "INFO"
+    github_webhook_secret: str = ""
+    api_url: str = ""
+    gcs_backup_bucket: str = ""
+
+
+@lru_cache(maxsize=1)
+def get_settings() -> Settings:
+    """Process-wide settings. Cached so the .env file is read once.
+
+    Tests should construct `Settings(...)` directly rather than calling this,
+    so they never depend on the ambient environment or the cache.
+    """
+    return Settings()
