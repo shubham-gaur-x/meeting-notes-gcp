@@ -10,6 +10,13 @@ from datetime import date, timedelta
 import pytest
 
 from meeting_notes.config import Settings
+from meeting_notes.models import (
+    ActionItem,
+    Decision,
+    ExtractedMeeting,
+    RawEmail,
+    StagedRecord,
+)
 from meeting_notes.utils import (
     extract_ticket_keys,
     priority_from_due,
@@ -121,3 +128,101 @@ def test_priority_from_due_with_no_date_is_low() -> None:
     """Deliberately 'low', not 'medium' — an item with no due date is not
     urgent. Matches v5."""
     assert priority_from_due(None) == "low"
+
+
+# ─── models (ADR-018) ─────────────────────────────────────────────────────────
+
+
+def test_staged_record_carries_an_opaque_payload() -> None:
+    """ADR-018: one table, JSONB payload, source_type as the discriminator."""
+    rec = StagedRecord(
+        id="1",
+        source_id="gmail-abc",
+        source_type="email",
+        payload={"subject": "hi", "body": "there"},
+        fetched_at="2026-08-20T00:00:00Z",
+    )
+    assert rec.processed is False
+    assert rec.payload["subject"] == "hi"
+
+
+def test_staged_record_rejects_an_unknown_source_type() -> None:
+    """A typo'd source must fail loudly here, not silently skip the drain."""
+    with pytest.raises(ValueError):
+        StagedRecord(
+            id="1",
+            source_id="x",
+            source_type="carrier-pigeon",  # type: ignore[arg-type]
+            payload={},
+            fetched_at="2026-08-20T00:00:00Z",
+        )
+
+
+def test_raw_models_survive_as_adapter_parse_targets() -> None:
+    """ADR-018 is a storage change, not a loss of typing. The typed models
+    still validate a payload as strictly as v5 did."""
+    email = RawEmail.model_validate(
+        {
+            "id": "1",
+            "source_id": "abc",
+            "subject": "s",
+            "from_email": "a@b.c",
+            "to_emails": ["d@e.f"],
+            "body": "b",
+            "received_at": "2026-08-20T00:00:00Z",
+        }
+    )
+    assert email.subject == "s"
+
+
+def test_raw_models_no_longer_carry_source_table() -> None:
+    """StagedRecord.source_type is the discriminator now. A lingering
+    source_table field would be a second source of truth."""
+    assert "source_table" not in RawEmail.model_fields
+
+
+def test_airbyte_webhook_payload_is_gone() -> None:
+    """MIGRATION_FROM_V5.md §4 — Airbyte residue must not be ported."""
+    import meeting_notes.models as m
+
+    assert not hasattr(m, "AirbyteWebhookPayload")
+
+
+def test_decisions_accept_plain_strings() -> None:
+    """LLM output sometimes gives decisions as bare strings. v5's coercion is
+    load-bearing; dropping it would start raising on real extractions."""
+    meeting = ExtractedMeeting.model_validate(
+        {
+            "title": "t",
+            "kind": "meeting",
+            "platform": "meet",
+            "date": "2026-08-20",
+            "summary": "s",
+            "decisions": ["we shipped it"],
+        }
+    )
+    assert meeting.decisions[0].text == "we shipped it"
+    assert meeting.decisions[0].confidence == 1.0
+
+
+def test_confidence_defaults_do_not_gate_unscored_items() -> None:
+    """ActionItem/Decision default to 1.0 so items the model did not score are
+    not silently dropped below JIRA_CONFIDENCE_THRESHOLD."""
+    assert ActionItem(owner="a", task="t").confidence == 1.0
+    assert Decision(text="d").confidence == 1.0
+
+
+def test_extracted_meeting_ignores_unknown_fields() -> None:
+    """CLAUDE.md mandates extra='ignore' — an LLM adding a field must not
+    fail the whole extraction."""
+    meeting = ExtractedMeeting.model_validate(
+        {
+            "title": "t",
+            "kind": "meeting",
+            "platform": "meet",
+            "date": "2026-08-20",
+            "summary": "s",
+            "invented_field": "???",
+        }
+    )
+    assert not hasattr(meeting, "invented_field")
