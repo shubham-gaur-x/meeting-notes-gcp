@@ -76,7 +76,7 @@
   <section class="panel" id="review">
     <div class="row">
       <button class="action" onclick="loadReview()">Refresh</button>
-      <span class="muted">Items held back for a human — low confidence, unresolved people, blockers</span>
+      <span class="muted">Nothing here was dropped — these are items the system chose to ask about rather than guess</span>
     </div>
     <div id="review-body"></div>
   </section>
@@ -179,14 +179,20 @@ async function loadInsights() {
       get("/graph/insights/influential?label=" + encodeURIComponent(label)),
       get("/graph/insights/communities"), get("/graph/insights/bridges")]);
     $("#insights-body").innerHTML =
-      `<h3>Most influential ${esc(label)} (${inf.count})</h3><div class="scroll">` +
+      `<h3>Most connected ${esc(label)} (${inf.count})</h3>` +
+      `<p class="muted">Ranked by how central each one is to the meeting graph.</p>` +
+      `<div class="scroll">` +
       table(inf.nodes, [["Name", r => r.name],
                         ["PageRank", r => (r.pagerank_score ?? 0).toFixed?.(5) ?? r.pagerank_score],
                         ["Community", r => r.community_id]]) +
-      `</div><h3>Communities (${com.count})</h3><div class="scroll">` +
+      `</div><h3>Workstreams (${com.count})</h3>` +
+      `<p class="muted">Clusters the graph found on its own, named by the topics inside them.</p>` +
+      `<div class="scroll">` +
       table(com.communities.slice(0, 15),
-            [["Community", r => r.community_id], ["Size", r => r.size]]) +
-      `</div><h3>Bridges (${br.count})</h3><div class="scroll">` +
+            [["Workstream", r => r.name], ["Items", r => r.size]]) +
+      `</div><h3>Bridges (${br.count})</h3>` +
+      `<p class="muted">These connect workstreams that otherwise do not overlap — the link between separate areas of work.</p>` +
+      `<div class="scroll">` +
       table(br.nodes, [["Name", r => r.name], ["Labels", r => (r.labels || []).join(", ")],
                        ["Betweenness", r => r.betweenness_centrality]]) + "</div>";
   } catch (e) { fail("#insights-body", e); }

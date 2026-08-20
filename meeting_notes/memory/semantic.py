@@ -65,10 +65,17 @@ def _driver() -> Any:
 
 
 async def _chat(system: str, user: str, settings: Settings | None, chat: Any) -> Any:
+    """Both prompts here ask for a JSON ARRAY, so this uses `chat_list`.
+
+    Routing them through `chat_json` silently discarded every correct answer:
+    the object parser rejects a bare array, so fact extraction produced ZERO
+    facts across the whole corpus while the model was responding perfectly.
+    Found in a live backfill log.
+    """
     if chat is None:
         from meeting_notes import llm_client
 
-        chat = llm_client.chat_json
+        chat = llm_client.chat_list
     return await chat(system, user, temperature=0.0, settings=settings)
 
 

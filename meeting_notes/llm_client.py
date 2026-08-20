@@ -109,6 +109,40 @@ def _loads_lenient(text: str) -> dict[str, Any] | None:
         return None
 
 
+
+def _loads_lenient_list(text: str) -> list[Any] | None:
+    """Parse a JSON ARRAY, tolerating prose around it.
+
+    `chat_json` deliberately rejects a bare array -- it promises a dict, and a
+    list would break every extraction caller. But several prompts legitimately
+    ask for an array ("respond ONLY with a JSON array of strings"), and routing
+    those through the object parser silently discarded correct answers: fact
+    extraction produced ZERO facts across the whole corpus while the model was
+    answering perfectly. Found in a live backfill log, not by a test.
+    """
+    text = strip_json_fences(text or "").strip()
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, list):
+            return parsed
+        if isinstance(parsed, dict):
+            # Some models wrap the array in a single-key object anyway.
+            for value in parsed.values():
+                if isinstance(value, list):
+                    return value
+        return None
+    except (json.JSONDecodeError, ValueError):
+        pass
+    start, end = text.find("["), text.rfind("]")
+    if start == -1 or end == -1 or end < start:
+        return None
+    try:
+        parsed = json.loads(text[start : end + 1])
+        return parsed if isinstance(parsed, list) else None
+    except (json.JSONDecodeError, ValueError):
+        return None
+
+
 # ─── backend selection ────────────────────────────────────────────────────────
 
 
@@ -258,6 +292,42 @@ async def _post(
     return await transport(url, payload, headers)
 
 
+async def _raw_completion(
+    system: str,
+    user: str,
+    temperature: float,
+    settings: Settings | None,
+    transport: Transport | None,
+) -> str | None:
+    """The backend call, returning raw text.
+
+    Shared by `chat_json` and `chat_list` so the two differ only in the shape
+    they expect back, not in which backends they support.
+
+    Returns None for the `fake` backend, whose fixtures are already parsed --
+    callers handle that case before reaching here.
+    """
+    settings = settings or get_settings()
+    backend = select_backend(settings)
+    transport = transport or _default_transport
+
+    if backend == "gemini":
+        url, payload, headers = _gemini_chat_request(system, user, temperature, settings)
+        body = await _post(url, payload, headers, transport)
+        return _gemini_text(body)
+    if backend == "lmstudio":
+        url, payload, headers = _lmstudio_chat_request(system, user, temperature, settings)
+        body = await _post(url, payload, headers, transport)
+        return _openai_shaped_text(body)
+    if backend == "vertex":
+        url, payload, headers = _vertex_chat_request(system, user, temperature, settings)
+        if transport is _default_transport:
+            headers = {**headers, **_vertex_auth_header()}
+        body = await _post(url, payload, headers, transport)
+        return _gemini_text(body)
+    raise ValueError(f"unknown LLM backend {backend!r}")
+
+
 async def chat_json(
     system: str,
     user: str,
@@ -266,7 +336,12 @@ async def chat_json(
     settings: Settings | None = None,
     transport: Transport | None = None,
 ) -> dict[str, Any] | None:
-    """Ask the model for JSON. Returns None if the response does not parse."""
+    """Ask the model for a JSON OBJECT. Returns None if it does not parse.
+
+    A bare array is deliberately rejected: this promises a dict and a list
+    would break every extraction caller. Prompts that ask for an array must
+    use `chat_list`.
+    """
     settings = settings or get_settings()
     backend = select_backend(settings)
 
@@ -353,3 +428,34 @@ async def embed(
             f"are built for {dimension}. Changing this means migrating both indexes."
         )
     return list(vector)
+
+
+async def chat_list(
+    system: str,
+    user: str,
+    *,
+    temperature: float = 0.0,
+    settings: Settings | None = None,
+    transport: Transport | None = None,
+) -> list[Any] | None:
+    """Ask the model for a JSON ARRAY.
+
+    Same backends and retry semantics as `chat_json`; only the expected shape
+    differs. Callers whose prompt says "respond with a JSON array" must use
+    this, or a correct answer is thrown away as unparseable.
+    """
+    settings = settings or get_settings()
+    if select_backend(settings) == "fake":
+        fixture = await _fake_chat_json(system, user, temperature, settings)
+        for value in fixture.values():
+            if isinstance(value, list):
+                return value
+        return []
+
+    raw = await _raw_completion(system, user, temperature, settings, transport)
+    if raw is None:
+        return None
+    parsed = _loads_lenient_list(raw)
+    if parsed is None:
+        log.error("llm.parse_failed_list", raw_snippet=raw[:200])
+    return parsed

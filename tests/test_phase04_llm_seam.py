@@ -533,3 +533,51 @@ def test_the_corpus_covers_more_than_one_meeting_shape() -> None:
     algorithm output is distorted accordingly. Start the corpus diverse."""
     corpus = record_fixtures.load_corpus(record_fixtures.CORPUS_DIR)
     assert len({r["source_type"] for r in corpus}) > 1
+
+
+# ─── chat_list (found in a live backfill log) ─────────────────────────────────
+
+
+def test_a_bare_array_parses_through_the_list_path() -> None:
+    """The bug: several prompts say "respond ONLY with a JSON array", and
+    routing them through the object parser threw away correct answers. Fact
+    extraction produced ZERO facts across the whole corpus while the model was
+    answering perfectly."""
+    from meeting_notes.llm_client import _loads_lenient_list
+
+    assert _loads_lenient_list('["a", "b"]') == ["a", "b"]
+
+
+def test_the_list_path_salvages_an_array_wrapped_in_prose() -> None:
+    from meeting_notes.llm_client import _loads_lenient_list
+
+    assert _loads_lenient_list('Sure:\n["a"]\nhope that helps') == ["a"]
+
+
+def test_the_list_path_unwraps_a_single_key_object() -> None:
+    """Models wrap the array in an object despite being told not to."""
+    from meeting_notes.llm_client import _loads_lenient_list
+
+    assert _loads_lenient_list('{"facts": ["a", "b"]}') == ["a", "b"]
+
+
+def test_the_list_path_returns_none_for_a_plain_object() -> None:
+    from meeting_notes.llm_client import _loads_lenient_list
+
+    assert _loads_lenient_list('{"title": "x"}') is None
+
+
+def test_chat_json_still_rejects_arrays() -> None:
+    """The object contract is unchanged -- that rejection is correct for
+    extraction, which must never receive a list."""
+    assert _loads_lenient('["a"]') is None
+
+
+async def test_chat_list_reaches_the_backend_and_parses() -> None:
+    from meeting_notes.llm_client import chat_list
+
+    async def transport(url: str, payload: dict, headers: dict) -> str:
+        return json.dumps({"choices": [{"message": {"content": '["fact one", "fact two"]'}}]})
+
+    result = await chat_list("s", "u", settings=_lmstudio_settings(), transport=transport)
+    assert result == ["fact one", "fact two"]

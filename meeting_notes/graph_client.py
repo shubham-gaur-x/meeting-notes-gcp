@@ -629,17 +629,45 @@ async def get_influential_nodes(
         return [dict(r) async for r in result]
 
 
+# Bookkeeping node types. They are real graph nodes, but they are records of
+# how the system worked rather than things anyone discussed, so surfacing them
+# in an insight next to a Topic or a Person is just confusing -- "PersonReview"
+# appearing in a community tells a reader nothing about the work.
+BOOKKEEPING_LABELS = ("PersonReview", "MemorySession")
+
+
 async def get_all_communities(driver: Any = None) -> list[dict[str, Any]]:
+    """Communities, each NAMED by the topics inside it.
+
+    A bare `community_id` is meaningless to a reader: "Community 1, size 63"
+    says nothing. The same community named by its three most central topics
+    reads as "verizon ge enablement · sow review · kickoff preparation", which
+    is recognisably a real workstream. The id is kept for drill-down.
+    """
     driver = driver or get_driver()
     async with driver.session() as session:
         result = await session.run(
             """
             MATCH (n) WHERE n.community_id IS NOT NULL
-            RETURN n.community_id AS community_id, count(n) AS size
+              AND NOT any(l IN labels(n) WHERE l IN $bookkeeping)
+            WITH n.community_id AS community_id, collect(n) AS members
+            WITH community_id, members, size(members) AS size
+            UNWIND members AS m
+            WITH community_id, size, m
+            WHERE 'Topic' IN labels(m)
+            WITH community_id, size, m ORDER BY coalesce(m.pagerank_score, 0) DESC
+            WITH community_id, size, collect(m.name)[..3] AS top_topics
+            RETURN community_id, size, top_topics
             ORDER BY size DESC
-            """
+            """,
+            bookkeeping=list(BOOKKEEPING_LABELS),
         )
-        return [dict(r) async for r in result]
+        rows = [dict(r) async for r in result]
+
+    for row in rows:
+        topics = [t for t in (row.get("top_topics") or []) if t]
+        row["name"] = " · ".join(topics) if topics else f"community {row['community_id']}"
+    return rows
 
 
 async def get_community_members(community_id: int, driver: Any = None) -> list[dict[str, Any]]:
@@ -648,12 +676,14 @@ async def get_community_members(community_id: int, driver: Any = None) -> list[d
         result = await session.run(
             """
             MATCH (n) WHERE n.community_id = $community_id
+              AND NOT any(l IN labels(n) WHERE l IN $bookkeeping)
             RETURN n.id AS id,
                    COALESCE(n.name, n.title, n.task, n.text, n.summary, n.email) AS name,
                    labels(n) AS labels, n.pagerank_score AS pagerank_score
             LIMIT 200
             """,
             community_id=community_id,
+            bookkeeping=list(BOOKKEEPING_LABELS),
         )
         return [dict(r) async for r in result]
 
@@ -665,6 +695,7 @@ async def get_bridge_nodes(limit: int = 10, driver: Any = None) -> list[dict[str
         result = await session.run(
             """
             MATCH (n) WHERE n.betweenness_centrality IS NOT NULL
+              AND NOT any(l IN labels(n) WHERE l IN $bookkeeping)
             RETURN n.id AS id,
                    COALESCE(n.name, n.title, n.task, n.text, n.summary, n.email) AS name,
                    labels(n) AS labels,
@@ -673,6 +704,7 @@ async def get_bridge_nodes(limit: int = 10, driver: Any = None) -> list[dict[str
             LIMIT $limit
             """,
             limit=limit,
+            bookkeeping=list(BOOKKEEPING_LABELS),
         )
         return [dict(r) async for r in result]
 

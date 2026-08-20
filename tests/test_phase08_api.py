@@ -71,6 +71,7 @@ from meeting_notes import graph_client  # noqa: E402
 # Captured at import time, before the autouse stub fixture can replace it --
 # the governance test below must exercise the REAL function, not the stub.
 _REAL_INFLUENTIAL = graph_client.get_influential_nodes
+_REAL_COMMUNITIES = graph_client.get_all_communities
 
 
 @pytest.fixture
@@ -398,3 +399,75 @@ async def test_the_service_root_redirects_to_the_dashboard(app: Any) -> None:
 
     assert response.status_code in (307, 308)
     assert response.headers["location"] == "/dashboard"
+
+
+# ─── insight readability (from the live audit) ────────────────────────────────
+
+def _fake_driver_returning(rows: list[dict]) -> Any:
+    """Minimal async driver returning fixed rows, for exercising the REAL
+    graph_client functions rather than the autouse stubs."""
+    class _Result:
+        def __init__(self) -> None:
+            self._rows = list(rows)
+
+        def __aiter__(self) -> Any:
+            return self
+
+        async def __anext__(self) -> dict:
+            if not self._rows:
+                raise StopAsyncIteration
+            return self._rows.pop(0)
+
+    class _Session:
+        async def run(self, cypher: str, **kw: Any) -> Any:
+            return _Result()
+
+        async def __aenter__(self) -> Any:
+            return self
+
+        async def __aexit__(self, *exc: Any) -> bool:
+            return False
+
+    class _Driver:
+        def session(self) -> Any:
+            return _Session()
+
+    return _Driver()
+
+
+
+
+async def test_communities_are_named_not_just_numbered() -> None:
+    """"Community 1, size 63" tells a reader nothing. Named by its top topics
+    it reads as a recognisable workstream, which is the difference between an
+    insight and a number."""
+    rows_out = [{"community_id": 1, "size": 63,
+                 "top_topics": ["verizon ge enablement", "sow review"]}]
+    _D = _fake_driver_returning(rows_out)
+
+    rows = await _REAL_COMMUNITIES(driver=_D)
+    assert rows[0]["name"] == "verizon ge enablement · sow review"
+    assert rows[0]["community_id"] == 1, "the id is kept for drill-down"
+
+
+async def test_a_community_with_no_topics_still_gets_a_label() -> None:
+    """Never render a blank cell."""
+    _D = _fake_driver_returning([{"community_id": 7, "size": 3, "top_topics": []}])
+
+    rows = await _REAL_COMMUNITIES(driver=_D)
+    assert rows[0]["name"] == "community 7"
+
+
+def test_bookkeeping_nodes_are_excluded_from_insights() -> None:
+    """PersonReview and MemorySession are records of how the system worked,
+    not things anyone discussed. On the real graph they were forming their own
+    junk communities and appearing beside real topics."""
+    # Read the module source rather than the live attributes: the autouse
+    # fixture replaces those with stubs, so inspecting them checks nothing.
+    from pathlib import Path as _P
+
+    source = _P(graph_client.__file__).read_text()
+    for name in ("get_all_communities", "get_bridge_nodes", "get_community_members"):
+        start = source.index(f"async def {name}(")
+        body = source[start : start + 1400]
+        assert "bookkeeping" in body, f"{name} does not exclude bookkeeping nodes"
