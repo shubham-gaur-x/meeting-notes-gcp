@@ -96,6 +96,14 @@ SET processed = TRUE, processed_at = now()
 WHERE id = $1::uuid
 """
 
+_GET_WATERMARK_SQL = "SELECT value FROM watermarks WHERE source_type = $1"
+
+_SET_WATERMARK_SQL = """
+INSERT INTO watermarks (source_type, value)
+VALUES ($1, $2)
+ON CONFLICT (source_type) DO UPDATE SET value = $2, updated_at = now()
+"""
+
 
 # ─── connection (ADR-015) ─────────────────────────────────────────────────────
 
@@ -228,6 +236,25 @@ async def mark_processed(record_id: str, pool: asyncpg.Pool | None = None) -> No
     pool = pool or await get_pool()
     async with pool.acquire() as conn:
         await conn.execute(_MARK_PROCESSED_SQL, record_id)
+
+
+async def get_watermark(source_type: str, pool: asyncpg.Pool | None = None) -> str | None:
+    """The last watermark this source reached, or None if it has never run."""
+    pool = pool or await get_pool()
+    async with pool.acquire() as conn:
+        value: str | None = await conn.fetchval(_GET_WATERMARK_SQL, source_type)
+    return value
+
+
+async def set_watermark(source_type: str, value: str, pool: asyncpg.Pool | None = None) -> None:
+    """Advance a source's watermark.
+
+    Called only after every record in a batch has staged — see
+    `sources.base.stage_all` for why that ordering matters.
+    """
+    pool = pool or await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(_SET_WATERMARK_SQL, source_type, value)
 
 
 def _main() -> int:
