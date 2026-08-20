@@ -662,3 +662,106 @@ async def test_drain_reports_batch_counters() -> None:
     )
     assert result.processed == 2
     assert result.errors == 0
+
+
+# ─── source-authoritative dates (found auditing the real corpus) ──────────────
+
+
+def test_a_calendar_events_start_overrides_the_models_guess() -> None:
+    """Regression test for a real corruption found in the live graph.
+
+    A recurring series had five instances -- Jan 13, Jan 20, Feb 3, Feb 10,
+    Feb 17 -- all stamped 2026-01-13, because the model read a date out of the
+    event description and `repair()` only fills a date when the model returns
+    a null-like one. `start` is ground truth for a calendar event; the model
+    inferring one from prose is strictly worse, and getting it wrong silently
+    corrupts timeline order and every temporal chain built from it.
+    """
+    from meeting_notes.pipeline import adapter_for
+
+    adapter = adapter_for("calendar")
+    overrides = adapter.extract_overrides({"start": "2026-02-17T11:00:00-08:00"})
+    assert overrides == {"date": "2026-02-17"}
+
+
+def test_a_meet_recordings_start_time_overrides_too() -> None:
+    from meeting_notes.pipeline import adapter_for
+
+    adapter = adapter_for("meet")
+    assert adapter.extract_overrides({"start_time": "2026-03-01T09:00:00Z"}) == {
+        "date": "2026-03-01"
+    }
+
+
+def test_an_email_date_does_NOT_override() -> None:
+    """A mail header date is when the MESSAGE was sent, which is often not when
+    the meeting it discusses happened. Here the model reading the thread
+    genuinely can do better, so it must keep its answer."""
+    from meeting_notes.pipeline import adapter_for
+
+    adapter = adapter_for("email")
+    assert adapter.extract_overrides({"date": "2026-02-17T10:00:00Z"}) == {}
+
+
+def test_a_missing_start_overrides_nothing() -> None:
+    """No ground truth means no override -- never blank out a date the model
+    supplied with an empty one."""
+    from meeting_notes.pipeline import adapter_for
+
+    assert adapter_for("calendar").extract_overrides({}) == {}
+    assert adapter_for("meet").extract_overrides({"start_time": ""}) == {}
+
+
+async def test_process_actually_applies_the_override_to_the_written_meeting() -> None:
+    """The tests above check extract_overrides() in isolation, which passes
+    even if process() never calls it. This drives the real path and asserts
+    the meeting HANDED TO THE GRAPH carries the corrected date."""
+    from meeting_notes import extractor, pipeline
+    from meeting_notes.models import ExtractedMeeting, StagedRecord
+
+    written: dict = {}
+
+    async def capture_upsert(meeting, source_id):
+        written["date"] = str(meeting.date)
+        return "m1"
+
+    async def noop_push(actions, meeting, source_id):
+        return None
+
+    async def noop_mark(record_id):
+        return None
+
+    async def fake_extract(*a, **kw):
+        # The model infers the series' start date from the description --
+        # exactly what happened live.
+        return ExtractedMeeting.model_validate({
+            "title": "QA AI Pilot : Touchpoints", "kind": "meeting",
+            "platform": "google_calendar", "date": "2026-01-13", "summary": "recurring sync",
+        })
+
+    record = StagedRecord(
+        id="r1", source_id="s1", source_type="calendar",
+        payload={"summary": "QA AI Pilot : Touchpoints standup",
+                 "description": ("Recurring sync; series began 2026-01-13. Agenda: review "
+                                 "action items, decide on scope, assign owners for follow-up."),
+                 "start": "2026-02-17T11:00:00-08:00",
+                 "end": "2026-02-17T11:30:00-08:00",
+                 "attendees": [{"email": "a@corp.com"}, {"email": "b@corp.com"}]},
+        fetched_at="2026-02-17T00:00:00Z", processed=False,
+    )
+
+    original = extractor.extract_meeting
+    extractor.extract_meeting = fake_extract  # type: ignore[assignment]
+    try:
+        result = await pipeline.process(
+            record, pipeline.adapter_for("calendar"),
+            upsert=capture_upsert, push_jira=noop_push, mark_processed=noop_mark,
+            enrich_fn=lambda m, mid: None,
+        )
+    finally:
+        extractor.extract_meeting = original  # type: ignore[assignment]
+
+    assert result.status == "processed"
+    assert written["date"] == "2026-02-17", (
+        "the calendar event's own start must win over the model's inferred date"
+    )

@@ -718,3 +718,80 @@ def test_top_and_bottom_ignores_unscored_meetings() -> None:
     assert [m["id"] for m in ranked["lowest"]] == ["b", "a"]
     assert [m["id"] for m in ranked["highest"]] == ["a", "b"]
     assert all(m["id"] != "c" for m in ranked["lowest"] + ranked["highest"])
+
+
+# ─── first-name resolution (found auditing the real corpus) ───────────────────
+
+
+def _known() -> list[dict]:
+    return [
+        {"email": "matteo.vaiente@onixnet.com", "name": "Matteo Vaiente", "tracked": False},
+        {"email": "namrata.mehta@onixnet.com", "name": "Namrata Mehta", "tracked": True},
+        {"email": "shubham.gaur@onixnet.com", "name": "Shubham Gaur", "tracked": False},
+        {"email": "shubham.ashtekar@onixnet.com", "name": "Shubham Ashtekar", "tracked": False},
+    ]
+
+
+def test_a_first_name_resolves_to_the_one_person_it_names() -> None:
+    """Meeting notes refer to colleagues by first name constantly, and whole-string
+    similarity is hopeless at it: "Matteo" vs "Matteo Vaiente" scores 0.60 against a
+    0.85 threshold. Measured on the real corpus, that put most first-name mentions
+    in the review queue."""
+    from meeting_notes.models import Attendee
+    from meeting_notes.person_resolver import Roster, resolve
+
+    result = resolve(Attendee(name="Matteo"), Roster([]), known_people=_known())
+    assert result.status == "resolved"
+    assert result.email == "matteo.vaiente@onixnet.com"
+
+
+def test_an_ambiguous_first_name_stays_in_review() -> None:
+    """Two Shubhams means genuine ambiguity. Guessing between colleagues is worse
+    than asking, so it must NOT resolve."""
+    from meeting_notes.models import Attendee
+    from meeting_notes.person_resolver import Roster, resolve
+
+    result = resolve(Attendee(name="Shubham"), Roster([]), known_people=_known())
+    assert result.status == "review"
+    assert result.email is None
+
+
+def test_first_name_matching_carries_the_tracked_flag() -> None:
+    """The governance flag must come from the person who matched."""
+    from meeting_notes.models import Attendee
+    from meeting_notes.person_resolver import Roster, resolve
+
+    result = resolve(Attendee(name="Namrata"), Roster([]), known_people=_known())
+    assert result.status == "resolved"
+    assert result.tracked is True
+
+
+def test_a_full_name_is_not_rescued_by_its_first_token() -> None:
+    """Otherwise "Matteo Rossi" -- a different person -- would match
+    "Matteo Vaiente" through the given-name path."""
+    from meeting_notes.models import Attendee
+    from meeting_notes.person_resolver import Roster, resolve
+
+    result = resolve(Attendee(name="Matteo Rossi"), Roster([]), known_people=_known())
+    assert result.status == "review"
+
+
+def test_initials_are_not_treated_as_a_given_name() -> None:
+    """"TK" appears in the real corpus. Two letters is not enough to identify
+    anyone, and a wrong match here is silent."""
+    from meeting_notes.models import Attendee
+    from meeting_notes.person_resolver import Roster, resolve
+
+    known = [{"email": "tk@x.com", "name": "TK Somebody", "tracked": False}]
+    assert resolve(Attendee(name="TK"), Roster([]), known_people=known).status == "review"
+
+
+def test_an_email_still_beats_a_first_name_match() -> None:
+    """Deterministic resolution must stay ahead of probabilistic."""
+    from meeting_notes.models import Attendee
+    from meeting_notes.person_resolver import Roster, resolve
+
+    result = resolve(
+        Attendee(name="Matteo", email="someone.else@corp.com"), Roster([]), known_people=_known()
+    )
+    assert result.email == "someone.else@corp.com"

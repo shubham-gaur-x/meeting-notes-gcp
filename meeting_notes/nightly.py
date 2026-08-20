@@ -18,15 +18,24 @@ import structlog
 
 log = structlog.get_logger()
 
-STEPS: tuple[str, ...] = ("algorithms", "consolidate", "decay", "procedures")
+STEPS: tuple[str, ...] = ("reresolve", "algorithms", "consolidate", "decay", "procedures")
 
 
 async def run_step(name: str) -> Any:
     """Run one named step. Imports are local so a single step does not drag in
     every memory module."""
-    from meeting_notes import graph_algorithms
+    from meeting_notes import graph_algorithms, person_resolver
+    from meeting_notes.config import get_settings
     from meeting_notes.memory import episodic, procedural, semantic
 
+    if name == "reresolve":
+        # Runs FIRST: resolution is order-dependent, so clearing the stale part
+        # of the review queue before the algorithms means PageRank and community
+        # detection see the fuller attendance graph rather than a snapshot of
+        # what happened to be knowable at ingest time.
+        return await person_resolver.reresolve_reviews(
+            roster_path=get_settings().person_roster_path or None
+        )
     if name == "algorithms":
         return await graph_algorithms.run_full()
     if name == "consolidate":

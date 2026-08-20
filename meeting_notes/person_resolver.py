@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
@@ -47,6 +48,30 @@ def _name_sim(a: str, b: str) -> float:
     if not na or not nb:
         return 0.0
     return SequenceMatcher(None, na, nb).ratio()
+
+
+def _given_name_matches(
+    mention: str, known_people: list[dict[str, Any]]
+) -> list[tuple[str | None, str | None, bool]]:
+    """Known people whose given name equals a single-token mention.
+
+    Only fires for a one-word mention: a full name that failed fuzzy matching
+    should not be rescued by its first token, or "John Smith" would match
+    "John Doe".
+    """
+    tokens = _norm_name(mention).split()
+    if len(tokens) != 1:
+        return []
+    first = tokens[0]
+    if len(first) < 3:  # "TK", "JD" -- initials are not a given name
+        return []
+
+    out: list[tuple[str | None, str | None, bool]] = []
+    for person in known_people:
+        parts = _norm_name(person.get("name")).split()
+        if parts and parts[0] == first:
+            out.append((person.get("email"), person.get("name"), bool(person.get("tracked", False))))
+    return out
 
 
 @dataclass
@@ -162,6 +187,23 @@ def resolve(
             best[1] or name, role, best[0], "resolved", best[3], f"person-name:{best[2]:.2f}"
         )
 
+    # Unambiguous first-name match.
+    #
+    # Meeting notes refer to colleagues by first name constantly, and whole-string
+    # similarity is hopeless at it: "Matteo" vs "Matteo Vaiente" scores 0.60 against a
+    # 0.85 threshold, so EVERY first-name mention of a known person landed in the review
+    # queue. Measured on the real corpus, that was most of it.
+    #
+    # Resolves only when the mention matches exactly ONE known person's given name. Two
+    # Matteos means genuine ambiguity, and guessing between colleagues is worse than
+    # asking -- so it stays in review.
+    given = _given_name_matches(name, known_people)
+    if len(given) == 1:
+        email, full, tracked = given[0]
+        return Resolution(full or name, role, email, "resolved", tracked, "person-given-name")
+    if len(given) > 1:
+        return Resolution(name, role, None, "review", False, "ambiguous-given-name")
+
     # Give up → review. Never silently drop.
     return Resolution(name, role, None, "review", False, "no-email-no-match" if not email else "unresolved")
 
@@ -178,3 +220,80 @@ def resolve_attendees(
         r = resolve(a, roster, known_people=known_people)
         (resolved if r.status == "resolved" else reviews).append(r)
     return resolved, reviews
+
+
+async def reresolve_reviews(
+    driver: Any = None, *, roster_path: str | None = None, dry_run: bool = False
+) -> dict[str, int]:
+    """Retry the review queue against everyone the graph now knows.
+
+    Resolution is order-dependent: a meeting processed before any Person node
+    existed sends its attendees to review, and they stay there even once a
+    later meeting introduces the same person with an email. Measured on the
+    real corpus, 39% of the queue was resolvable at the time of writing.
+
+    So the queue is not a backlog of failures — it is a snapshot of what was
+    unknowable *then*. This re-runs it against what is known *now*, attaches
+    the attendee properly, and clears the review.
+
+    Unresolvable entries are left alone: they are the genuine queue, and a
+    human still needs to look at them.
+    """
+    from meeting_notes.graph_client import get_driver, get_known_people
+    from meeting_notes.models import Attendee
+    from meeting_notes.utils import uuid5_id
+
+    driver = driver or get_driver()
+    known = await get_known_people(driver)
+    roster = load_roster(roster_path)
+
+    async with driver.session() as session:
+        result = await session.run(
+            """
+            MATCH (m:Meeting)-[:NEEDS_REVIEW]->(r:PersonReview)
+            WHERE coalesce(r.status, 'pending') = 'pending'
+            RETURN r.id AS review_id, r.name AS name, r.role AS role, m.id AS meeting_id
+            """
+        )
+        pending = [dict(x) async for x in result]
+
+    resolved = 0
+    for row in pending:
+        outcome = resolve(
+            Attendee(name=row["name"], role=row["role"] or "attendee"), roster, known_people=known
+        )
+        if outcome.status != "resolved" or not outcome.email:
+            continue
+        resolved += 1
+        if dry_run:
+            continue
+
+        now = datetime.now(UTC).isoformat()
+        async with driver.session() as session:
+            await session.run(
+                """
+                MERGE (p:Person {email: $email})
+                ON CREATE SET p.created_at = $now, p.tracked = $tracked
+                SET p.name = $name, p.id = $person_id, p.updated_at = $now
+                WITH p
+                MATCH (m:Meeting {id: $meeting_id})
+                MERGE (p)-[:ATTENDED {role: $role}]->(m)
+                WITH p
+                MATCH (r:PersonReview {id: $review_id})
+                SET r.status = 'resolved', r.resolved_to = $email, r.updated_at = $now
+                """,
+                email=outcome.email,
+                name=outcome.name,
+                person_id=uuid5_id("person", outcome.email),
+                tracked=outcome.tracked,
+                role=row["role"] or "attendee",
+                meeting_id=row["meeting_id"],
+                review_id=row["review_id"],
+                now=now,
+            )
+
+    log.info(
+        "person_resolver.reresolved",
+        pending=len(pending), resolved=resolved, remaining=len(pending) - resolved,
+    )
+    return {"pending": len(pending), "resolved": resolved, "remaining": len(pending) - resolved}

@@ -61,6 +61,18 @@ class Adapter(Protocol):
         """Fallback values for null-like extractor fields (date, platform)."""
         ...
 
+    def extract_overrides(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Fields where the SOURCE is authoritative and the model is not.
+
+        A calendar event's `start` is ground truth; the model reading the
+        description and inferring a date is strictly worse. Without this, a
+        recurring series had every instance stamped with the date the
+        description happened to mention -- five "QA AI Pilot" instances spread
+        across five weeks all landed on 2026-01-13, which silently corrupts
+        timeline order and every temporal chain built from it.
+        """
+        ...
+
     def skip_score_gate(self, payload: dict[str, Any]) -> bool:
         """True when the classifier's score should not gate this record."""
         return False
@@ -91,6 +103,12 @@ class EmailAdapter:
         date = (payload.get("date") or "")[:10] or None
         return {"date": date, "platform": "email"}
 
+    def extract_overrides(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Nothing. A mail header date is when the MESSAGE was sent, which is
+        often not when the meeting it discusses happened -- so here the model
+        reading the thread genuinely can do better."""
+        return {}
+
     def skip_score_gate(self, payload: dict[str, Any]) -> bool:
         return False
 
@@ -119,9 +137,17 @@ class CalendarAdapter:
         )
 
     def extract_context(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return {"date": self._date(payload), "platform": "google_calendar"}
+
+    def extract_overrides(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """`start` is ground truth for a calendar event."""
+        date = self._date(payload)
+        return {"date": date} if date else {}
+
+    @staticmethod
+    def _date(payload: dict[str, Any]) -> str | None:
         start = payload.get("start") or ""
-        date = start[:10] if len(start) >= 10 else None
-        return {"date": date, "platform": "google_calendar"}
+        return start[:10] if len(start) >= 10 else None
 
     def skip_score_gate(self, payload: dict[str, Any]) -> bool:
         return False
@@ -148,9 +174,17 @@ class MeetAdapter:
         return _route_hint(self.router_title(payload), self.text(payload), "meet")
 
     def extract_context(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return {"date": self._date(payload), "platform": "google_meet"}
+
+    def extract_overrides(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """A conference record's start_time is ground truth."""
+        date = self._date(payload)
+        return {"date": date} if date else {}
+
+    @staticmethod
+    def _date(payload: dict[str, Any]) -> str | None:
         start = payload.get("start_time") or ""
-        date = start[:10] if len(start) >= 10 else None
-        return {"date": date, "platform": "google_meet"}
+        return start[:10] if len(start) >= 10 else None
 
     def skip_score_gate(self, payload: dict[str, Any]) -> bool:
         """A real transcript is strong signal on its own. Only the title-only
@@ -281,6 +315,11 @@ async def process(
         bound.warning("pipeline.extract_failed")
         await mark_processed(record.id)
         return PipelineResult(status="extract_failed", score=score)
+
+    # Source-authoritative fields win over whatever the model inferred.
+    overrides = adapter.extract_overrides(payload)
+    if overrides:
+        meeting = meeting.model_copy(update=overrides)
 
     bound = bound.bind(step="graph_write", meeting_title=meeting.title)
     meeting_id: str = await upsert(meeting, record.source_id)
