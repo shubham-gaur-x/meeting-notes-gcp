@@ -104,7 +104,7 @@ def test_sync_down_exports_before_it_destroys() -> None:
     runner = RecordingRunner(
         {"sql export": _ok(), "disks snapshot": _ok(), "snapshots describe": _ok("READY")}
     )
-    sync_down("personal", "proj", "proj-backups", now=FIXED, runner=runner)
+    sync_down("personal", "proj", "proj-backups", "us-central1-a", now=FIXED, runner=runner)
 
     export_at = next(i for i, c in enumerate(runner.calls) if "export" in " ".join(c))
     destroy_at = next(i for i, c in enumerate(runner.calls) if "destroy" in " ".join(c))
@@ -117,7 +117,7 @@ def test_sync_down_never_destroys_when_the_sql_export_fails() -> None:
     runner = RecordingRunner({"sql export": _fail("quota exceeded")})
 
     with pytest.raises(SyncError, match="export"):
-        sync_down("personal", "proj", "proj-backups", now=FIXED, runner=runner)
+        sync_down("personal", "proj", "proj-backups", "us-central1-a", now=FIXED, runner=runner)
 
     assert not runner.ran("destroy"), "destroy must not run after a failed export"
 
@@ -126,7 +126,7 @@ def test_sync_down_never_destroys_when_the_snapshot_fails() -> None:
     runner = RecordingRunner({"disks snapshot": _fail("disk busy")})
 
     with pytest.raises(SyncError, match="snapshot"):
-        sync_down("personal", "proj", "proj-backups", now=FIXED, runner=runner)
+        sync_down("personal", "proj", "proj-backups", "us-central1-a", now=FIXED, runner=runner)
 
     assert not runner.ran("destroy"), "destroy must not run after a failed snapshot"
 
@@ -137,9 +137,23 @@ def test_sync_down_never_destroys_when_the_export_object_is_missing() -> None:
     runner = RecordingRunner({"storage objects describe": _fail("not found")})
 
     with pytest.raises(SyncError):
-        sync_down("personal", "proj", "proj-backups", now=FIXED, runner=runner)
+        sync_down("personal", "proj", "proj-backups", "us-central1-a", now=FIXED, runner=runner)
 
     assert not runner.ran("destroy")
+
+
+def test_sync_down_passes_zone_to_the_disk_snapshot_command() -> None:
+    """`gcloud compute disks snapshot` operates on a zonal resource and 400s
+    with "Underspecified resource" without --zone — confirmed live against
+    the real CLI. `snapshots describe` right after is a global resource and
+    correctly takes no zone; this test only checks the snapshot-create call."""
+    runner = RecordingRunner(
+        {"sql export": _ok(), "disks snapshot": _ok(), "snapshots describe": _ok("READY")}
+    )
+    sync_down("personal", "proj", "proj-backups", "us-central1-a", now=FIXED, runner=runner)
+
+    snapshot_cmd = next(c for c in runner.calls if "disks" in c and "snapshot" in c)
+    assert "--zone=us-central1-a" in snapshot_cmd
 
 
 def test_sync_down_never_destroys_when_the_snapshot_is_not_ready() -> None:
@@ -149,7 +163,7 @@ def test_sync_down_never_destroys_when_the_snapshot_is_not_ready() -> None:
     runner = RecordingRunner({"snapshots describe": _ok("FAILED")})
 
     with pytest.raises(SyncError, match="READY"):
-        sync_down("personal", "proj", "proj-backups", now=FIXED, runner=runner)
+        sync_down("personal", "proj", "proj-backups", "us-central1-a", now=FIXED, runner=runner)
 
     assert not runner.ran("destroy")
 
@@ -166,10 +180,33 @@ def test_sync_up_passes_the_latest_snapshot_to_terraform() -> None:
 
 
 def test_sync_up_on_a_virgin_project_requests_an_empty_snapshot() -> None:
-    """First ever run: no snapshots, no exports. Must still succeed."""
-    runner = RecordingRunner({"snapshots list": _ok("[]"), "storage ls": _ok("")})
+    """First ever run: no snapshots, no exports. Must still succeed.
+
+    `gcloud storage ls` on a prefix with zero objects exits 1 with "One or
+    more URLs matched no objects" rather than exiting 0 with empty output —
+    confirmed against the real CLI during Phase 1's live validation, not
+    assumed. An earlier version of this test mocked exit 0, which passed
+    against the mock but failed the very first real sync-up.
+    """
+    runner = RecordingRunner(
+        {
+            "snapshots list": _ok("[]"),
+            "storage ls": _fail("One or more URLs matched no objects."),
+        }
+    )
     sync_up("personal", "proj", "proj-backups", runner=runner)
 
     apply_cmd = next(c for c in runner.calls if "apply" in " ".join(c))
     assert "memgraph_restore_snapshot=" in " ".join(apply_cmd)
     assert not runner.ran("sql import"), "nothing to import on a virgin project"
+
+
+def test_sync_up_raises_on_a_genuine_storage_ls_failure() -> None:
+    """Only the specific 'matched no objects' message is tolerated. Any other
+    storage ls failure (auth, wrong bucket, permissions) must still raise."""
+    runner = RecordingRunner(
+        {"snapshots list": _ok("[]"), "storage ls": _fail("403 Forbidden")}
+    )
+
+    with pytest.raises(SyncError, match="Cloud SQL exports"):
+        sync_up("personal", "proj", "proj-backups", runner=runner)

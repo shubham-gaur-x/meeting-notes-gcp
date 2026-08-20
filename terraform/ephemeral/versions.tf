@@ -24,4 +24,10 @@ provider "google" {
   project = var.project_id
   region  = var.region
   zone    = var.zone
+
+  # See terraform/durable/versions.tf for why this is here: user ADC
+  # credentials need an explicit quota project on some APIs, or calls fail
+  # with "requires a quota project, which is not set by default".
+  user_project_override = true
+  billing_project       = var.project_id
 }

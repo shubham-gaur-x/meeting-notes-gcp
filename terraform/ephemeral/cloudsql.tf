@@ -64,3 +64,17 @@ resource "google_sql_user" "app" {
   instance = google_sql_database_instance.postgres.name
   password = random_password.postgres.result
 }
+
+# `gcloud sql export` writes to GCS as the Cloud SQL INSTANCE's own service
+# account, not as whatever IAM identity is running the export command. That
+# identity is per-instance and re-generated every time this instance is
+# recreated (every sync-up), so this grant lives here — bound to
+# service_account_email_address — rather than as a static durable-tier
+# binding for a service account that would not survive the next teardown.
+# Discovered live: sync-down's first real run failed at the export step with
+# "service account does not have the required permissions for the bucket".
+resource "google_storage_bucket_iam_member" "cloudsql_export" {
+  bucket = data.google_storage_bucket.backups.name
+  role   = "roles/storage.objectAdmin"
+  member = "serviceAccount:${google_sql_database_instance.postgres.service_account_email_address}"
+}

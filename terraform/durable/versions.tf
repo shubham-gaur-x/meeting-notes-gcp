@@ -20,4 +20,12 @@ provider "google" {
   project = var.project_id
   region  = var.region
   zone    = var.zone
+
+  # Some APIs (billingbudgets.googleapis.com among them) reject calls made
+  # with user Application Default Credentials unless the provider explicitly
+  # attaches a quota project via the X-Goog-User-Project header. Without
+  # this, google_billing_budget fails with "requires a quota project, which
+  # is not set by default" even though ADC itself has one on record.
+  user_project_override = true
+  billing_project       = var.project_id
 }

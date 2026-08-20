@@ -125,6 +125,7 @@ def sync_down(
     env_name: str,
     project_id: str,
     bucket: str,
+    zone: str,
     *,
     now: datetime,
     runner: Runner = run,
@@ -163,13 +164,16 @@ def sync_down(
     )
     steps.append("verified the export object exists")
 
-    # 3. Snapshot the Memgraph data disk.
+    # 3. Snapshot the Memgraph data disk. `disks snapshot` operates on a zonal
+    #    resource and 400s with "Underspecified resource" without --zone —
+    #    unlike `snapshots describe` below, which is a global resource type
+    #    and takes no zone at all. Confirmed live, not assumed from docs.
     snap = snapshot_name(now)
     _require(
         runner(
             [
                 "gcloud", "compute", "disks", "snapshot", disk,
-                f"--snapshot-names={snap}", f"--project={project_id}",
+                f"--snapshot-names={snap}", f"--zone={zone}", f"--project={project_id}",
             ]
         ),
         "Memgraph disk snapshot",
@@ -246,16 +250,19 @@ def sync_up(
     steps.append("ephemeral tier is up")
 
     # 3. Find the newest Cloud SQL export and import it.
-    result = _require(
-        runner(
-            [
-                "gcloud", "storage", "ls", f"gs://{bucket}/{EXPORT_PREFIX}/",
-                f"--project={project_id}",
-            ]
-        ),
-        "listing Cloud SQL exports",
+    #
+    # `gcloud storage ls` on a prefix with zero objects exits 1 with "One or
+    # more URLs matched no objects" rather than exiting 0 with empty output —
+    # confirmed against the real CLI, not assumed. A virgin backup bucket is a
+    # legitimate first-sync-up state, so that specific message is not a
+    # failure; any other non-zero exit (auth, wrong bucket, permissions)
+    # still raises through _require.
+    ls_result = runner(
+        ["gcloud", "storage", "ls", f"gs://{bucket}/{EXPORT_PREFIX}/", f"--project={project_id}"]
     )
-    exports = sorted(line for line in result.stdout.splitlines() if line.endswith(".sql.gz"))
+    if ls_result.returncode != 0 and "matched no objects" not in ls_result.stderr:
+        _require(ls_result, "listing Cloud SQL exports")
+    exports = sorted(line for line in ls_result.stdout.splitlines() if line.endswith(".sql.gz"))
     if exports:
         instance = terraform_output("ephemeral", "cloudsql_connection_name", runner=runner)
         _require(
@@ -304,13 +311,18 @@ def main(argv: list[str] | None = None) -> int:
         print("GCP_PROJECT_ID is unset. Put it in .env — see .env.example.")
         return 1
 
+    zone = os.environ.get("GCP_ZONE", "").strip()
+    if args.direction == "down" and not zone:
+        print("GCP_ZONE is unset. Put it in .env — see .env.example.")
+        return 1
+
     bucket = f"{project_id}-backups"
 
     try:
         steps = (
             sync_up(args.env, project_id, bucket)
             if args.direction == "up"
-            else sync_down(args.env, project_id, bucket, now=datetime.now(UTC))
+            else sync_down(args.env, project_id, bucket, zone, now=datetime.now(UTC))
         )
     except SyncError as exc:
         print(f"\n  sync {args.direction} FAILED: {exc}\n")

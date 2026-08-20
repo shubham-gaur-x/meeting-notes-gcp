@@ -5,6 +5,14 @@
 # depends on. Leaving an API enabled costs nothing.
 locals {
   required_apis = [
+    # Needed for data.google_project lookups (budget.tf resolves the project
+    # number for the budget filter). Discovered live: not obvious up front
+    # because most resources don't need it directly, only this one data source.
+    "cloudresourcemanager.googleapis.com",
+    # Needed for the service accounts in iam.tf. Discovered live: creating a
+    # service account can succeed even while this is disabled, but a later
+    # read/refresh of that same resource then 403s — enable it up front.
+    "iam.googleapis.com",
     "compute.googleapis.com",
     "sqladmin.googleapis.com",
     "artifactregistry.googleapis.com",
