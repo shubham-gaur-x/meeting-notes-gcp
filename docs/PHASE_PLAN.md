@@ -504,7 +504,64 @@ proved it holds at real scale.
 
 ---
 
-## Phase 7 — Graph intelligence 🟩
+## Phase 7 — Graph intelligence ✅ DONE (2026-08-20)
+
+**All four exit criteria met against the real 95-meeting graph.**
+
+**Community detection does not collapse to singletons** — the criterion that motivated the
+whole "check v5's git history" task. v5's `51bad50` recorded the failure: `community_leiden()`
+at MAGE's default `objective_function="CPM"` produced **308/308 communities of size 1**,
+silently corrupting every insight query. v6 calls `community_leiden("modularity")`:
+
+| pass | communities | singletons | largest |
+|---|---|---|---|
+| Louvain (fast, per-meeting) | 35 | **0** | 61, 41, 36, 30, 14, 10 |
+| Leiden (full, nightly) | 36 | **0** | 49, 39, 36, 30, 19, 10 |
+
+All five algorithms reported `ok` in both passes.
+
+**Semantic search returns sensible results with zero keyword overlap.** 95 meetings embedded
+with real `text-embedding-005` vectors. Querying *"getting a big telecoms customer started on
+a new engagement"* returns the Verizon GE Enablement meetings at 0.625/0.610/0.599 — the word
+"telecoms" appears nowhere in the corpus, and the third hit shares **no words at all** with
+the query. Scores sit well above the ~0.43 noise floor.
+
+**A natural-language question answered from real graph data.** *"What is happening with the
+Verizon engagement?"* → prose citing the August 14 SOW walkthrough and the August 17 deck
+meeting, grounded in 5 node ids. Asked what was *decided* about the SOW, it states what is
+known and explicitly flags what is not, rather than filling the gap. (The
+`POST /graph/memory/query` **endpoint** is Phase 8; this proves the function behind it.)
+
+**Fast algorithms run per meeting, full algorithms nightly** — `pipeline.enrich()` and
+`jobs/nightly.py --step`.
+
+**Phase 4's deferred check is now closed:** `text-embedding-005` verified live at **768
+dimensions**, matching both vector indexes and `embedding_dimension`.
+
+**A latent v5 bug found and fixed.** v5's `dcbb2d2` normalised the Topic MERGE key on the
+write side and in `get_topic_graph`, but never touched `semantic_memory.py` — which still
+matched `Topic {name: $topic}` with the raw-cased topic off the extractor. Any topic
+containing capitals matched zero rows and **`INTERESTED_IN` silently never formed**. Confirmed
+against real data: all 61 stored Topic names are lowercase while the extractor emits
+"Budget Planning". Same shape as MIGRATION bug #1.
+
+**Also carried across:** the per-CALL retry from `51bad50` for Memgraph's transient
+`Cannot resolve conflicting transactions`, and MAGE availability **verified** — all 8
+procedures present on `memgraph-mage:3.11.0` (307 total), the tag Terraform pins for the VM.
+
+**Three module boundaries are now enforced by test**, each verified to catch a deliberate
+violation: MAGE `CALL` syntax outside `graph_algorithms.py`, `MemorySession` **writes** outside
+`memory/episodic.py`, and `pipeline.py` importing `retrieval`. Each matches syntax rather than
+prose — earlier drafts flagged their own docstrings.
+
+**On reading the PageRank output:** `PHASE_PLAN` warned that v5's graph is 73% standups and its
+algorithm output is distorted accordingly. v6's is real Onix email and calendar data across
+many meeting types, so it does not inherit that skew — but it is one user's mailbox, which is
+its own bias.
+
+---
+
+### Original plan
 
 **Port:** `graph_algorithms.py` · `memory/semantic.py` · `memory/episodic.py` ·
 `memory/procedural.py` · `memory/vector.py` · `memory/retrieval.py` · `jobs/nightly.py`
