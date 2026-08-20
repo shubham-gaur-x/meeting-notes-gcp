@@ -25,7 +25,7 @@ _FIELDS = ["summary", "description", "status", "assignee", "reporter", "updated"
 
 
 class JiraSource:
-    source_type = "jira_issue"
+    source_type = "jira"
 
     def __init__(
         self,

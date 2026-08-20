@@ -37,7 +37,7 @@ def event_time(slot: dict[str, Any] | None) -> str:
 
 
 class CalendarSource:
-    source_type = "calendar_event"
+    source_type = "calendar"
 
     def __init__(
         self,

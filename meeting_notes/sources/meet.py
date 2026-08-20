@@ -81,7 +81,7 @@ def entries_to_text(entries: list[dict[str, Any]]) -> str:
 
 
 class MeetSource:
-    source_type = "meet_transcript"
+    source_type = "meet"
 
     def __init__(
         self,

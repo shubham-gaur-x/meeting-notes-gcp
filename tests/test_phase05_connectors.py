@@ -678,3 +678,99 @@ async def test_a_malformed_event_is_still_acked_so_it_cannot_block_forever() -> 
 
     assert records == []
     assert acked == ["bad-1"], "a permanently-malformed event would block the subscription"
+
+
+# ─── cross-cutting invariants ─────────────────────────────────────────────────
+
+from pathlib import Path as _Path  # noqa: E402
+
+from meeting_notes.models import SourceType  # noqa: E402
+from meeting_notes.sources.calendar import CalendarSource as _Cal  # noqa: E402
+from meeting_notes.sources.gmail import GmailSource as _Gmail  # noqa: E402
+from meeting_notes.sources.jira import JiraSource as _Jira  # noqa: E402
+from meeting_notes.sources.meet import MeetSource as _Meet  # noqa: E402
+
+
+def test_every_source_uses_a_canonical_source_type() -> None:
+    """Caught a real bug: the connectors initially invented `calendar_event`,
+    `jira_issue` and `meet_transcript`, none of which are in SourceType. The
+    pipeline would not have recognised a single staged row in Phase 6, and
+    nothing would have failed loudly — the rows would just sit unprocessed.
+    """
+    import typing
+
+    allowed = set(typing.get_args(SourceType))
+    for cls in (_Gmail, _Cal, _Jira, _Meet):
+        assert cls.source_type in allowed, (
+            f"{cls.__name__}.source_type={cls.source_type!r} is not one of {sorted(allowed)}"
+        )
+
+
+def test_every_source_type_has_exactly_one_connector() -> None:
+    """A duplicate would make two connectors fight over one watermark."""
+    types = [cls.source_type for cls in (_Gmail, _Cal, _Jira, _Meet)]
+    assert len(types) == len(set(types)), f"duplicate source_type among connectors: {types}"
+
+
+def test_job_entrypoints_stay_thin() -> None:
+    """CLAUDE.md: jobs/ contains entrypoints only; past ~50 lines the logic
+    belongs in the package. That rule erodes silently, so it gets a test."""
+    jobs_dir = _Path(__file__).resolve().parent.parent / "jobs"
+    for job in jobs_dir.glob("*.py"):
+        lines = [ln for ln in job.read_text().splitlines() if ln.strip()]
+        assert len(lines) <= 50, f"{job.name} has {len(lines)} lines — move logic into the package"
+
+
+def test_job_entrypoints_do_not_contain_business_logic() -> None:
+    """A thin job wires; it does not branch, loop, or query."""
+    jobs_dir = _Path(__file__).resolve().parent.parent / "jobs"
+    banned = ("httpx", "asyncpg", "SELECT ", "MERGE ", "for ", "while ")
+    for job in jobs_dir.glob("*.py"):
+        body = job.read_text()
+        for token in banned:
+            assert token not in body, f"{job.name} contains {token!r} — that belongs in the package"
+
+
+# ─── token health (exit criterion: visible alert, not silent failure) ─────────
+
+from meeting_notes import token_health  # noqa: E402
+
+
+async def test_a_healthy_token_reports_ok() -> None:
+    async def ok(url: str, data: dict) -> tuple[int, str]:
+        return 200, json.dumps({"access_token": "at", "expires_in": 3599})
+
+    health = await token_health.check(_google_settings(), transport=ok)
+    assert health.healthy is True
+
+
+async def test_a_dead_token_reports_unhealthy_with_a_remediation() -> None:
+    async def expired(url: str, data: dict) -> tuple[int, str]:
+        return 400, json.dumps({"error": "invalid_grant"})
+
+    health = await token_health.check(_google_settings(), transport=expired)
+    assert health.healthy is False
+    assert health.remediation and "auth-spike" in health.remediation
+
+
+def test_the_alert_is_impossible_to_miss() -> None:
+    """A quiet log line is how a 7-day expiry becomes a three-week outage."""
+    rendered = token_health.render(
+        token_health.TokenHealth(False, "refresh token rejected", "run make auth-spike")
+    )
+    assert "INGESTION IS STOPPED" in rendered
+    assert "make auth-spike" in rendered
+
+
+def test_a_healthy_render_stays_quiet() -> None:
+    rendered = token_health.render(token_health.TokenHealth(True, "valid"))
+    assert "!!" not in rendered
+
+
+async def test_the_token_value_never_reaches_the_health_report() -> None:
+    async def expired(url: str, data: dict) -> tuple[int, str]:
+        return 400, json.dumps({"error": "invalid_grant"})
+
+    health = await token_health.check(_google_settings(), transport=expired)
+    blob = token_health.render(health) + health.detail + (health.remediation or "")
+    assert "leakcanary" not in blob
