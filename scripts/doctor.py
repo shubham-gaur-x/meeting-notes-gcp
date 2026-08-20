@@ -262,6 +262,47 @@ def check_tfvars(
     )
 
 
+def _ephemeral_tier_is_up() -> bool:
+    """True if the Cloud SQL instance or the Memgraph VM currently exists.
+
+    Reads Terraform state rather than calling gcloud: state is the authority on
+    what this project created, and it answers without network round-trips to
+    two separate APIs.
+    """
+    try:
+        completed = subprocess.run(
+            ["terraform", "-chdir=terraform/ephemeral", "state", "list"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return completed.returncode == 0 and bool(completed.stdout.strip())
+
+
+def check_ephemeral_tier(
+    probe: Callable[[], bool] = _ephemeral_tier_is_up,
+) -> CheckResult:
+    """Report whether the billable tier is currently running (ADR-016).
+
+    Both answers are legitimate — up is correct during a sync session, down is
+    correct the rest of the month — so this is never a FAIL. It exists because
+    the expensive mistake is a sync-down that was skipped or failed, and
+    nothing else in the system would tell you.
+    """
+    name = "ephemeral tier (Cloud SQL + Memgraph VM)"
+    if not probe():
+        return CheckResult(name, Status.PASS, "down — costing $0")
+    return CheckResult(
+        name,
+        Status.WARN,
+        "UP — roughly $58/month while it stays up",
+        "Expected during a sync session. When you are done: make sync-down",
+    )
+
+
 # ─── orchestration ────────────────────────────────────────────────────────────
 
 
@@ -286,6 +327,7 @@ def run_checks(tier: int, env: Mapping[str, str], *, env_name: str = "personal")
             secret_status(env, "GOOGLE_OAUTH_CLIENT_SECRET"),
             check_token_age(),
             check_tfvars(env_name),
+            check_ephemeral_tier(),
         ]
         if (env.get("JIRA_ENABLED") or "").strip().lower() == "true":
             results += [

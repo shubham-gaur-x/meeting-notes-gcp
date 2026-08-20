@@ -16,6 +16,7 @@ from scripts.doctor import (
     build_parser,
     check_command,
     check_docker_daemon,
+    check_ephemeral_tier,
     check_llm_backend,
     check_port_free,
     check_python_version,
@@ -266,6 +267,21 @@ def test_tfvars_absent_points_at_the_example() -> None:
     assert result.status is Status.FAIL
     assert result.remediation is not None
     assert "example" in result.remediation
+
+
+def test_ephemeral_tier_down_is_a_pass() -> None:
+    """Torn down is the correct resting state under ADR-016."""
+    result = check_ephemeral_tier(probe=lambda: False)
+    assert result.status is Status.PASS
+    assert "$0" in result.detail
+
+
+def test_ephemeral_tier_up_warns_with_the_burn_rate() -> None:
+    """Up is normal DURING a session, so this is a WARN, never a FAIL — but it
+    must name the cost, because the failure mode is forgetting to tear down."""
+    result = check_ephemeral_tier(probe=lambda: True)
+    assert result.status is Status.WARN
+    assert "sync-down" in (result.remediation or "")
 
 
 # ─── orchestration and CLI ────────────────────────────────────────────────────
