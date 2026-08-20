@@ -1,9 +1,9 @@
 {
   "pyproject.toml": {
-    "mtime": 1787210726.8319497,
-    "seen": 1787219616.6118321,
-    "ast_hash": "5420be041b5b16a07debd74bf70ea36a",
-    "semantic_hash": "5420be041b5b16a07debd74bf70ea36a"
+    "mtime": 1787244339.3778903,
+    "seen": 1787245025.5538602,
+    "ast_hash": "cc4f539aa5c8dc7f1fee69fdcef03f2b",
+    "semantic_hash": "cc4f539aa5c8dc7f1fee69fdcef03f2b"
   },
   "scripts/__init__.py": {
     "mtime": 1786657789.4204366,
@@ -62,10 +62,10 @@
     "semantic_hash": "b6b5d1217aa2791584d038d2fc50a2fb"
   },
   "docs/PHASE_PLAN.md": {
-    "mtime": 1787211144.8461056,
-    "seen": 1787219616.6118531,
-    "ast_hash": "34bd09f013cdb6dd986a4779c937cdec",
-    "semantic_hash": "34bd09f013cdb6dd986a4779c937cdec"
+    "mtime": 1787244935.5840611,
+    "seen": 1787245025.553887,
+    "ast_hash": "5fd4f78f97630aa8d524f338603c0457",
+    "semantic_hash": "5fd4f78f97630aa8d524f338603c0457"
   },
   "docs/superpowers/plans/2026-08-13-phase-0.5-auth-spike.md": {
     "mtime": 1786657064.1348739,
@@ -281,10 +281,10 @@
     "semantic_hash": "0c18f171848fbd461e914191089e0cc2"
   },
   "meeting_notes/config.py": {
-    "mtime": 1787210566.922038,
-    "seen": 1787219616.611825,
-    "ast_hash": "10e1b88e04731c90b8dc358c0c5f3dce",
-    "semantic_hash": "10e1b88e04731c90b8dc358c0c5f3dce"
+    "mtime": 1787244187.9060614,
+    "seen": 1787245025.5538502,
+    "ast_hash": "e26463dc3ac3b46b72f8bc004a7e2272",
+    "semantic_hash": "e26463dc3ac3b46b72f8bc004a7e2272"
   },
   "meeting_notes/dedup.py": {
     "mtime": 1787207957.0575647,
@@ -363,5 +363,77 @@
     "seen": 1787219616.611854,
     "ast_hash": "14a142bbedd029aa02e904b55a6d0ff4",
     "semantic_hash": "14a142bbedd029aa02e904b55a6d0ff4"
+  },
+  "meeting_notes/extractor.py": {
+    "mtime": 1787244339.3192575,
+    "seen": 1787245025.553854,
+    "ast_hash": "7d78cb7dbb9248a2571287aaa10b7c4b",
+    "semantic_hash": "7d78cb7dbb9248a2571287aaa10b7c4b"
+  },
+  "meeting_notes/llm_client.py": {
+    "mtime": 1787244259.8813932,
+    "seen": 1787245025.553856,
+    "ast_hash": "bdb92c5ae2b1c21514d46f5d0b5d3b36",
+    "semantic_hash": "bdb92c5ae2b1c21514d46f5d0b5d3b36"
+  },
+  "meeting_notes/prompts.py": {
+    "mtime": 1787244405.7090454,
+    "seen": 1787245025.553859,
+    "ast_hash": "a798c1bed01f986aa59a7e10ac2d92c2",
+    "semantic_hash": "a798c1bed01f986aa59a7e10ac2d92c2"
+  },
+  "sample_data/llm_fixtures/6f3b031d4cebe95fef1a3e3656edf95b.json": {
+    "mtime": 1787244840.7004223,
+    "seen": 1787245025.5538611,
+    "ast_hash": "c93329109672fef941d523b723e25342",
+    "semantic_hash": "c93329109672fef941d523b723e25342"
+  },
+  "sample_data/llm_fixtures/c62e663c4e0ee1d5e09326d68a461cff.json": {
+    "mtime": 1787244821.4709985,
+    "seen": 1787245025.5538611,
+    "ast_hash": "48cc153da4620f38472c1073d644316f",
+    "semantic_hash": "48cc153da4620f38472c1073d644316f"
+  },
+  "sample_data/llm_fixtures/e2be7ca8d7c5f20be0d3e759963cfcef.json": {
+    "mtime": 1787244832.0822868,
+    "seen": 1787245025.5538619,
+    "ast_hash": "646f64bce1f1192e255ba853c7669416",
+    "semantic_hash": "646f64bce1f1192e255ba853c7669416"
+  },
+  "sample_data/meetings/01-standup.json": {
+    "mtime": 1787244469.0168386,
+    "seen": 1787245025.5538628,
+    "ast_hash": "47e9694b3d96ed217c5305f8031936c7",
+    "semantic_hash": "47e9694b3d96ed217c5305f8031936c7"
+  },
+  "sample_data/meetings/02-planning.json": {
+    "mtime": 1787244469.0324693,
+    "seen": 1787245025.5538628,
+    "ast_hash": "235e3679635f6df54289a9833a6db03e",
+    "semantic_hash": "235e3679635f6df54289a9833a6db03e"
+  },
+  "sample_data/meetings/03-email-thread.json": {
+    "mtime": 1787244469.0471158,
+    "seen": 1787245025.553864,
+    "ast_hash": "99024f199e12f095788323233e2a3486",
+    "semantic_hash": "99024f199e12f095788323233e2a3486"
+  },
+  "scripts/record_fixtures.py": {
+    "mtime": 1787244515.4000347,
+    "seen": 1787245025.553866,
+    "ast_hash": "a6672e8acda7c991d88a2bb88a4ccc6f",
+    "semantic_hash": "a6672e8acda7c991d88a2bb88a4ccc6f"
+  },
+  "tests/test_phase04_llm_seam.py": {
+    "mtime": 1787244548.4434361,
+    "seen": 1787245025.553885,
+    "ast_hash": "79037792f9a371085cb145e9bec0daf3",
+    "semantic_hash": "79037792f9a371085cb145e9bec0daf3"
+  },
+  "docs/superpowers/plans/2026-08-20-phase-4-llm-seam.md": {
+    "mtime": 1787244103.4426808,
+    "seen": 1787245025.553888,
+    "ast_hash": "515e21cd2304bd1cdc0dbfd2dd0884a4",
+    "semantic_hash": "515e21cd2304bd1cdc0dbfd2dd0884a4"
   }
 }
