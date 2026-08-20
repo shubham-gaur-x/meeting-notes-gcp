@@ -311,3 +311,152 @@ async def test_a_correct_length_embedding_passes_through() -> None:
 
     vector = await embed("text", settings=_lmstudio_settings(), transport=right)
     assert vector is not None and len(vector) == 768
+
+
+# ─── extractor ────────────────────────────────────────────────────────────────
+
+from meeting_notes.extractor import (  # noqa: E402
+    _SYSTEM_PROMPT,
+    _is_null_like,
+    build_system_prompt,
+    extract_meeting,
+    repair,
+)
+
+V5_EXTRACTOR = Path.home() / "Desktop/airbyte-lm-studio-memgraph/transform_service/extractor.py"
+
+
+def test_the_system_prompt_is_v5s_verbatim() -> None:
+    """It is tuned. Diffing it against v5's file is the entire point.
+
+    A well-meaning reword should fail here rather than quietly degrade every
+    extraction in a way nobody notices until the graph looks wrong.
+    """
+    if not V5_EXTRACTOR.exists():
+        pytest.skip("v5 reference repo not present on this machine")
+
+    import re
+
+    match = re.search(r'_SYSTEM_PROMPT = """(.*?)"""', V5_EXTRACTOR.read_text(), re.S)
+    assert match, "could not locate v5's _SYSTEM_PROMPT"
+    assert _SYSTEM_PROMPT == match.group(1), "the prompt has drifted from v5's"
+
+
+def test_prompt_still_states_the_is_engineering_task_rule() -> None:
+    """A load-bearing sentence: it gates which action items dev_agent may pick
+    up in v2, so losing it silently changes downstream behaviour."""
+    assert "is_engineering_task is true only if" in _SYSTEM_PROMPT
+
+
+# ─── the literal "null" bug (MIGRATION_FROM_V5.md #4) ─────────────────────────
+
+
+def test_literal_string_null_is_treated_as_null() -> None:
+    """gemma3-12b emits the literal string "null" for optional fields. A plain
+    `if not value` misses it: "null" is a non-empty string, therefore truthy."""
+    for value in (None, "", "null", "NULL", " none ", "n/a", "N/A", "  "):
+        assert _is_null_like(value) is True, f"{value!r} should be null-like"
+
+
+def test_real_values_are_not_treated_as_null() -> None:
+    for value in ("meeting", "Google Meet", "2026-08-20", "0"):
+        assert _is_null_like(value) is False, f"{value!r} should NOT be null-like"
+
+
+def test_a_null_string_platform_is_replaced_from_context() -> None:
+    """The exact live failure: platform came back as "null" and validation blew up."""
+    repaired = repair({"platform": "null"}, context={"platform": "Google Meet"})
+    assert repaired["platform"] == "Google Meet"
+
+
+def test_a_null_string_date_falls_back_rather_than_failing_validation() -> None:
+    repaired = repair({"date": "null"}, context={"date": "2026-08-20"})
+    assert repaired["date"] == "2026-08-20"
+
+
+def test_summary_falls_back_to_the_title() -> None:
+    repaired = repair({"summary": "null", "title": "Weekly sync"})
+    assert repaired["summary"] == "Weekly sync"
+
+
+def test_action_items_with_null_owner_are_repaired_not_dropped() -> None:
+    """A nameless task is still a real task — dropping it loses information."""
+    repaired = repair({"action_items": [{"owner": "null", "task": "null"}]})
+    item = repaired["action_items"][0]
+    assert item["owner"] == "Unknown"
+    assert item["task"] == "Follow-up required"
+    assert item["is_engineering_task"] is False
+    assert item["confidence"] == 1.0
+
+
+def test_repair_leaves_good_data_alone() -> None:
+    original = {
+        "platform": "Zoom",
+        "date": "2026-08-20",
+        "summary": "a real summary",
+        "action_items": [{"owner": "alice@corp.com", "task": "ship it", "confidence": 0.8}],
+    }
+    repaired = repair(dict(original), context={"platform": "SHOULD NOT BE USED"})
+    assert repaired["platform"] == "Zoom"
+    assert repaired["action_items"][0]["confidence"] == 0.8
+
+
+# ─── prompt assembly and the end-to-end path ──────────────────────────────────
+
+
+def test_type_hint_is_appended_to_the_system_prompt() -> None:
+    """meeting_type_router's hint must actually reach the model, or routing is
+    decorative."""
+    assembled = build_system_prompt("Standups are terse; expect many small items.")
+    assert assembled.startswith(_SYSTEM_PROMPT)
+    assert "Standups are terse" in assembled
+
+
+def test_no_type_hint_leaves_the_prompt_untouched() -> None:
+    assert build_system_prompt(None) == _SYSTEM_PROMPT
+
+
+async def test_extract_meeting_produces_a_valid_meeting_from_a_fixture(tmp_path: Path) -> None:
+    """The exit criterion, on the fake backend: a recorded response in, a
+    validated ExtractedMeeting out."""
+    settings = _fake_settings(tmp_path)
+    system = build_system_prompt(None)
+    user = "Extract meeting information from this email:\n\nsome text"
+    _record(
+        tmp_path, system, user,
+        {
+            "title": "Budget sync", "kind": "meeting", "platform": "null",
+            "date": "null", "summary": "null",
+            "action_items": [{"owner": "null", "task": "null"}],
+        },
+    )
+
+    meeting = await extract_meeting("some text", "email", context={"platform": "Google Meet"},
+                                    settings=settings)
+
+    assert meeting is not None
+    assert meeting.title == "Budget sync"
+    assert meeting.platform == "Google Meet", "the literal 'null' should have been repaired"
+    assert meeting.action_items[0].owner == "Unknown"
+
+
+async def test_a_parse_failure_returns_none_rather_than_raising() -> None:
+    """The pipeline marks the record processed and moves on; it must not crash
+    the whole drain because one model reply was malformed."""
+    async def garbage(url: str, payload: dict, headers: dict) -> str:
+        return json.dumps({"choices": [{"message": {"content": "not json"}}]})
+
+    result = await extract_meeting("text", "email", settings=_lmstudio_settings(),
+                                   transport=garbage)
+    assert result is None
+
+
+async def test_validation_failure_returns_none_rather_than_raising() -> None:
+    """Unrepairable output is still not a crash."""
+    async def wrong_shape(url: str, payload: dict, headers: dict) -> str:
+        inner = json.dumps({"title": None, "kind": {"nested": "garbage"}})
+        return json.dumps({"choices": [{"message": {"content": inner}}]})
+
+    result = await extract_meeting("text", "email", settings=_lmstudio_settings(),
+                                   transport=wrong_shape)
+    assert result is None

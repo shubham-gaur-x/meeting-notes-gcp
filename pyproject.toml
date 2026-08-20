@@ -69,6 +69,13 @@ target-version = "py311"
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "ASYNC"]
 
+[tool.ruff.lint.per-file-ignores]
+# The extraction prompt is carried from v5 byte for byte and contains lines
+# over the limit. Reflowing tuned prompt text to satisfy a linter is not a
+# trade worth making, so E501 is waived for that ONE data-only module rather
+# than for extractor.py, where real code still has to comply.
+"meeting_notes/prompts.py" = ["E501"]
+
 [tool.mypy]
 python_version = "3.11"
 warn_return_any = true
