@@ -172,6 +172,57 @@ def adapter_for(source_type: str) -> Adapter:
         raise ValueError(f"no pipeline adapter for source_type {source_type!r}") from None
 
 
+async def enrich(
+    meeting: ExtractedMeeting,
+    meeting_id: str,
+    *,
+    settings: Settings | None = None,
+    enrich_fn: Any = None,
+) -> dict[str, Any]:
+    """Graph enrichment, run after the meeting is safely committed.
+
+    **Best-effort by design.** The graph write has already committed by the
+    time this runs, so a failing embedding or LLM call must never roll back or
+    fail a correctly-stored meeting. Every step is caught individually: one
+    failing layer does not skip the others, and the record is still marked
+    processed either way.
+
+    Deliberately does NOT import `memory.retrieval` — retrieval is query-time
+    only (CLAUDE.md), and calling it here would put an LLM synthesis call on
+    the ingestion path.
+    """
+    if enrich_fn is not None:
+        result: dict[str, Any] = await enrich_fn(meeting, meeting_id)
+        return result
+
+    from meeting_notes import graph_algorithms
+    from meeting_notes.memory import episodic, procedural, semantic, vector
+
+    emails = [a.email for a in meeting.attendees if a.email]
+    outcome: dict[str, Any] = {}
+
+    steps: list[tuple[str, Any]] = [
+        ("facts", lambda: semantic.extract_facts(meeting, meeting_id, settings=settings)),
+        ("relationships", lambda: semantic.strengthen_relationships(meeting, meeting_id)),
+        ("temporal", lambda: episodic.link_temporal_chain(meeting_id, str(meeting.date), emails)),
+        ("causality", lambda: episodic.detect_causality(meeting, meeting_id, settings=settings)),
+        ("procedures", lambda: procedural.match_to_procedure(meeting, meeting_id)),
+        ("embed_meeting", lambda: vector.embed_meeting(meeting_id, meeting.summary, settings=settings)),
+        ("embed_actions", lambda: vector.embed_action_items_for_meeting(meeting_id, settings=settings)),
+        ("algorithms", lambda: graph_algorithms.run_fast()),
+    ]
+
+    for name, step in steps:
+        try:
+            outcome[name] = await step()
+        except Exception as exc:  # noqa: BLE001 - enrichment never fails the record
+            log.warning("pipeline.enrich_step_failed", enrich_step=name, error=str(exc))
+            outcome[name] = None
+
+    log.info("pipeline.enriched", meeting_id=meeting_id, steps=list(outcome))
+    return outcome
+
+
 async def process(
     record: StagedRecord,
     adapter: Adapter,
@@ -181,6 +232,7 @@ async def process(
     push_jira: Any = None,
     mark_processed: Any = None,
     transport: Any = None,
+    enrich_fn: Any = None,
 ) -> PipelineResult:
     """classify -> route -> extract -> graph write -> push to Jira.
 
@@ -235,6 +287,15 @@ async def process(
 
     bound = bound.bind(step="jira_push")
     await push_jira(meeting.action_items, meeting, record.source_id)
+
+    bound = bound.bind(step="enrich")
+    try:
+        await enrich(meeting, meeting_id, settings=settings, enrich_fn=enrich_fn)
+    except Exception as exc:  # noqa: BLE001
+        # The graph write above has already committed. Enrichment failing --
+        # for any reason, including an injected one -- must never turn a
+        # correctly-stored meeting into a failed record.
+        bound.warning("pipeline.enrich_failed", error=str(exc))
 
     await mark_processed(record.id)
     bound.info("pipeline.processed", score=round(score, 3), meeting_id=meeting_id)

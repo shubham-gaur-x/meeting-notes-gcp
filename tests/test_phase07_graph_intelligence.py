@@ -622,13 +622,20 @@ def test_pipeline_never_imports_retrieval() -> None:
     Retrieval is query-time only; importing it into the pipeline would put an
     LLM synthesis call on the ingestion path.
     """
+    import re
     from pathlib import Path
 
     import meeting_notes.pipeline as pipeline_module
 
     source = Path(pipeline_module.__file__).read_text()
-    assert "memory.retrieval" not in source
-    assert "import retrieval" not in source
+    # An actual import statement, not the word in a comment explaining why it
+    # is absent -- an earlier draft matched this module's own docstring.
+    importing = re.compile(
+        r"^\s*(from\s+[\w.]*memory[\w.]*\s+import\s+[^\n]*\bretrieval\b"
+        r"|import\s+[\w.]*\bretrieval\b)",
+        re.M,
+    )
+    assert not importing.search(source), "pipeline.py imports retrieval"
 
 
 async def test_an_untracked_person_yields_no_profile() -> None:
@@ -743,3 +750,113 @@ async def test_synthesis_failure_degrades_rather_than_raising() -> None:
         "anything?", driver=FakeDriver(session), chat=half_broken_chat, log_session=False
     )
     assert result["answer"] == retrieval.NO_CONTEXT_ANSWER
+
+
+# ─── pipeline enrichment ──────────────────────────────────────────────────────
+
+from meeting_notes import pipeline  # noqa: E402
+from meeting_notes.models import StagedRecord  # noqa: E402
+
+
+def _record() -> StagedRecord:
+    """A Meet transcript: it skips the classifier gate by design, so this
+    fixture exercises the enrichment path without depending on hand-tuned
+    text clearing an arbitrary score threshold."""
+    return StagedRecord(
+        id="r1", source_id="s1", source_type="meet",
+        payload={"title": "Budget planning sync",
+                 "text": "We agreed the Q4 budget and assigned follow-ups.",
+                 "start_time": "2026-08-20T10:00:00Z"},
+        fetched_at="2026-08-20T00:00:00Z", processed=False,
+    )
+
+
+async def _noop_upsert(meeting, source_id):
+    return "m1"
+
+
+async def _noop_push(actions, meeting, source_id):
+    return None
+
+
+async def test_a_failing_enrichment_still_leaves_the_record_processed() -> None:
+    """The graph write has already committed by the time enrichment runs, so a
+    failing embedding must never fail a correctly-stored meeting."""
+    marked: list[str] = []
+
+    async def mark(record_id):
+        marked.append(record_id)
+
+    async def exploding_enrich(meeting, meeting_id):
+        raise RuntimeError("embedding service down")
+
+    async def fake_extract(*a, **kw):
+        return _meeting(summary="we agreed the budget")
+
+    original = pipeline.extractor.extract_meeting
+    pipeline.extractor.extract_meeting = fake_extract  # type: ignore[assignment]
+    try:
+        result = await pipeline.process(
+            _record(), pipeline.adapter_for("meet"),
+            upsert=_noop_upsert, push_jira=_noop_push, mark_processed=mark,
+            enrich_fn=exploding_enrich,
+        )
+    finally:
+        pipeline.extractor.extract_meeting = original  # type: ignore[assignment]
+
+    assert result.status == "processed", "enrichment failure must not change the outcome"
+    assert marked == ["r1"], "the record must still be marked processed"
+
+
+async def test_one_failing_enrichment_layer_does_not_skip_the_others() -> None:
+    """Caught individually: a broken causality call must not cost us the
+    embeddings that would have run after it."""
+    ran: list[str] = []
+
+    class Boom:
+        def __getattr__(self, name):
+            raise RuntimeError("layer down")
+
+    async def ok(*a, **kw):
+        ran.append("ok")
+        return 1
+
+    # Exercise the real enrich() with a mixture of working and failing steps by
+    # patching the modules it imports.
+    import meeting_notes.memory.semantic as sem
+
+    original = sem.extract_facts
+    sem.extract_facts = ok  # type: ignore[assignment]
+    try:
+        outcome = await pipeline.enrich(_meeting(), "m1")
+    finally:
+        sem.extract_facts = original  # type: ignore[assignment]
+
+    # Every step appears in the outcome, whether it succeeded or was caught.
+    assert set(outcome) >= {"facts", "relationships", "temporal", "causality",
+                            "procedures", "embed_meeting", "embed_actions", "algorithms"}
+
+
+async def test_enrichment_is_skipped_for_a_low_score_record() -> None:
+    """No point embedding something the classifier already rejected."""
+    called: list[str] = []
+
+    async def counting_enrich(meeting, meeting_id):
+        called.append(meeting_id)
+
+    async def mark(record_id):
+        return None
+
+    record = StagedRecord(
+        id="r2", source_id="s2", source_type="email",
+        payload={"subject": "lunch", "body": "anyone want lunch", "from": "a@x.com", "to": "b@x.com"},
+        fetched_at="2026-08-20T00:00:00Z", processed=False,
+    )
+    result = await pipeline.process(
+        record, pipeline.adapter_for("email"),
+        upsert=_noop_upsert, push_jira=_noop_push, mark_processed=mark,
+        enrich_fn=counting_enrich,
+    )
+
+    assert result.status == "skipped_low_score"
+    assert called == [], "a rejected record must not be enriched"
