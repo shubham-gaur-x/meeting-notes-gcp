@@ -383,7 +383,48 @@ Phase 7 algorithms that key off meeting type.
 
 ---
 
-## Phase 5 — Connectors 🟩🟦
+## Phase 5 — Connectors ✅ DONE (2026-08-20)
+
+**All four exit criteria met against the real Onix account.**
+
+| Criterion | Result |
+|---|---|
+| Each connector fetches real data and stages rows | **50 emails + 100 calendar events** staged |
+| Re-running stages no duplicates | Gmail `staged 0`; Calendar `staged 0, skipped 100` |
+| An expired token produces a visible alert | Corrupted token → `INGESTION IS STOPPED`, exit 1 |
+| All connector tests mocked, no live credentials | 317 tests, no network |
+
+Jira and Meet are clean no-ops when unconfigured, as designed — tiers 0 and 1 run the whole
+pipeline without either.
+
+**Verified against local Postgres rather than Cloud SQL, deliberately.** The connectors need
+the real *Google* APIs, not Cloud SQL; ADR-015 guarantees the same queries run unmodified
+against both, and Phase 3 already proved the Cloud SQL path. This avoided a ~12-minute
+billable `sync-up` for no additional evidence.
+
+**Two bugs found by running it, invisible to review and to the mocked suite:**
+
+1. **Calendar 410 Gone.** `updatedMin` outside Calendar's incremental window is rejected, so
+   without a fallback the connector breaks permanently after its **first successful run** —
+   ingestion stops at exactly the point it starts working. Now falls back to a full sync, per
+   Google's documented remedy. The 410 proved **intermittent** (an immediate re-run got a 200
+   for the same `updatedMin`), which makes the fallback more valuable, not less.
+2. **No path from the auth spike to the connectors.** `google_auth` read only
+   `GOOGLE_REFRESH_TOKEN`, but Phase 0.5 writes to `token.json`. Settings still win — that is
+   what Cloud Run injects — with `token.json` as the local fallback.
+
+**A third bug was caught by mypy before it ever ran:** the connectors had invented
+`calendar_event` / `jira_issue` / `meet_transcript`, none of which are in `SourceType`. Phase
+6's pipeline would not have recognised a single staged row, and nothing would have failed
+loudly — the rows would simply sit unprocessed. Now locked down by a test.
+
+**What was actually a port:** only `jira_client.py` and `meet.py`. v5's `TranscriptSource`
+shares a name with `sources/base.py` but not a concept — it read rows *already staged*,
+because Airbyte did the fetching. Gmail, Calendar and the Jira source are new code.
+
+---
+
+### Original plan
 
 The only genuinely new code in the project.
 
