@@ -1,37 +1,56 @@
-# Graph Report - meeting-notes-gcp  (2026-08-19)
+# Graph Report - meeting-notes-gcp  (2026-08-20)
 
 ## Corpus Check
-- 10 files · ~49,683 words
+- 17 files · ~64,628 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 522 nodes · 1084 edges · 36 communities (26 shown, 10 thin omitted)
-- Extraction: 90% EXTRACTED · 10% INFERRED · 0% AMBIGUOUS · INFERRED: 111 edges (avg confidence: 0.91)
-- Token cost: 121,071 input · 0 output
+- 823 nodes · 1602 edges · 59 communities (44 shown, 15 thin omitted)
+- Extraction: 92% EXTRACTED · 8% INFERRED · 0% AMBIGUOUS · INFERRED: 123 edges (avg confidence: 0.9)
+- Token cost: 120,823 input · 0 output
 
 ## Community Hubs (Navigation)
-- Doctor & Secret-Handling Contract
-- sync.py Orchestration
+- Doctor & Reproducibility Contract
 - Durable Terraform Resources
 - Ephemeral Terraform Resources
+- Meeting Quality Scoring
 - Project Governance & Schema
-- PKCE & API Probes
-- Durable/Ephemeral Cost Model
-- Airbyte & Scheduler Removal
+- Person Resolution
+- Pydantic Models & StagedRecord
+- Access Control Policy
+- Shared Utils
+- PKCE & OAuth Client
+- Sync Restore Pairing
+- Sync Safety Tests
+- ADR Log & Rearchitecture
+- Meet Transcripts & Auth Spike
+- Phase Plan & Phase 2 Outcome
+- Classifier Gate
+- Action Item Dedup
+- sync.py CLI
+- Typed Settings Seam
+- Coding Conventions & v5 Bugs
 - Token Store & Env Loading
-- Hand-rolled OAuth Flow
-- Phase 1 Live Validation (ADR-017)
+- Rejected Backends
+- Logging & Retry Helpers
+- Meeting Type Router
 - Token Expiry Reporting
 - LLM Config & Local Stack
-- Meet Transcripts & Spike Entry
-- Reproducibility Contract
-- Swappable LLM Backend Seam
+- Durable/Ephemeral Cost Model
+- Injected Command Runner
 - Loopback Callback Server
-- Auth Risks & Onix Split
-- Rejected Backends & Export SA Bug
-- OAuth Scopes & Consent URL
+- SyncError Contract
+- Swappable LLM Backend Seam
+- Pipeline Path Consolidation
 - Callback Request Handler
+- OAuth Scopes & Consent
+- Deterministic Node Ids
+- Memgraph Bootstrap Wait
+- Auth Risks & Onix Split
+- Vocabulary Collision Pins
+- Cypher Scope Filter
 - Backup Verified Before Destroy
+- Package Init
 - State Bucket Bootstrap
 - Memgraph VM Bootstrap
 - Deferred v2 Agents
@@ -39,7 +58,11 @@
 - Dataflow Rejection
 - Leiden Fragmentation Bug
 - Porting Order
+- Phase 7 — Graph Intelligence
+- Phase 9 — Hardening
+- Quota Project Troubleshooting
 - Project Identity
+- RuntimeError
 - ArgumentParser
 - datetime
 
@@ -47,146 +70,219 @@
 1. `Status` - 36 edges
 2. `CheckResult` - 22 edges
 3. `Phase 0.6 reproducibility implementation plan` - 20 edges
-4. `run_checks()` - 19 edges
-5. `Phase 0.5 auth spike implementation plan` - 19 edges
-6. `sync_down()` - 19 edges
-7. `ADR-016 — Ephemeral compute, durable storage: the system is up only when syncing` - 15 edges
-8. `check_token_age()` - 14 edges
-9. `_mock_client()` - 14 edges
-10. `doctor.py check contract` - 14 edges
+4. `RecordingRunner` - 20 edges
+5. `run_checks()` - 19 edges
+6. `Phase 0.5 auth spike implementation plan` - 19 edges
+7. `sync_down()` - 19 edges
+8. `Principal` - 17 edges
+9. `sync_up()` - 16 edges
+10. `authorize()` - 15 edges
 
 ## Surprising Connections (you probably didn't know these)
-- `Phase 0.5 auth runbook` --references--> `probe_calendar()`  [INFERRED]
-  docs/GOOGLE_AUTH.md → scripts/auth_spike.py
-- `Phase 0.5 auth runbook` --references--> `probe_gmail()`  [INFERRED]
+- `Secret handling rules` --conceptually_related_to--> `render_report()`  [INFERRED]
   docs/GOOGLE_AUTH.md → scripts/auth_spike.py
 - `Meet transcripts via Workspace Events` --conceptually_related_to--> `probe_meet()`  [INFERRED]
   docs/GOOGLE_AUTH.md → scripts/auth_spike.py
-- `Phase 0.5 auth runbook` --references--> `probe_meet()`  [INFERRED]
+- `Loopback redirect and prompt=consent` --implements--> `start_callback_server()`  [INFERRED]
   docs/GOOGLE_AUTH.md → scripts/auth_spike.py
-- `Secret handling rules` --conceptually_related_to--> `render_report()`  [INFERRED]
+- `Phase 0.5 auth runbook` --references--> `save_token()`  [INFERRED]
   docs/GOOGLE_AUTH.md → scripts/auth_spike.py
+- `doctor.py check contract` --implements--> `CheckResult`  [INFERRED]
+  docs/superpowers/specs/2026-08-13-clone-and-run-design.md → scripts/doctor.py
 
 ## Import Cycles
 - None detected.
 
 ## Hyperedges (group relationships)
-- **Phase 1 live validation cycle: markers, timings, bugs, safety property** — docs_decisions_adr017, docs_phase_plan_phase1_outcome, docs_decisions_marker_record_proof, docs_decisions_measured_sync_up_duration, docs_decisions_four_live_discovered_bugs, docs_decisions_orphan_export [EXTRACTED 1.00]
-- **Sync session lifecycle: ephemeral tier up, work, backed-up teardown** — docs_decisions_ephemeral_tier, docs_decisions_durable_tier, docs_decisions_sync_up, docs_decisions_sync_down, docs_setup_iap_tunnel, docs_decisions_seven_day_refresh_token_expiry [EXTRACTED 1.00]
-- **Three-tier reproducibility contract realised across docs and tooling** — docs_decisions_adr013, docs_decisions_adr014, docs_decisions_adr015, docs_setup_tier0, docs_setup_tier1, docs_setup_tier2, docs_setup_doctor, docs_phase_plan_phase06 [EXTRACTED 1.00]
+- **One staging table gives one claiming query and one drain path** — docs_decisions_adr018, docs_decisions_staged_record_table, docs_decisions_adr006, docs_decisions_adr010, docs_decisions_per_source_adapter [EXTRACTED 1.00]
+- **Phase 2 DONE: green suite, AST-verified config rule, governance bug fixed, two deferrals** — docs_phase_plan_phase2, docs_phase_plan_phase2_187_tests_green, docs_phase_plan_ast_verification_of_config_only_env_reader, docs_phase_plan_person_resolver_tracked_governance_bug, docs_phase_plan_deferred_person_resolution_upsert, docs_phase_plan_deferred_score_all_meetings [EXTRACTED 1.00]
+- **ADR-011's config rule enforced by two refactors and an AST check** — docs_decisions_adr011, docs_phase_plan_load_roster_explicit_path, docs_phase_plan_load_policy_explicit_path, docs_phase_plan_ast_verification_of_config_only_env_reader, docs_superpowers_plans_2026_08_20_phase_2_pure_core_scripts_env_exception [EXTRACTED 1.00]
+- **Sync session lifecycle: ephemeral tier up, work, backed-up teardown** — docs_setup_iap_tunnel [EXTRACTED 1.00]
 - **Three-tier reproducibility contract** — docs_superpowers_specs_2026_08_13_clone_and_run_design_three_tier_contract, scripts_doctor_run_checks, docker_compose_local_postgres_service [EXTRACTED 1.00]
 - **Removal of Airbyte and APScheduler — the core v5→v6 rearchitecture** — docs_decisions_adr005, docs_decisions_adr007, docs_architecture_apscheduler_removal, docs_architecture_airbyte_removal [INFERRED 0.85]
 - **Ephemeral sync-up/sync-down lifecycle** — docs_decisions_adr016, docs_phase_plan_phase1, docs_setup_tier2, docs_superpowers_plans_2026_08_19_phase_1_terraform_foundation_sync_py [INFERRED 0.85]
 
-## Communities (36 total, 10 thin omitted)
+## Communities (59 total, 15 thin omitted)
 
-### Community 0 - "Doctor & Secret-Handling Contract"
-Cohesion: 0.07
-Nodes (80): Secret handling rules, No-secrets-in-output guarantee (spike), doctor exit code contract, Injected-probe check design, Leak-canary secret test, Phase 0.6 reproducibility implementation plan, doctor.py check contract, The three-tier contract (+72 more)
+### Community 0 - "Doctor & Reproducibility Contract"
+Cohesion: 0.06
+Nodes (83): graphify maintenance discipline, Secret handling rules, Standing exit criterion for Phases 1–9, No-secrets-in-output guarantee (spike), doctor exit code contract, Injected-probe check design, Leak-canary secret test, Phase 0.6 reproducibility implementation plan (+75 more)
 
-### Community 1 - "sync.py Orchestration"
-Cohesion: 0.07
-Nodes (59): ArgumentParser, datetime, Runner, RuntimeError, backup_uri(), build_parser(), export_object_name(), main() (+51 more)
-
-### Community 2 - "Durable Terraform Resources"
+### Community 1 - "Durable Terraform Resources"
 Cohesion: 0.06
 Nodes (49): data.google_project.this, google_artifact_registry_repository.images, google_billing_budget.monthly, google_compute_firewall.allow_iap, google_compute_firewall.allow_internal, google_compute_network.vpc, google_compute_subnetwork.subnet, google_monitoring_notification_channel.budget_email (+41 more)
 
-### Community 3 - "Ephemeral Terraform Resources"
+### Community 2 - "Ephemeral Terraform Resources"
 Cohesion: 0.09
 Nodes (34): data.google_compute_network.vpc, data.google_compute_subnetwork.subnet, data.google_service_account.memgraph, data.google_storage_bucket.backups, google_compute_disk.memgraph_data, google_compute_instance.memgraph, google_sql_database_instance.postgres, google_sql_database.meeting_memory (+26 more)
 
+### Community 3 - "Meeting Quality Scoring"
+Cohesion: 0.07
+Nodes (35): composite_quality(), compute_quality(), _per_hour(), percentile_rank(), Any, Phase 31 — meeting quality scoring. The graph doesn't just remember meetings,…, Weighted mean over AVAILABLE (non-None) components, weights renormalized.…, Pure: turn one meeting's raw features into components + composite. ``features``… (+27 more)
+
 ### Community 4 - "Project Governance & Schema"
 Cohesion: 0.07
-Nodes (36): Intent-to-skill map, Project context digest for agents, Absolute rules, Coding conventions, Personal-then-Onix deployment context, Property graph schema, meeting-notes-gcp v6, Module boundaries (+28 more)
+Nodes (34): Intent-to-skill map, Project context digest for agents, Absolute rules, Personal-then-Onix deployment context, Property graph schema, meeting-notes-gcp v6, Module boundaries, Person.tracked governance gate (+26 more)
 
-### Community 5 - "PKCE & API Probes"
-Cohesion: 0.13
-Nodes (25): Request, load_client_credentials(), pkce_pair(), probe_gmail(), Read the OAuth client id and secret, or explain exactly what's missing., Return a (code_verifier, code_challenge) pair using S256., _mock_client(), AsyncClient (+17 more)
+### Community 5 - "Person Resolution"
+Cohesion: 0.11
+Nodes (30): Attendee, load_roster(), _name_sim(), _norm_name(), normalize_email(), Any, P3 entity resolution: resolve extracted attendees to canonical people. Two…, Resolve one attendee (anything with .name/.email/.role) to a canonical… (+22 more)
 
-### Community 6 - "Durable/Ephemeral Cost Model"
+### Community 6 - "Pydantic Models & StagedRecord"
+Cohesion: 0.08
+Nodes (31): BaseModel, field_validator, ActionItem, Decision, ExtractedMeeting, Any, Pydantic models — extraction shapes and the single staging shape. Ported from…, One staged row from any source. `payload` is opaque here on purpose: a per-… (+23 more)
+
+### Community 7 - "Access Control Policy"
 Cohesion: 0.14
-Nodes (18): Durable resource tier, Ephemeral resource tier, GCP resource inventory (§4), ADR-011 — config.py is the only reader of os.environ, ADR-016 — Ephemeral compute, durable storage: the system is up only when syncing, Bug 1 — google provider needs user_project_override + billing_project, Durable resource tier (bucket, secrets, registry, Pub/Sub, IAM, budget alert), Stopping instead of destroying does not work (+10 more)
+Nodes (31): AccessDenied, aggregates_only(), authorize(), load_policy(), parse_scope(), Principal, RuntimeError, Phase 33 (core) — principal → scope access policy. Design stance: hierarchy… (+23 more)
 
-### Community 7 - "Airbyte & Scheduler Removal"
-Cohesion: 0.16
-Nodes (16): Airbyte removed (§2.1), APScheduler removed → Cloud Scheduler + Cloud Run Jobs (§2.2), Concurrency, idempotency, exactly-once (§6), ADR-001 — Fresh repository, deliberate port, ADR-005 — Replace APScheduler with Cloud Scheduler + Cloud Run Jobs, ADR-006 — Claim rows with SELECT ... FOR UPDATE SKIP LOCKED, ADR-007 — Build our own connectors; remove Airbyte, ADR-008 — Defer dev_agent and action_agent to v2, ship provenance schema in v1 (+8 more)
+### Community 8 - "Shared Utils"
+Cohesion: 0.09
+Nodes (29): cosine(), extract_ticket_keys(), Return de-duplicated Jira ticket keys found in free text, order-preserving., Local models often wrap JSON responses in ```json ... ``` fences despite being…, strip_json_fences(), Phase 2 — the pure core. No I/O, no network, no database. Every test here runs…, Local models wrap JSON in ```json fences despite being told not to. Found by…, MIGRATION_FROM_V5.md §4 — Airbyte residue must not be ported. (+21 more)
 
-### Community 8 - "Token Store & Env Loading"
+### Community 9 - "PKCE & OAuth Client"
+Cohesion: 0.13
+Nodes (22): Request, load_client_credentials(), pkce_pair(), Read the OAuth client id and secret, or explain exactly what's missing., Return a (code_verifier, code_challenge) pair using S256., _mock_client(), AsyncClient, Response (+14 more)
+
+### Community 10 - "Sync Restore Pairing"
+Cohesion: 0.12
+Nodes (22): backup_uri(), Choose the export and snapshot to restore the ephemeral tier from. `sync_down`…, Name of the most recent item, or None if there are none. None is a legitimate…, RestorePlan, select_latest(), select_restore_pair(), Phase 1 — sync lifecycle. See docs/DECISIONS.md ADR-016. Every test runs with…, The bug this exists to prevent. A sync-down that writes its export and then… (+14 more)
+
+### Community 11 - "Sync Safety Tests"
+Cohesion: 0.13
+Nodes (19): _ok(), CompletedProcess, `gcloud compute disks snapshot` operates on a zonal resource and 400s with…, `gcloud compute disks snapshot` exits 0 as soon as the snapshot is created,…, First ever run: no snapshots, no exports. Must still succeed. `gcloud storage…, End-to-end: the orphan export must not reach `gcloud sql import`., A VM that never finishes bootstrapping is a real problem, but the tier IS up…, sync-up must not announce the tier is serving before it is. (+11 more)
+
+### Community 12 - "ADR Log & Rearchitecture"
+Cohesion: 0.11
+Nodes (21): Airbyte removed (§2.1), APScheduler removed → Cloud Scheduler + Cloud Run Jobs (§2.2), Concurrency, idempotency, exactly-once (§6), Decision Log (ADR index), ADR-001 Fresh repository, deliberate port, ADR-005 Cloud Scheduler + Cloud Run Jobs replace APScheduler, ADR-006 Claim rows with SELECT FOR UPDATE SKIP LOCKED, ADR-007 Build our own connectors, remove Airbyte (+13 more)
+
+### Community 13 - "Meet Transcripts & Auth Spike"
+Cohesion: 0.25
+Nodes (18): Meet transcripts via Workspace Events, Phase 0.5 auth runbook, Meet: reachable vs transcripts-present, Namespace, build_parser(), _consent(), main(), _probe() (+10 more)
+
+### Community 14 - "Phase Plan & Phase 2 Outcome"
+Cohesion: 0.18
+Nodes (18): Phase Plan (build order), AST verification that config.py is the package's only env reader, Deferred to Phase 3: person resolution into the graph, Deferred to Phase 3: meeting_quality.score_all_meetings, Four plan assumptions corrected by reading v5 first, access_control.load_policy takes an explicit path, person_resolver.load_roster takes an explicit path, v5 governance bug: Person.tracked read off a leaked loop variable (+10 more)
+
+### Community 15 - "Classifier Gate"
+Cohesion: 0.11
+Nodes (17): classify(), Any, Rules-based "is this worth processing" score. No LLM. Ported from v5…, Two or more noise markers return 0.0 immediately, before any positive signal is…, The gate is >= 2. One stray 'unsubscribe' in a genuine thread is not enough to…, CLASSIFIER_SCORE_THRESHOLD defaults to 0.40., Every signal is individually capped and the total is clamped. Without the clamp…, Signal 7: a record with real calendar times is more likely a meeting. (+9 more)
+
+### Community 16 - "Action Item Dedup"
+Cohesion: 0.13
+Nodes (17): best_match(), _norm(), Any, P5 dedup decision: is a new action item a duplicate of an existing open one?…, Return the best candidate above ``threshold`` (with its ``score``), or None., similarity(), Dedup must still work when embeddings are unavailable — the text path is the…, Identical text but orthogonal embeddings must score by the embedding —… (+9 more)
+
+### Community 17 - "sync.py CLI"
+Cohesion: 0.18
+Nodes (16): ArgumentParser, datetime, build_parser(), export_object_name(), main(), Compact UTC timestamp. Lowercase so it is legal in a GCE resource name, and…, GCS object path for a Cloud SQL export., GCE snapshot name for the Memgraph data disk. Must match… (+8 more)
+
+### Community 18 - "Typed Settings Seam"
+Cohesion: 0.12
+Nodes (16): BaseSettings, get_settings(), Typed settings — the ONLY module in this package that reads os.environ. Every…, Process-wide settings. Cached so the .env file is read once. Tests should…, Settings, Settings must be constructible from an explicit dict so tests never depend on…, A clone with no .env at all must default to the offline backend — that is what…, Both Memgraph vector indexes are built for 768. Changing this without migrating… (+8 more)
+
+### Community 19 - "Coding Conventions & v5 Bugs"
+Cohesion: 0.17
+Nodes (16): Coding conventions, Never pass event= to structlog, Bug 3: structlog reserved kwarg, Hand-rolled OAuth over httpx, Phase 0.5 auth spike implementation plan, _error_of(), exchange_code(), Response (+8 more)
+
+### Community 20 - "Token Store & Env Loading"
 Cohesion: 0.18
 Nodes (16): MonkeyPatch, load_env_file(), load_token(), Path, Write the token 0600.      The mode is set at open time. A write-then-chmod woul, Load a stored token, or None if there isn't one., Load .env into os.environ if it exists. Returns whether a file was found.      A, save_token() (+8 more)
 
-### Community 9 - "Hand-rolled OAuth Flow"
-Cohesion: 0.17
-Nodes (15): Hand-rolled OAuth over httpx, Phase 0.5 auth spike implementation plan, build_parser(), _error_of(), exchange_code(), main(), ArgumentParser, Response (+7 more)
+### Community 21 - "Rejected Backends"
+Cohesion: 0.13
+Nodes (15): BigQuery as the staging layer — rejected, GKE Autopilot from day one — deferred, Spanner Graph instead of Memgraph — rejected, ADR-003 Keep Memgraph, reject Spanner Graph, ADR-004 Memgraph on GCE VM first, GKE later, ADR-008 Defer dev_agent and action_agent, ship provenance schema in v1, Phase 8 — API and dashboard, v2 deferred scope (dev_agent, action_agent, push notifications, GKE) (+7 more)
 
-### Community 10 - "Phase 1 Live Validation (ADR-017)"
-Cohesion: 0.25
-Nodes (14): ADR-017 — Phase 1 validated live: the sync lifecycle works, and costs ~11 minutes to start, Backup-before-destroy guarantee, Bug 4 — gcloud storage ls exits 1 on an empty prefix, Bug 2 — cloudresourcemanager and iam APIs missing from required list, Cloud SQL provisioning is the sync-up long pole, A fake-backend fixture miss raises, Four bugs found by running the full cycle that review missed, Marker-record proof of data survival across teardown (+6 more)
+### Community 22 - "Logging & Retry Helpers"
+Cohesion: 0.14
+Nodes (13): BoundLogger, date, F, configure_logging(), priority_from_due(), Shared helpers with no I/O: deterministic ids, retries, logging, parsing.…, Map a due date to a Jira priority. No due date is 'low', not 'medium'., Retry an async callable with exponential backoff. Async only — the wrapper… (+5 more)
 
-### Community 11 - "Token Expiry Reporting"
+### Community 23 - "Meeting Type Router"
+Cohesion: 0.14
+Nodes (13): prompt_hint(), P6 meeting-type routing: a cheap classifier between classify() and…, Return the meeting type for `title`/`text`. Email sources are always…, Return the type-specific instruction appended to the extractor system prompt., route(), Source type wins over any keyword in the subject., Order matters: 'session' lives in review's keywords and would otherwise swallow…, Everything except the deliberate `general` no-op must actually say something,… (+5 more)
+
+### Community 24 - "Token Expiry Reporting"
 Cohesion: 0.19
 Nodes (11): A refresh token plus the metadata needed to reason about its expiry., Render the human-readable outcome.      Carries every fact the Phase 0.5 outcome, render_report(), StoredToken, The single most important test in this file. docs/GOOGLE_AUTH.md §7., test_age_and_expiry_math(), test_report_distinguishes_reachable_from_transcripts_present(), test_report_never_contains_the_token() (+3 more)
 
-### Community 12 - "LLM Config & Local Stack"
+### Community 25 - "LLM Config & Local Stack"
 Cohesion: 0.22
 Nodes (13): 768-dimensional embedding invariant, Environment variable surface, LLM configuration seam, Pinned image tags taken from v5, Memgraph Lab service, Local memgraph-mage service, Local Postgres 15 service, Bug 4: literal 'null' strings from the LLM (+5 more)
 
-### Community 13 - "Meet Transcripts & Spike Entry"
-Cohesion: 0.36
-Nodes (12): Meet transcripts via Workspace Events, Meet: reachable vs transcripts-present, Namespace, _consent(), _probe(), probe_calendar(), probe_meet(), ProbeResult (+4 more)
+### Community 26 - "Durable/Ephemeral Cost Model"
+Cohesion: 0.19
+Nodes (12): Durable resource tier, Ephemeral resource tier, GCP resource inventory (§4), ADR-016 Ephemeral compute, durable storage, ADR-017 Phase 1 validated live, sync lifecycle works, Phase 1 — Terraform foundation (DONE), Measured sync timings in the tier-2 walkthrough, terraform/durable module (+4 more)
 
-### Community 14 - "Reproducibility Contract"
-Cohesion: 0.24
-Nodes (12): graphify maintenance discipline, ADR-013 — Three-tier reproducibility contract with a permanently manual OAuth console step, ADR-015 — db.py selects its connection mode on configuration, Phase 0.6 — Reproducibility skeleton, Standing exit criterion — Phases 1 through 9, make doctor — tier-aware preflight, IAP tunnel to Memgraph Bolt, sync-up session start (~11 min) (+4 more)
+### Community 27 - "Injected Command Runner"
+Cohesion: 0.22
+Nodes (13): Runner, CompletedProcess, Default runner. Captures output so failures can be reported with context., Raise unless the command succeeded. Every destructive step in sync_down is…, Back up, verify the backup, then destroy the ephemeral tier. Ordering is a…, Recreate the ephemeral tier, restoring the newest matched backup pair., _require(), run() (+5 more)
 
-### Community 15 - "Swappable LLM Backend Seam"
-Cohesion: 0.21
-Nodes (12): LM Studio becomes one of two LLM backends (§2.3), 768-dimensional embeddings in every backend, ADR-002 — Vertex AI Gemini as default LLM behind a swappable seam, ADR-014 — A fake LLM backend replaying fixtures, and a gemini backend for tier 1, llm_client.py single-protocol backend seam, OAuth console step accepted as permanently manual, Durable-tier one-time apply, The part nobody can automate — OAuth console setup (+4 more)
-
-### Community 16 - "Loopback Callback Server"
+### Community 28 - "Loopback Callback Server"
 Cohesion: 0.24
 Nodes (12): Ephemeral-port loopback callback server, HTTPServer, CallbackServer, An HTTPServer that captures a single OAuth callback., Bind an ephemeral loopback port and return the server and its redirect URI., Block until the callback arrives, then validate it and return the code., start_callback_server(), wait_for_code() (+4 more)
 
-### Community 17 - "Auth Risks & Onix Split"
-Cohesion: 0.25
-Nodes (11): Known risks (§8), ADR-009 — Personal GCP project now, Onix Workspace data throughout, ADR-012 — Phase 0.5 auth spike passed, no admin allowlisting needed, 7-day refresh token expiry (External + Testing OAuth client), Phase 0 — Documentation (DONE), Phase 0.5 — Auth spike (DONE 2026-08-19), Phase 10 — Onix migration, Phase 9 — Hardening and demo (+3 more)
+### Community 29 - "SyncError Contract"
+Cohesion: 0.24
+Nodes (11): RuntimeError, A sync step failed. Raised rather than returned so no caller can accidentally…, SyncError, _fail(), The single most important test in this file. A failed export followed by a…, gcloud sql export can exit 0 having written nothing usable. Verify the object,…, Only the specific 'matched no objects' message is tolerated. Any other storage…, test_sync_down_never_destroys_when_the_export_object_is_missing() (+3 more)
 
-### Community 18 - "Rejected Backends & Export SA Bug"
-Cohesion: 0.22
-Nodes (9): BigQuery as the staging layer — rejected, GKE Autopilot from day one — deferred, Spanner Graph instead of Memgraph — rejected, ADR-003 — Keep Memgraph; reject Spanner Graph, ADR-004 — Memgraph on a GCE VM first, GKE later, Bug 3 — gcloud sql export writes as the instance's own service account, Ephemeral resource tier (Cloud SQL instance + Memgraph VM and disk), Phase 7 — Graph intelligence (+1 more)
+### Community 30 - "Swappable LLM Backend Seam"
+Cohesion: 0.31
+Nodes (10): LM Studio becomes one of two LLM backends (§2.3), ADR-002 Vertex AI Gemini default behind a swappable seam, ADR-011 config.py is the only reader of os.environ, ADR-013 Three-tier reproducibility contract, ADR-014 fake fixture-replay backend and gemini tier-1 backend, ADR-015 db.py selects connection mode on configuration, Phase 0.6 — Reproducibility skeleton, Phase 4 — LLM seam (+2 more)
 
-### Community 19 - "OAuth Scopes & Consent URL"
-Cohesion: 0.36
-Nodes (8): Loopback redirect and prompt=consent, Phase 0.5 auth runbook, The four minimal OAuth scopes, PKCE S256 authorization-code flow, build_auth_url(), Build the Google consent URL.      access_type=offline and prompt=consent are bo, test_auth_url_carries_offline_and_consent(), test_auth_url_requests_exactly_the_four_scopes()
+### Community 31 - "Pipeline Path Consolidation"
+Cohesion: 0.24
+Nodes (10): ADR-010 Collapse three pipeline paths into one, Phase 6 — Pipeline, Durable-tier one-time apply, The part nobody can automate — OAuth console setup, Tier 0 — local, no credentials, Tier 1 — real LLM, Tier 2 — deploy to your own GCP, Troubleshooting — Error 401 invalid_client during consent (+2 more)
 
-### Community 20 - "Callback Request Handler"
+### Community 32 - "Callback Request Handler"
 Cohesion: 0.29
 Nodes (4): BaseHTTPRequestHandler, _CallbackHandler, CallbackResult, Silence the default stderr access log.          It would echo the query string,
 
-### Community 21 - "Backup Verified Before Destroy"
+### Community 33 - "OAuth Scopes & Consent"
+Cohesion: 0.38
+Nodes (7): Loopback redirect and prompt=consent, The four minimal OAuth scopes, PKCE S256 authorization-code flow, build_auth_url(), Build the Google consent URL.      access_type=offline and prompt=consent are bo, test_auth_url_carries_offline_and_consent(), test_auth_url_requests_exactly_the_four_scopes()
+
+### Community 34 - "Deterministic Node Ids"
+Cohesion: 0.29
+Nodes (7): Deterministic id for a node. Two-step on purpose: derive a per-namespace UUID…, uuid5_id(), The whole MERGE-not-CREATE strategy rests on this. Same input, same id, forever…, Pinned against v5's exact construction: a uuid5 of the namespace string under…, test_uuid5_id_is_deterministic(), test_uuid5_id_matches_the_value_v5_produces(), test_uuid5_id_separates_namespaces()
+
+### Community 35 - "Memgraph Bootstrap Wait"
+Cohesion: 0.29
+Nodes (7): Block until the Memgraph stack is actually serving, or give up. Terraform…, wait_for_memgraph(), terraform reports the VM ready as soon as the API says RUNNING, which is well…, The console is not readable in the first seconds after boot. A failed read is…, test_wait_for_memgraph_polls_until_the_marker_shows_up(), test_wait_for_memgraph_returns_when_the_marker_appears(), test_wait_for_memgraph_tolerates_a_failing_serial_console_read()
+
+### Community 36 - "Auth Risks & Onix Split"
+Cohesion: 0.33
+Nodes (6): Known risks (§8), ADR-009 Personal GCP project, Onix Workspace data, ADR-012 Phase 0.5 auth spike passed, Phase 0.5 — Auth spike (DONE), Phase 10 — Onix migration, Troubleshooting — consent succeeds but API calls 403
+
+### Community 37 - "Vocabulary Collision Pins"
+Cohesion: 0.50
+Nodes (4): ExtractedMeeting.kind vs router.TYPES vocabulary collision, Task 2 — utils.py port with uuid5_id pinned, Task 5 — meeting_type_router.py, vocabularies pinned apart, uuid5_id byte-identical pinning against v5
+
+### Community 38 - "Cypher Scope Filter"
+Cohesion: 0.50
+Nodes (4): Property filter that ``memgraph_client`` injects into generated Cypher. Returns…, scope_predicate(), This dict is injected into generated Cypher — an empty dict for org is…, test_scope_predicate_filters_team_and_project_but_not_org()
+
+### Community 39 - "Backup Verified Before Destroy"
 Cohesion: 0.67
 Nodes (3): Export/snapshot verification before destroy, sync_down(), SyncError exception
 
 ## Knowledge Gaps
-- **30 isolated node(s):** `tf_bootstrap.sh script`, `startup.sh script`, `var.cloudsql_tier`, `var.memgraph_disk_gb`, `var.memgraph_image` (+25 more)
+- **41 isolated node(s):** `var.cloudsql_tier`, `var.memgraph_disk_gb`, `var.memgraph_image`, `var.memgraph_machine`, `var.memgraph_restore_snapshot` (+36 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **10 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **15 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `Phase 0.6 reproducibility implementation plan` connect `Doctor & Secret-Handling Contract` to `LLM Config & Local Stack`, `Project Governance & Schema`, `Reproducibility Contract`?**
-  _High betweenness centrality (0.219) - this node is a cross-community bridge._
-- **Why does `Standing exit criterion — Phases 1 through 9` connect `Reproducibility Contract` to `Doctor & Secret-Handling Contract`, `Durable/Ephemeral Cost Model`?**
-  _High betweenness centrality (0.181) - this node is a cross-community bridge._
-- **Why does `Phase 0.5 auth spike implementation plan` connect `Hand-rolled OAuth Flow` to `Doctor & Secret-Handling Contract`, `Project Governance & Schema`, `PKCE & API Probes`, `Token Store & Env Loading`, `Token Expiry Reporting`, `Meet Transcripts & Spike Entry`, `OAuth Scopes & Consent URL`?**
-  _High betweenness centrality (0.113) - this node is a cross-community bridge._
+- **Why does `Phase 0.6 reproducibility implementation plan` connect `Doctor & Reproducibility Contract` to `LLM Config & Local Stack`, `Coding Conventions & v5 Bugs`?**
+  _High betweenness centrality (0.179) - this node is a cross-community bridge._
+- **Why does `Standing exit criterion for Phases 1–9` connect `Doctor & Reproducibility Contract` to `Swappable LLM Backend Seam`?**
+  _High betweenness centrality (0.149) - this node is a cross-community bridge._
+- **Why does `ADR-013 Three-tier reproducibility contract` connect `Swappable LLM Backend Seam` to `Doctor & Reproducibility Contract`, `Rejected Backends`, `Pipeline Path Consolidation`?**
+  _High betweenness centrality (0.149) - this node is a cross-community bridge._
 - **Are the 32 inferred relationships involving `Status` (e.g. with `doctor.py check contract` and `test_blank_secret_counts_as_unset()`) actually correct?**
   _`Status` has 32 INFERRED edges - model-reasoned connections that need verification._
-- **What connects `tf_bootstrap.sh script`, `startup.sh script`, `var.cloudsql_tier` to the rest of the system?**
-  _30 weakly-connected nodes found - possible documentation gaps or missing edges._
-- **Should `Doctor & Secret-Handling Contract` be split into smaller, more focused modules?**
-  _Cohesion score 0.06610644257703081 - nodes in this community are weakly interconnected._
-- **Should `sync.py Orchestration` be split into smaller, more focused modules?**
-  _Cohesion score 0.07192460317460317 - nodes in this community are weakly interconnected._
+- **What connects `var.cloudsql_tier`, `var.memgraph_disk_gb`, `var.memgraph_image` to the rest of the system?**
+  _41 weakly-connected nodes found - possible documentation gaps or missing edges._
+- **Should `Doctor & Reproducibility Contract` be split into smaller, more focused modules?**
+  _Cohesion score 0.06269592476489028 - nodes in this community are weakly interconnected._
+- **Should `Durable Terraform Resources` be split into smaller, more focused modules?**
+  _Cohesion score 0.06271186440677966 - nodes in this community are weakly interconnected._

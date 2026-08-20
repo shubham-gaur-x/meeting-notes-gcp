@@ -46,10 +46,10 @@
     "semantic_hash": "630d81f18712d6b5dc6c46b223aa79b4"
   },
   "docs/DECISIONS.md": {
-    "mtime": 1787201819.415166,
-    "seen": 1787202512.7472079,
-    "ast_hash": "2cec89050b11a24c7cdb58022179a15c",
-    "semantic_hash": "2cec89050b11a24c7cdb58022179a15c"
+    "mtime": 1787205545.2912881,
+    "seen": 1787209888.920053,
+    "ast_hash": "64f6f3c97076c3447081e2df41ca0670",
+    "semantic_hash": "64f6f3c97076c3447081e2df41ca0670"
   },
   "docs/GOOGLE_AUTH.md": {
     "mtime": 1786658000.1731567,
@@ -62,10 +62,10 @@
     "semantic_hash": "b6b5d1217aa2791584d038d2fc50a2fb"
   },
   "docs/PHASE_PLAN.md": {
-    "mtime": 1787201833.3710656,
-    "seen": 1787202512.747209,
-    "ast_hash": "99deec7ff0e22f162d6a60eab7899fa1",
-    "semantic_hash": "99deec7ff0e22f162d6a60eab7899fa1"
+    "mtime": 1787208770.2825885,
+    "seen": 1787209888.920053,
+    "ast_hash": "4948b878321dafa6533c93255f5f4489",
+    "semantic_hash": "4948b878321dafa6533c93255f5f4489"
   },
   "docs/superpowers/plans/2026-08-13-phase-0.5-auth-spike.md": {
     "mtime": 1786657064.1348739,
@@ -118,10 +118,10 @@
     "semantic_hash": "7739f16a15f9aadab95b42d4dd523705"
   },
   "scripts/sync.py": {
-    "mtime": 1787192632.0357728,
-    "seen": 1787202512.747191,
-    "ast_hash": "b6111a119bd93d9135a85972faeb7d0e",
-    "semantic_hash": "b6111a119bd93d9135a85972faeb7d0e"
+    "mtime": 1787203962.4066746,
+    "seen": 1787209888.920036,
+    "ast_hash": "70e509356f3d70d1215a0389ea572ee0",
+    "semantic_hash": "70e509356f3d70d1215a0389ea572ee0"
   },
   "scripts/tf_bootstrap.sh": {
     "mtime": 1787185552.9546607,
@@ -220,10 +220,10 @@
     "semantic_hash": "c206b225d93f2a3c7c0fb132e029f18d"
   },
   "terraform/ephemeral/memgraph.tf": {
-    "mtime": 1787185803.8701649,
-    "seen": 1787187135.327646,
-    "ast_hash": "27c424519b427073d0236f9b152de46e",
-    "semantic_hash": "27c424519b427073d0236f9b152de46e"
+    "mtime": 1787204025.4112763,
+    "seen": 1787209888.920047,
+    "ast_hash": "f2e29c8d357a55c6e316d2314372c4f6",
+    "semantic_hash": "f2e29c8d357a55c6e316d2314372c4f6"
   },
   "terraform/ephemeral/outputs.tf": {
     "mtime": 1787185851.08845,
@@ -250,15 +250,87 @@
     "semantic_hash": "308bf02101e7a53d01da8b206cd9f8b0"
   },
   "tests/test_phase01_sync.py": {
-    "mtime": 1787192647.7118466,
-    "seen": 1787202512.747206,
-    "ast_hash": "07f249bcad3824255b2496c42bb0e00e",
-    "semantic_hash": "07f249bcad3824255b2496c42bb0e00e"
+    "mtime": 1787204071.9930847,
+    "seen": 1787209888.92005,
+    "ast_hash": "77a11fce5fb3b4e0a6642670b8fe3c8e",
+    "semantic_hash": "77a11fce5fb3b4e0a6642670b8fe3c8e"
   },
   "docs/superpowers/plans/2026-08-19-phase-1-terraform-foundation.md": {
     "mtime": 1787185615.8532891,
     "seen": 1787187135.3276532,
     "ast_hash": "763e2e62c9c33a03ce8988190d62bd8c",
     "semantic_hash": "763e2e62c9c33a03ce8988190d62bd8c"
+  },
+  "meeting_notes/__init__.py": {
+    "mtime": 1787206401.517068,
+    "seen": 1787209888.920023,
+    "ast_hash": "b1aa518ac1bc7289e9b40bcfaeb59b1b",
+    "semantic_hash": "b1aa518ac1bc7289e9b40bcfaeb59b1b"
+  },
+  "meeting_notes/access_control.py": {
+    "mtime": 1787208518.8740044,
+    "seen": 1787209888.920025,
+    "ast_hash": "59670594728a328263869c84897cf639",
+    "semantic_hash": "59670594728a328263869c84897cf639"
+  },
+  "meeting_notes/classifier.py": {
+    "mtime": 1787207598.7005246,
+    "seen": 1787209888.9200268,
+    "ast_hash": "0c18f171848fbd461e914191089e0cc2",
+    "semantic_hash": "0c18f171848fbd461e914191089e0cc2"
+  },
+  "meeting_notes/config.py": {
+    "mtime": 1787206356.0489557,
+    "seen": 1787209888.9200268,
+    "ast_hash": "766971cff82308804fd9b03851ee9707",
+    "semantic_hash": "766971cff82308804fd9b03851ee9707"
+  },
+  "meeting_notes/dedup.py": {
+    "mtime": 1787207957.0575647,
+    "seen": 1787209888.920028,
+    "ast_hash": "126cabed62910d493feada8bb100c7bf",
+    "semantic_hash": "126cabed62910d493feada8bb100c7bf"
+  },
+  "meeting_notes/meeting_quality.py": {
+    "mtime": 1787208681.732433,
+    "seen": 1787209888.920028,
+    "ast_hash": "cfb65d14fe38dbf8bc142ce22ba32670",
+    "semantic_hash": "cfb65d14fe38dbf8bc142ce22ba32670"
+  },
+  "meeting_notes/meeting_type_router.py": {
+    "mtime": 1787207892.8695166,
+    "seen": 1787209888.920029,
+    "ast_hash": "da013b778bc3bd0f824af2e032e21aff",
+    "semantic_hash": "da013b778bc3bd0f824af2e032e21aff"
+  },
+  "meeting_notes/models.py": {
+    "mtime": 1787207231.4762106,
+    "seen": 1787209888.920029,
+    "ast_hash": "21fbc74f1d00ed634f01f071117d141d",
+    "semantic_hash": "21fbc74f1d00ed634f01f071117d141d"
+  },
+  "meeting_notes/person_resolver.py": {
+    "mtime": 1787208140.8285885,
+    "seen": 1787209888.920029,
+    "ast_hash": "49063a7596c7050e8b0bc5d59d8836c9",
+    "semantic_hash": "49063a7596c7050e8b0bc5d59d8836c9"
+  },
+  "meeting_notes/utils.py": {
+    "mtime": 1787207161.352738,
+    "seen": 1787209888.9200299,
+    "ast_hash": "4a561d0677708b339442a752a64ca582",
+    "semantic_hash": "4a561d0677708b339442a752a64ca582"
+  },
+  "tests/test_phase02_pure_core.py": {
+    "mtime": 1787208652.4392118,
+    "seen": 1787209888.9200509,
+    "ast_hash": "59eacc018d49bf5f5427d69dc7d582a7",
+    "semantic_hash": "59eacc018d49bf5f5427d69dc7d582a7"
+  },
+  "docs/superpowers/plans/2026-08-20-phase-2-pure-core.md": {
+    "mtime": 1787205829.133289,
+    "seen": 1787209888.920054,
+    "ast_hash": "95ac5a9e82eb54ed901ba5eb39344018",
+    "semantic_hash": "95ac5a9e82eb54ed901ba5eb39344018"
   }
 }
