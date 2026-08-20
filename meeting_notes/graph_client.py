@@ -22,6 +22,7 @@ Two changes from v5:
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from typing import Any
 
@@ -440,3 +441,354 @@ async def merge_blocker(
             now=now,
         )
     return blocker_id
+
+
+# ─── read/query functions (deferred here from Phase 3) ────────────────────────
+# Phase 3 deferred these on the reasoning that only the API calls them, and
+# they are testable properly once endpoints exist to drive them. Every one is
+# a thin, shaped read; the endpoints in api/ are wrappers over these.
+
+
+def _normalise_topic(name: str) -> str:
+    """The Topic MERGE key: lowercased and stripped.
+
+    The read side of the key that bit INTERESTED_IN in Phase 7 — v5's
+    `dcbb2d2` fixed the write path and `get_topic_graph`, but a raw-cased
+    lookup here would match zero nodes just as silently.
+    """
+    return (name or "").lower().strip()
+
+
+async def get_recent_meetings(limit: int = 10, driver: Any = None) -> list[dict[str, Any]]:
+    driver = driver or get_driver()
+    async with driver.session() as session:
+        result = await session.run(
+            """
+            MATCH (m:Meeting)
+            RETURN m.id AS id, m.title AS title, m.date AS date, m.kind AS kind,
+                   m.summary AS summary, m.platform AS platform,
+                   coalesce(m.relevance_weight, 1.0) AS relevance_weight
+            ORDER BY m.date DESC
+            LIMIT $limit
+            """,
+            limit=limit,
+        )
+        return [dict(r) async for r in result]
+
+
+async def get_timeline(limit: int = 30, driver: Any = None) -> list[dict[str, Any]]:
+    """Meetings in date order with their temporal-chain gap."""
+    driver = driver or get_driver()
+    async with driver.session() as session:
+        result = await session.run(
+            """
+            MATCH (m:Meeting)
+            OPTIONAL MATCH (m)-[p:PRECEDED_BY]->(prior:Meeting)
+            RETURN m.id AS id, m.title AS title, m.date AS date, m.kind AS kind,
+                   prior.id AS prior_id, prior.title AS prior_title, p.gap_days AS gap_days
+            ORDER BY m.date DESC
+            LIMIT $limit
+            """,
+            limit=limit,
+        )
+        return [dict(r) async for r in result]
+
+
+async def get_person_graph(email: str, driver: Any = None) -> dict[str, Any]:
+    driver = driver or get_driver()
+    async with driver.session() as session:
+        result = await session.run(
+            """
+            MATCH (p:Person {email: $email})
+            OPTIONAL MATCH (p)-[:ATTENDED]->(m:Meeting)
+            OPTIONAL MATCH (p)-[:WORKS_AT]->(o:Organization)
+            RETURN p.id AS id, p.name AS name, p.email AS email,
+                   coalesce(p.tracked, false) AS tracked,
+                   o.domain AS organization,
+                   collect(DISTINCT {id: m.id, title: m.title, date: m.date})[..20] AS meetings
+            """,
+            email=email,
+        )
+        rows = [dict(r) async for r in result]
+    return rows[0] if rows else {}
+
+
+async def get_topic_graph(name: str, driver: Any = None) -> dict[str, Any]:
+    """Topic lookup. Normalises the name — see `_normalise_topic`."""
+    driver = driver or get_driver()
+    async with driver.session() as session:
+        result = await session.run(
+            """
+            MATCH (t:Topic {name: $name})
+            OPTIONAL MATCH (m:Meeting)-[:DISCUSSED]->(t)
+            RETURN t.id AS id, t.name AS name,
+                   collect(DISTINCT {id: m.id, title: m.title, date: m.date})[..20] AS meetings
+            """,
+            name=_normalise_topic(name),
+        )
+        rows = [dict(r) async for r in result]
+    return rows[0] if rows else {}
+
+
+async def get_open_actions(limit: int = 50, driver: Any = None) -> list[dict[str, Any]]:
+    driver = driver or get_driver()
+    async with driver.session() as session:
+        result = await session.run(
+            """
+            MATCH (a:ActionItem)
+            WHERE coalesce(a.done, false) = false
+            OPTIONAL MATCH (a)-[:ASSIGNED_TO]->(p:Person)
+            RETURN a.id AS id, a.task AS task, a.owner AS owner, a.due AS due,
+                   a.priority AS priority, a.jira_key AS jira_key,
+                   a.jira_status AS jira_status, p.email AS owner_email
+            ORDER BY coalesce(a.due, '9999') ASC
+            LIMIT $limit
+            """,
+            limit=limit,
+        )
+        return [dict(r) async for r in result]
+
+
+async def get_actions_needing_review(limit: int = 50, driver: Any = None) -> list[dict[str, Any]]:
+    """Below-threshold items held back from Jira — the confidence gate's output."""
+    driver = driver or get_driver()
+    async with driver.session() as session:
+        result = await session.run(
+            """
+            MATCH (a:ActionItem)
+            WHERE a.jira_status = 'needs_review'
+            RETURN a.id AS id, a.task AS task, a.owner AS owner,
+                   a.confidence AS confidence, a.review_reason AS review_reason
+            ORDER BY a.confidence ASC
+            LIMIT $limit
+            """,
+            limit=limit,
+        )
+        return [dict(r) async for r in result]
+
+
+async def get_person_reviews(limit: int = 50, driver: Any = None) -> list[dict[str, Any]]:
+    """Attendees that could not be resolved — held, never silently dropped."""
+    driver = driver or get_driver()
+    async with driver.session() as session:
+        result = await session.run(
+            """
+            MATCH (m:Meeting)-[:NEEDS_REVIEW]->(r:PersonReview)
+            WHERE coalesce(r.status, 'pending') = 'pending'
+            RETURN r.id AS id, r.name AS name, r.role AS role, r.reason AS reason,
+                   m.id AS meeting_id, m.title AS meeting_title
+            LIMIT $limit
+            """,
+            limit=limit,
+        )
+        return [dict(r) async for r in result]
+
+
+async def get_open_blockers(limit: int = 50, driver: Any = None) -> list[dict[str, Any]]:
+    driver = driver or get_driver()
+    async with driver.session() as session:
+        result = await session.run(
+            """
+            MATCH (m:Meeting)-[:RAISES_BLOCKER]->(b:Blocker)
+            WHERE coalesce(b.status, 'open') = 'open'
+            RETURN b.id AS id, b.text AS text, b.raised_by AS raised_by,
+                   m.id AS meeting_id, m.title AS meeting_title
+            LIMIT $limit
+            """,
+            limit=limit,
+        )
+        return [dict(r) async for r in result]
+
+
+async def get_influential_nodes(
+    label: str = "Person", limit: int = 10, driver: Any = None
+) -> list[dict[str, Any]]:
+    """Top nodes by PageRank.
+
+    **Governance:** per-person rankings are gated behind `Person.tracked`. An
+    untracked individual is never surfaced in a leaderboard — aggregates are
+    the default and naming people is opt-in (CLAUDE.md). Other labels are
+    unaffected, since only people have a privacy interest here.
+    """
+    driver = driver or get_driver()
+    tracked_gate = "AND coalesce(n.tracked, false) = true" if label == "Person" else ""
+    async with driver.session() as session:
+        result = await session.run(
+            f"""
+            MATCH (n:{label})
+            WHERE n.pagerank_score IS NOT NULL {tracked_gate}
+            RETURN n.id AS id,
+                   COALESCE(n.name, n.title, n.task, n.text, n.summary, n.email) AS name,
+                   n.pagerank_score AS pagerank_score,
+                   n.community_id AS community_id
+            ORDER BY n.pagerank_score DESC
+            LIMIT $limit
+            """,
+            limit=limit,
+        )
+        return [dict(r) async for r in result]
+
+
+async def get_all_communities(driver: Any = None) -> list[dict[str, Any]]:
+    driver = driver or get_driver()
+    async with driver.session() as session:
+        result = await session.run(
+            """
+            MATCH (n) WHERE n.community_id IS NOT NULL
+            RETURN n.community_id AS community_id, count(n) AS size
+            ORDER BY size DESC
+            """
+        )
+        return [dict(r) async for r in result]
+
+
+async def get_community_members(community_id: int, driver: Any = None) -> list[dict[str, Any]]:
+    driver = driver or get_driver()
+    async with driver.session() as session:
+        result = await session.run(
+            """
+            MATCH (n) WHERE n.community_id = $community_id
+            RETURN n.id AS id,
+                   COALESCE(n.name, n.title, n.task, n.text, n.summary, n.email) AS name,
+                   labels(n) AS labels, n.pagerank_score AS pagerank_score
+            LIMIT 200
+            """,
+            community_id=community_id,
+        )
+        return [dict(r) async for r in result]
+
+
+async def get_bridge_nodes(limit: int = 10, driver: Any = None) -> list[dict[str, Any]]:
+    """Nodes connecting otherwise separate clusters, by betweenness."""
+    driver = driver or get_driver()
+    async with driver.session() as session:
+        result = await session.run(
+            """
+            MATCH (n) WHERE n.betweenness_centrality IS NOT NULL
+            RETURN n.id AS id,
+                   COALESCE(n.name, n.title, n.task, n.text, n.summary, n.email) AS name,
+                   labels(n) AS labels,
+                   n.betweenness_centrality AS betweenness_centrality
+            ORDER BY n.betweenness_centrality DESC
+            LIMIT $limit
+            """,
+            limit=limit,
+        )
+        return [dict(r) async for r in result]
+
+
+async def get_node_insights(node_id: str, driver: Any = None) -> dict[str, Any]:
+    driver = driver or get_driver()
+    async with driver.session() as session:
+        result = await session.run(
+            """
+            MATCH (n {id: $node_id})
+            RETURN n.id AS id,
+                   COALESCE(n.name, n.title, n.task, n.text, n.summary, n.email) AS name,
+                   labels(n) AS labels,
+                   n.pagerank_score AS pagerank_score,
+                   n.betweenness_centrality AS betweenness_centrality,
+                   n.degree_centrality AS degree_centrality,
+                   n.community_id AS community_id, n.wcc_id AS wcc_id
+            """,
+            node_id=node_id,
+        )
+        rows = [dict(r) async for r in result]
+    return rows[0] if rows else {}
+
+
+async def get_meeting_provenance(meeting_id: str, driver: Any = None) -> dict[str, Any]:
+    """Provenance for one meeting.
+
+    Returns empty collections until v2 — ADR-008 ships the provenance schema
+    in v1 and its writers in v2, so an empty answer here is correct and
+    expected rather than a failure.
+    """
+    driver = driver or get_driver()
+    async with driver.session() as session:
+        result = await session.run(
+            """
+            MATCH (m:Meeting {id: $meeting_id})
+            OPTIONAL MATCH (m)-[:FOLLOWS_UP]->(a:ActionItem)-[:TICKETED_AS]->(t:Ticket)
+            OPTIONAL MATCH (run:AgentRun)-[:FOLLOWS_UP_ON]->(m)
+            RETURN m.id AS meeting_id, m.title AS title,
+                   collect(DISTINCT {id: t.id, key: t.key}) AS tickets,
+                   collect(DISTINCT {id: run.id, status: run.status}) AS agent_runs
+            """,
+            meeting_id=meeting_id,
+        )
+        rows = [dict(r) async for r in result]
+    return rows[0] if rows else {}
+
+
+async def get_ticket_provenance(ticket_key: str, driver: Any = None) -> dict[str, Any]:
+    """Provenance for one ticket. Empty until v2 — see `get_meeting_provenance`."""
+    driver = driver or get_driver()
+    async with driver.session() as session:
+        result = await session.run(
+            """
+            MATCH (t:Ticket {key: $ticket_key})
+            OPTIONAL MATCH (a:ActionItem)-[:TICKETED_AS]->(t)
+            OPTIONAL MATCH (t)-[:RESOLVED_BY]->(pr:PullRequest)
+            RETURN t.id AS ticket_id, t.key AS key,
+                   collect(DISTINCT {id: a.id, task: a.task}) AS action_items,
+                   collect(DISTINCT {id: pr.id, url: pr.url}) AS pull_requests
+            """,
+            ticket_key=ticket_key,
+        )
+        rows = [dict(r) async for r in result]
+    return rows[0] if rows else {}
+
+
+async def get_meetings_quality_inputs(driver: Any = None) -> list[dict[str, Any]]:
+    """Raw counts `meeting_quality.compute_quality` scores from."""
+    driver = driver or get_driver()
+    async with driver.session() as session:
+        result = await session.run(
+            """
+            MATCH (m:Meeting)
+            OPTIONAL MATCH (p:Person)-[:ATTENDED]->(m)
+            OPTIONAL MATCH (m)-[:FOLLOWS_UP]->(a:ActionItem)
+            OPTIONAL MATCH (m)-[:PRODUCED]->(d:Decision)
+            RETURN m.id AS id, m.title AS title, m.date AS date,
+                   m.duration_minutes AS duration_minutes,
+                   coalesce(m.summary, '') AS summary,
+                   count(DISTINCT p) AS attendee_count,
+                   count(DISTINCT a) AS action_count,
+                   count(DISTINCT d) AS decision_count,
+                   size([x IN collect(DISTINCT a.done) WHERE x = true]) AS actions_done
+            """
+        )
+        return [dict(r) async for r in result]
+
+
+async def set_meeting_quality(
+    meeting_id: str, score: float, components: dict[str, Any], driver: Any = None
+) -> None:
+    driver = driver or get_driver()
+    async with driver.session() as session:
+        await session.run(
+            """
+            MATCH (m:Meeting {id: $meeting_id})
+            SET m.quality_score = $score, m.quality_components = $components
+            """,
+            meeting_id=meeting_id,
+            score=score,
+            components=json.dumps(components),
+        )
+
+
+async def get_meetings_quality_ranked(limit: int = 20, driver: Any = None) -> list[dict[str, Any]]:
+    driver = driver or get_driver()
+    async with driver.session() as session:
+        result = await session.run(
+            """
+            MATCH (m:Meeting) WHERE m.quality_score IS NOT NULL
+            RETURN m.id AS id, m.title AS title, m.date AS date,
+                   m.quality_score AS quality_score
+            ORDER BY m.quality_score DESC
+            LIMIT $limit
+            """,
+            limit=limit,
+        )
+        return [dict(r) async for r in result]
