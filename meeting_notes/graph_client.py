@@ -870,3 +870,110 @@ async def get_period_activity(days: int = 7, driver: Any = None) -> dict[str, An
         action_items = [dict(r) async for r in result]
 
     return {"meetings": meetings, "decisions": decisions, "action_items": action_items}
+
+
+async def get_meeting_detail(meeting_id: str, driver: Any = None) -> dict[str, Any]:
+    """Everything one meeting produced, in one read.
+
+    The dashboard could previously show a meeting's title and nothing else —
+    the decisions and action items extracted from it existed in the graph with
+    no way to reach them. This is the drill-down that makes a meeting row
+    worth clicking.
+
+    Deliberately one query per collection. Collecting six unrelated
+    one-to-many relationships in a single MATCH cross-products them: measured
+    on a real meeting, `collect(DISTINCT ...)` over 3 attendees x 6 topics x
+    3 decisions x 9 reviews x 4 facts reported **29,160** action items instead
+    of 15. Same hazard as `get_period_activity`.
+    """
+    driver = driver or get_driver()
+
+    async def _rows(session: Any, cypher: str) -> list[dict[str, Any]]:
+        result = await session.run(cypher, meeting_id=meeting_id)
+        return [dict(r) async for r in result]
+
+    async with driver.session() as session:
+        base = await _rows(
+            session,
+            """
+            MATCH (m:Meeting {id: $meeting_id})
+            RETURN m.id AS id, m.title AS title, m.date AS date, m.kind AS kind,
+                   m.platform AS platform, m.summary AS summary,
+                   m.duration_minutes AS duration_minutes
+            """,
+        )
+        if not base:
+            return {}
+        detail = base[0]
+
+        detail["attendees"] = await _rows(
+            session,
+            """
+            MATCH (p:Person)-[att:ATTENDED]->(m:Meeting {id: $meeting_id})
+            RETURN p.name AS name, p.email AS email, att.role AS role
+            """,
+        )
+        detail["topics"] = [
+            r["name"]
+            for r in await _rows(
+                session,
+                "MATCH (:Meeting {id: $meeting_id})-[:DISCUSSED]->(t:Topic) "
+                "RETURN t.name AS name",
+            )
+        ]
+        detail["decisions"] = await _rows(
+            session,
+            """
+            MATCH (:Meeting {id: $meeting_id})-[:PRODUCED]->(d:Decision)
+            RETURN d.id AS id, d.text AS text, d.confidence AS confidence
+            """,
+        )
+        detail["action_items"] = await _rows(
+            session,
+            """
+            MATCH (:Meeting {id: $meeting_id})-[:FOLLOWS_UP]->(a:ActionItem)
+            OPTIONAL MATCH (a)-[:ASSIGNED_TO]->(p:Person)
+            RETURN a.id AS id, a.task AS task, a.owner AS owner, a.due AS due,
+                   coalesce(a.done, false) AS done, a.priority AS priority,
+                   a.jira_key AS jira_key, p.email AS owner_email
+            """,
+        )
+        detail["facts"] = await _rows(
+            session,
+            """
+            MATCH (:Meeting {id: $meeting_id})-[:HAS_FACT]->(f:Fact)
+            RETURN f.text AS text, f.confidence AS confidence
+            ORDER BY f.confidence DESC
+            """,
+        )
+        detail["unresolved_attendees"] = [
+            r["name"]
+            for r in await _rows(
+                session,
+                "MATCH (:Meeting {id: $meeting_id})-[:NEEDS_REVIEW]->(r:PersonReview) "
+                "WHERE coalesce(r.status, 'pending') = 'pending' RETURN r.name AS name",
+            )
+        ]
+
+    return detail
+
+
+async def get_recent_decisions(limit: int = 25, driver: Any = None) -> list[dict[str, Any]]:
+    """Decisions with the meeting that produced them.
+
+    A decision with no meeting attached is not traceable, and "who decided
+    this and when" is the first question anyone asks of one.
+    """
+    driver = driver or get_driver()
+    async with driver.session() as session:
+        result = await session.run(
+            """
+            MATCH (m:Meeting)-[:PRODUCED]->(d:Decision)
+            RETURN d.id AS id, d.text AS text, d.confidence AS confidence,
+                   m.id AS meeting_id, m.title AS meeting_title, m.date AS date
+            ORDER BY m.date DESC
+            LIMIT $limit
+            """,
+            limit=limit,
+        )
+        return [dict(r) async for r in result]

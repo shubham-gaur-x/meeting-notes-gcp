@@ -6,48 +6,77 @@
 <title>meeting-notes-gcp</title>
 <style>
   :root {
-    --bg: #0f1115; --panel: #171a21; --line: #272b35;
-    --ink: #e6e8ec; --muted: #9aa3b2; --accent: #6ea8fe; --warn: #f0b429; --ok: #4ade80;
+    --bg:#0f1115; --panel:#171a21; --raise:#1e222b; --line:#272b35;
+    --ink:#e6e8ec; --muted:#9aa3b2; --accent:#6ea8fe;
+    --warn:#f0b429; --ok:#4ade80; --hot:#f87171;
   }
   @media (prefers-color-scheme: light) {
-    :root { --bg:#f6f7f9; --panel:#fff; --line:#e2e5ea; --ink:#1a1d23; --muted:#5b6472; --accent:#2563eb; }
+    :root { --bg:#f6f7f9; --panel:#fff; --raise:#f0f2f5; --line:#e2e5ea;
+            --ink:#1a1d23; --muted:#5b6472; --accent:#2563eb; }
   }
-  * { box-sizing: border-box; }
+  * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:var(--ink);
-         font:14px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
-  header { padding:18px 22px; border-bottom:1px solid var(--line); display:flex;
-           align-items:baseline; gap:14px; flex-wrap:wrap; }
-  h1 { font-size:16px; margin:0; font-weight:600; letter-spacing:.2px; }
+         font:14px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  header { padding:16px 22px; border-bottom:1px solid var(--line);
+           display:flex; align-items:baseline; gap:14px; flex-wrap:wrap; }
+  h1 { font-size:15px; margin:0; font-weight:600; }
+  h3 { font-size:13px; text-transform:uppercase; letter-spacing:.7px;
+       color:var(--muted); margin:22px 0 10px; font-weight:600; }
+  .dlg-body h3:first-child { margin-top:0; }
   .sub { color:var(--muted); font-size:12px; }
   nav { display:flex; gap:4px; padding:12px 22px 0; flex-wrap:wrap; }
   nav button { background:transparent; border:1px solid transparent; color:var(--muted);
-               padding:8px 14px; border-radius:8px 8px 0 0; cursor:pointer; font-size:13px; }
+               padding:8px 15px; border-radius:8px 8px 0 0; cursor:pointer; font-size:13px; }
+  nav button:hover { color:var(--ink); }
   nav button.active { color:var(--ink); background:var(--panel);
                       border-color:var(--line); border-bottom-color:var(--panel); }
-  main { padding:0 22px 40px; }
+  main { padding:0 22px 48px; }
   .panel { display:none; background:var(--panel); border:1px solid var(--line);
-           border-radius:0 10px 10px 10px; padding:18px; }
+           border-radius:0 10px 10px 10px; padding:20px; }
   .panel.active { display:block; }
   .row { display:flex; gap:10px; align-items:center; margin-bottom:14px; flex-wrap:wrap; }
   input, select { background:var(--bg); border:1px solid var(--line); color:var(--ink);
-                  padding:8px 10px; border-radius:7px; font-size:13px; min-width:230px; }
-  button.action { background:var(--accent); border:none; color:#fff; padding:8px 14px;
+                  padding:9px 11px; border-radius:7px; font-size:13px; }
+  input { min-width:min(420px, 100%); }
+  button.action { background:var(--accent); border:none; color:#fff; padding:9px 15px;
                   border-radius:7px; cursor:pointer; font-size:13px; }
   button.action:hover { filter:brightness(1.08); }
-  .cards { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:10px; margin-bottom:16px; }
-  .card { background:var(--bg); border:1px solid var(--line); border-radius:9px; padding:12px 14px; }
-  .card .n { font-size:22px; font-weight:600; }
+  button.ghost { background:var(--raise); border:1px solid var(--line); color:var(--ink);
+                 padding:6px 11px; border-radius:20px; cursor:pointer; font-size:12px;
+                 margin:0 4px 6px 0; }
+  button.ghost:hover { border-color:var(--accent); color:var(--accent); }
+  .cards { display:grid; grid-template-columns:repeat(auto-fill,minmax(132px,1fr));
+           gap:10px; margin-bottom:6px; }
+  .card { background:var(--raise); border:1px solid var(--line); border-radius:9px;
+          padding:12px 14px; }
+  .card .n { font-size:23px; font-weight:650; line-height:1.15; }
   .card .l { color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.6px; }
+  .card.hot .n { color:var(--hot); }
   table { width:100%; border-collapse:collapse; font-size:13px; }
-  th, td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
-  th { color:var(--muted); font-weight:500; font-size:11px; text-transform:uppercase; letter-spacing:.6px; }
+  th, td { text-align:left; padding:9px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--muted); font-weight:500; font-size:11px;
+       text-transform:uppercase; letter-spacing:.6px; }
+  tr.clickable { cursor:pointer; }
+  tr.clickable:hover td { background:var(--raise); }
   .muted { color:var(--muted); }
-  .empty { color:var(--muted); padding:22px; text-align:center; }
+  .hint { color:var(--muted); font-size:12px; margin:-4px 0 12px; }
+  .empty { color:var(--muted); padding:20px; text-align:center; }
   .err { color:var(--warn); padding:12px; border:1px solid var(--warn); border-radius:8px; }
-  .answer { background:var(--bg); border:1px solid var(--line); border-radius:9px;
-            padding:14px; white-space:pre-wrap; }
+  .answer { background:var(--raise); border:1px solid var(--line); border-radius:9px;
+            padding:15px; white-space:pre-wrap; }
   .scroll { overflow-x:auto; }
+  .pill { display:inline-block; background:var(--raise); border:1px solid var(--line);
+          border-radius:20px; padding:2px 10px; font-size:11px; margin:0 5px 5px 0; }
+  .pri-high { color:var(--hot); font-weight:600; }
+  .quote { border-left:2px solid var(--accent); padding:2px 0 2px 12px; margin:0 0 10px; }
   code { font:12px ui-monospace,SFMono-Regular,Menlo,monospace; color:var(--accent); }
+  dialog { background:var(--panel); color:var(--ink); border:1px solid var(--line);
+           border-radius:12px; padding:0; max-width:min(760px,92vw); width:100%; }
+  dialog::backdrop { background:rgba(0,0,0,.6); }
+  .dlg-head { padding:18px 20px 12px; border-bottom:1px solid var(--line);
+              display:flex; justify-content:space-between; gap:12px; align-items:flex-start; }
+  .dlg-body { padding:18px 20px 22px; max-height:70vh; overflow:auto; }
+  .x { background:none; border:none; color:var(--muted); font-size:20px; cursor:pointer; }
 </style>
 </head>
 <body>
@@ -57,61 +86,88 @@
 </header>
 
 <nav>
-  <button data-panel="timeline" class="active">Timeline</button>
-  <button data-panel="review">Review Queue</button>
-  <button data-panel="insights">Insights</button>
-  <button data-panel="memory">Memory</button>
+  <button data-panel="overview" class="active">Overview</button>
+  <button data-panel="meetings">Meetings</button>
+  <button data-panel="actions">Action Items</button>
+  <button data-panel="workstreams">Workstreams</button>
+  <button data-panel="ask">Ask</button>
+  <button data-panel="review">Needs You</button>
 </nav>
 
 <main>
-  <section class="panel active" id="timeline">
+  <section class="panel active" id="overview">
     <div class="row">
-      <button class="action" onclick="loadTimeline()">Refresh</button>
-      <span class="muted">Last 7 days</span>
+      <button class="action" onclick="loadOverview()">Refresh</button>
+      <span class="muted">Everything from the last 7 days</span>
     </div>
-    <div class="cards" id="digest-cards"></div>
-    <div class="scroll"><table id="timeline-table"></table></div>
+    <div class="cards" id="cards"></div>
+    <div id="overview-body"></div>
+  </section>
+
+  <section class="panel" id="meetings">
+    <div class="row">
+      <input id="mfilter" placeholder="Filter by title…" oninput="renderMeetings()">
+      <button class="action" onclick="loadMeetings()">Refresh</button>
+    </div>
+    <p class="hint">Click any meeting to see what was decided, who was there, and what came out of it.</p>
+    <div class="scroll" id="meetings-body"></div>
+  </section>
+
+  <section class="panel" id="actions">
+    <div class="row">
+      <button class="action" onclick="loadActions()">Refresh</button>
+      <select id="afilter" onchange="renderActions()"><option value="">Everyone</option></select>
+    </div>
+    <p class="hint">Open commitments pulled out of meetings, soonest deadline first.</p>
+    <div class="scroll" id="actions-body"></div>
+  </section>
+
+  <section class="panel" id="workstreams">
+    <div class="row"><button class="action" onclick="loadWorkstreams()">Refresh</button></div>
+    <p class="hint">Clusters the graph found on its own, named by the topics inside them.
+       Click one to see what it contains.</p>
+    <div id="workstreams-body"></div>
+  </section>
+
+  <section class="panel" id="ask">
+    <div class="row">
+      <input id="q" placeholder="Ask anything about your meetings…"
+             onkeydown="if(event.key==='Enter')askMemory()">
+      <button class="action" onclick="askMemory()">Ask</button>
+    </div>
+    <div id="examples"></div>
+    <div id="ask-body"></div>
   </section>
 
   <section class="panel" id="review">
-    <div class="row">
-      <button class="action" onclick="loadReview()">Refresh</button>
-      <span class="muted">Nothing here was dropped — these are items the system chose to ask about rather than guess</span>
-    </div>
+    <div class="row"><button class="action" onclick="loadReview()">Refresh</button></div>
+    <p class="hint">Nothing here was dropped. These are things the system chose to ask about
+       rather than guess.</p>
     <div id="review-body"></div>
-  </section>
-
-  <section class="panel" id="insights">
-    <div class="row">
-      <select id="insight-label">
-        <option value="Person">Person</option>
-        <option value="Topic">Topic</option>
-        <option value="Meeting">Meeting</option>
-      </select>
-      <button class="action" onclick="loadInsights()">Load</button>
-      <span class="muted">People appear only if <code>tracked = true</code></span>
-    </div>
-    <div id="insights-body"></div>
-  </section>
-
-  <section class="panel" id="memory">
-    <div class="row">
-      <input id="q" placeholder="Ask anything — e.g. what's happening with Verizon?" size="52">
-      <button class="action" onclick="askMemory()">Ask</button>
-    </div>
-    <div id="memory-body"></div>
   </section>
 </main>
 
+<dialog id="detail">
+  <div class="dlg-head">
+    <div><strong id="d-title"></strong><div class="muted" id="d-meta"></div></div>
+    <button class="x" onclick="document.getElementById('detail').close()">&times;</button>
+  </div>
+  <div class="dlg-body" id="d-body"></div>
+</dialog>
+
 <script>
 const $ = (s) => document.querySelector(s);
-const esc = (v) => String(v ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const esc = (v) => String(v ?? "").replace(/[&<>"]/g, c =>
+  ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+let MEETINGS = [], ACTIONS = [];
 
 document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
   document.querySelectorAll("nav button").forEach(x => x.classList.remove("active"));
   document.querySelectorAll(".panel").forEach(x => x.classList.remove("active"));
   b.classList.add("active");
   $("#" + b.dataset.panel).classList.add("active");
+  LOADERS[b.dataset.panel]?.();
 });
 
 async function get(path) {
@@ -119,94 +175,201 @@ async function get(path) {
   if (!r.ok) throw new Error(path + " -> " + r.status);
   return r.json();
 }
+function fail(sel, err) { $(sel).innerHTML = `<div class="err">${esc(err.message)}</div>`; }
+function empty(msg) { return `<div class="empty">${esc(msg)}</div>`; }
 
-function table(rows, cols) {
-  if (!rows || !rows.length) return '<div class="empty">Nothing here yet.</div>';
+function table(rows, cols, clickable) {
+  if (!rows || !rows.length) return empty("Nothing here yet.");
   const head = "<tr>" + cols.map(c => `<th>${esc(c[0])}</th>`).join("") + "</tr>";
-  const body = rows.map(r =>
-    "<tr>" + cols.map(c => `<td>${esc(c[1](r))}</td>`).join("") + "</tr>").join("");
+  const body = rows.map((r, i) =>
+    `<tr class="${clickable ? "clickable" : ""}" data-i="${i}">` +
+    cols.map(c => `<td>${c[1](r)}</td>`).join("") + "</tr>").join("");
   return `<table>${head}${body}</table>`;
 }
-
-function fail(el, err) { $(el).innerHTML = `<div class="err">${esc(err.message)}</div>`; }
+function wire(sel, rows, onClick) {
+  $(sel).querySelectorAll("tr.clickable").forEach(tr =>
+    tr.onclick = () => onClick(rows[+tr.dataset.i]));
+}
 
 async function loadHealth() {
   try {
     const h = await get("/health");
     $("#health").textContent =
-      `${h.status} · memgraph ${h.memgraph ? "up" : "down"} · llm ${h.llm_backend}`;
-  } catch { $("#health").textContent = "unreachable"; }
+      `${h.status} · graph ${h.memgraph ? "connected" : "unreachable"} · ${h.llm_backend}`;
+  } catch { $("#health").textContent = "API unreachable"; }
 }
 
-async function loadTimeline() {
+async function loadOverview() {
   try {
-    const d = await get("/graph/digest/weekly");
+    const [d, dec] = await Promise.all([
+      get("/graph/digest/weekly"), get("/graph/decisions?limit=6")]);
     const s = d.summary || {};
-    $("#digest-cards").innerHTML = [
-      ["Meetings", s.total_meetings], ["Decisions", s.total_decisions],
-      ["Actions", s.total_action_items], ["Open", s.open_action_items],
-      ["High priority", s.high_priority_open],
-    ].map(([l, n]) => `<div class="card"><div class="n">${esc(n ?? 0)}</div><div class="l">${esc(l)}</div></div>`).join("");
-    $("#timeline-table").outerHTML =
-      `<table id="timeline-table">${table(d.meetings, [
-        ["Date", r => r.date], ["Title", r => r.title], ["Kind", r => r.kind],
-        ["Summary", r => (r.summary || "").slice(0, 110)],
-      ]).replace(/^<table>|<\/table>$/g, "")}</table>`;
-  } catch (e) { fail("#digest-cards", e); }
+    $("#cards").innerHTML = [
+      ["Meetings", s.total_meetings, ""],
+      ["Decisions", s.total_decisions, ""],
+      ["Open actions", s.open_action_items, ""],
+      ["High priority", s.high_priority_open, s.high_priority_open > 0 ? "hot" : ""],
+      ["Completed", s.closed_action_items, ""],
+    ].map(([l, n, cls]) =>
+      `<div class="card ${cls}"><div class="n">${esc(n ?? 0)}</div><div class="l">${esc(l)}</div></div>`
+    ).join("");
+
+    const hi = (d.action_items && d.action_items.high_priority) || [];
+    const open = (d.action_items && d.action_items.open) || [];
+    const show = (hi.length ? hi : open).slice(0, 6);
+
+    $("#overview-body").innerHTML =
+      `<h3>What was decided</h3>` +
+      ((dec.decisions && dec.decisions.length)
+        ? dec.decisions.map(x =>
+            `<div class="quote">${esc(x.text)}<div class="muted" style="font-size:12px">` +
+            `${esc(x.date)} · ${esc(x.meeting_title)}</div></div>`).join("")
+        : empty("No decisions captured in this period.")) +
+      `<h3>${hi.length ? "Needs attention" : "Open commitments"}</h3>` +
+      `<div class="scroll">` +
+      table(show, [
+        ["Task", r => esc(r.task)],
+        ["Owner", r => esc(r.owner)],
+        ["Due", r => esc(r.due || "—")],
+        ["Priority", r => `<span class="${r.priority === "high" ? "pri-high" : ""}">${esc(r.priority || "—")}</span>`],
+      ]) + `</div>`;
+  } catch (e) { fail("#overview-body", e); }
 }
 
-async function loadReview() {
+async function loadMeetings() {
   try {
-    const [a, p, b] = await Promise.all([
-      get("/review/actions"), get("/review/people"), get("/review/blockers")]);
-    $("#review-body").innerHTML =
-      `<h3>Low-confidence actions (${a.count})</h3><div class="scroll">` +
-      table(a.actions, [["Task", r => r.task], ["Owner", r => r.owner],
-                        ["Confidence", r => r.confidence], ["Reason", r => r.review_reason]]) +
-      `</div><h3>Unresolved people (${p.count})</h3><div class="scroll">` +
-      table(p.people, [["Name", r => r.name], ["Role", r => r.role],
-                       ["Reason", r => r.reason], ["Meeting", r => r.meeting_title]]) +
-      `</div><h3>Open blockers (${b.count})</h3><div class="scroll">` +
-      table(b.blockers, [["Blocker", r => r.text], ["Raised by", r => r.raised_by],
-                         ["Meeting", r => r.meeting_title]]) + "</div>";
-  } catch (e) { fail("#review-body", e); }
+    const d = await get("/graph/meetings/recent?limit=100");
+    MEETINGS = d.meetings || [];
+    renderMeetings();
+  } catch (e) { fail("#meetings-body", e); }
+}
+function renderMeetings() {
+  const q = ($("#mfilter").value || "").toLowerCase();
+  const rows = MEETINGS.filter(m => !q || (m.title || "").toLowerCase().includes(q));
+  $("#meetings-body").innerHTML = table(rows, [
+    ["Date", r => esc(r.date)],
+    ["Meeting", r => esc(r.title)],
+    ["Type", r => esc(r.kind)],
+    ["Summary", r => esc((r.summary || "").slice(0, 90))],
+  ], true);
+  wire("#meetings-body", rows, openMeeting);
 }
 
-async function loadInsights() {
-  const label = $("#insight-label").value;
+async function openMeeting(m) {
+  const dlg = $("#detail");
+  $("#d-title").textContent = m.title || "Meeting";
+  $("#d-meta").textContent = `${m.date || ""} · ${m.kind || ""}`;
+  $("#d-body").innerHTML = empty("Loading…");
+  dlg.showModal();
   try {
-    const [inf, com, br] = await Promise.all([
-      get("/graph/insights/influential?label=" + encodeURIComponent(label)),
-      get("/graph/insights/communities"), get("/graph/insights/bridges")]);
-    $("#insights-body").innerHTML =
-      `<h3>Most connected ${esc(label)} (${inf.count})</h3>` +
-      `<p class="muted">Ranked by how central each one is to the meeting graph.</p>` +
-      (inf.count === 0 && label === "Person"
+    const d = await get("/graph/meeting/" + encodeURIComponent(m.id));
+    $("#d-body").innerHTML =
+      (d.summary ? `<p>${esc(d.summary)}</p>` : "") +
+      ((d.topics && d.topics.length) ? `<h3>Topics</h3>` +
+        d.topics.map(t => `<span class="pill">${esc(t)}</span>`).join("") : "") +
+      `<h3>Decisions (${(d.decisions || []).length})</h3>` +
+      ((d.decisions && d.decisions.length)
+        ? d.decisions.map(x => `<div class="quote">${esc(x.text)}</div>`).join("")
+        : empty("None recorded.")) +
+      `<h3>Action items (${(d.action_items || []).length})</h3>` +
+      `<div class="scroll">` + table(d.action_items || [], [
+        ["Task", r => esc(r.task)],
+        ["Owner", r => esc(r.owner)],
+        ["Due", r => esc(r.due || "—")],
+      ]) + `</div>` +
+      `<h3>Who was there (${(d.attendees || []).length})</h3>` +
+      ((d.attendees && d.attendees.length)
+        ? d.attendees.map(a => `<span class="pill">${esc(a.name || a.email)}</span>`).join("")
+        : empty("No attendees resolved.")) +
+      ((d.unresolved_attendees && d.unresolved_attendees.length)
+        ? `<p class="muted" style="font-size:12px;margin-top:10px">Also mentioned, not yet ` +
+          `identified: ${d.unresolved_attendees.map(esc).join(", ")}</p>` : "") +
+      ((d.facts && d.facts.length) ? `<h3>What this told us</h3>` +
+        d.facts.map(f => `<div class="quote">${esc(f.text)}</div>`).join("") : "");
+  } catch (e) { $("#d-body").innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+}
+
+async function loadActions() {
+  try {
+    const d = await get("/graph/actions/open?limit=200");
+    ACTIONS = d.actions || [];
+    const owners = [...new Set(ACTIONS.map(a => a.owner).filter(Boolean))].sort();
+    $("#afilter").innerHTML = `<option value="">Everyone (${ACTIONS.length})</option>` +
+      owners.map(o => `<option value="${esc(o)}">${esc(o)}</option>`).join("");
+    renderActions();
+  } catch (e) { fail("#actions-body", e); }
+}
+function renderActions() {
+  const who = $("#afilter").value;
+  const rows = ACTIONS.filter(a => !who || a.owner === who);
+  $("#actions-body").innerHTML = table(rows, [
+    ["Task", r => esc(r.task)],
+    ["Owner", r => esc(r.owner)],
+    ["Due", r => esc(r.due || "—")],
+    ["Priority", r => `<span class="${r.priority === "high" ? "pri-high" : ""}">${esc(r.priority || "—")}</span>`],
+    ["Ticket", r => r.jira_key ? esc(r.jira_key) : `<span class="muted">not filed</span>`],
+  ]);
+}
+
+async function loadWorkstreams() {
+  try {
+    const [d, people] = await Promise.all([
+      get("/graph/insights/communities"),
+      get("/graph/insights/influential?label=Person")]);
+    const rows = d.communities || [];
+    $("#workstreams-body").innerHTML = `<div class="scroll">` + table(rows, [
+      ["Workstream", r => esc(r.name)],
+      ["Items", r => esc(r.size)],
+    ], true) + `</div>` +
+      `<h3>Most connected people (${people.count})</h3>` +
+      (people.count === 0
         ? `<div class="empty">No one is opted in.<br><span class="muted">Naming individuals ` +
           `is opt-in by design — a person appears here only once <code>tracked</code> is set ` +
           `on them. Everything else on this page is an aggregate.</span></div>`
-        : `<div class="scroll">` +
-          table(inf.nodes, [["Name", r => r.name],
-                            ["Centrality", r => (r.pagerank_score ?? 0).toFixed?.(5) ?? r.pagerank_score],
-                            ["Workstream", r => r.community_id]]) + `</div>`) +
-      `` +
-      `<h3>Workstreams (${com.count})</h3>` +
-      `<p class="muted">Clusters the graph found on its own, named by the topics inside them.</p>` +
-      `<div class="scroll">` +
-      table(com.communities.slice(0, 15),
-            [["Workstream", r => r.name], ["Items", r => r.size]]) +
-      `</div><h3>Bridges (${br.count})</h3>` +
-      `<p class="muted">These connect workstreams that otherwise do not overlap — the link between separate areas of work.</p>` +
-      `<div class="scroll">` +
-      table(br.nodes, [["Name", r => r.name], ["Labels", r => (r.labels || []).join(", ")],
-                       ["Betweenness", r => r.betweenness_centrality]]) + "</div>";
-  } catch (e) { fail("#insights-body", e); }
+        : `<div class="scroll">` + table(people.nodes, [
+            ["Name", r => esc(r.name)],
+            ["Centrality", r => esc((r.pagerank_score ?? 0).toFixed ? r.pagerank_score.toFixed(5) : r.pagerank_score)],
+          ]) + `</div>`);
+    wire("#workstreams-body", rows, openWorkstream);
+  } catch (e) { fail("#workstreams-body", e); }
 }
+async function openWorkstream(w) {
+  const dlg = $("#detail");
+  $("#d-title").textContent = w.name || ("Workstream " + w.community_id);
+  $("#d-meta").textContent = `${w.size} items`;
+  $("#d-body").innerHTML = empty("Loading…");
+  dlg.showModal();
+  try {
+    const d = await get("/graph/insights/communities/" + w.community_id);
+    const byType = {};
+    (d.members || []).forEach(m => {
+      const t = (m.labels || ["Other"])[0];
+      (byType[t] = byType[t] || []).push(m);
+    });
+    const html = Object.entries(byType).map(([t, items]) =>
+      `<h3>${esc(t)} (${items.length})</h3>` +
+      items.slice(0, 25).map(m => `<span class="pill">${esc(m.name)}</span>`).join("")
+    ).join("");
+    $("#d-body").innerHTML = html || empty("Nothing in this workstream.");
+  } catch (e) { $("#d-body").innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+}
+
+const EXAMPLES = [
+  "What was decided about the SOW?",
+  "What is happening with the Verizon engagement?",
+  "What are the current blockers?",
+  "What should I follow up on?",
+];
+function renderExamples() {
+  $("#examples").innerHTML = `<p class="hint">Try one:</p>` +
+    EXAMPLES.map(q => `<button class="ghost" onclick="askExample(this)">${esc(q)}</button>`).join("");
+}
+function askExample(btn) { $("#q").value = btn.textContent; askMemory(); }
 
 async function askMemory() {
   const question = $("#q").value.trim();
   if (!question) return;
-  $("#memory-body").innerHTML = '<div class="empty">Thinking…</div>';
+  $("#ask-body").innerHTML = empty("Searching your meetings…");
   try {
     const r = await fetch("/graph/memory/query", {
       method: "POST", headers: {"Content-Type": "application/json"},
@@ -214,14 +377,48 @@ async function askMemory() {
     });
     if (!r.ok) throw new Error("query -> " + r.status);
     const d = await r.json();
-    $("#memory-body").innerHTML =
+    $("#ask-body").innerHTML =
       `<div class="answer">${esc(d.answer)}</div>` +
-      `<p class="muted">Grounded in ${esc((d.node_ids || []).length)} graph node(s).</p>`;
-  } catch (e) { fail("#memory-body", e); }
+      `<p class="muted" style="font-size:12px">Answered from ${esc((d.node_ids || []).length)} ` +
+      `item(s) in your meeting history. If it doesn't know, it says so rather than guessing.</p>`;
+  } catch (e) { fail("#ask-body", e); }
 }
 
+async function loadReview() {
+  try {
+    const [a, p, b] = await Promise.all([
+      get("/review/actions"), get("/review/people"), get("/review/blockers")]);
+    $("#review-body").innerHTML =
+      `<h3>Low-confidence actions (${a.count})</h3>` +
+      `<p class="hint">Extracted, but not confident enough to file automatically.</p>` +
+      `<div class="scroll">` + table(a.actions, [
+        ["Task", r => esc(r.task)], ["Owner", r => esc(r.owner)],
+        ["Confidence", r => esc(r.confidence)], ["Why", r => esc(r.review_reason)]]) + `</div>` +
+      `<h3>People we couldn't identify (${p.count})</h3>` +
+      `<p class="hint">Mentioned by name with no email to match on. They stay attached to their
+       meeting either way — nothing is dropped.</p>` +
+      `<div class="scroll">` + table(p.people, [
+        ["Name", r => esc(r.name)], ["Role", r => esc(r.role)],
+        ["Meeting", r => esc(r.meeting_title)]]) + `</div>` +
+      `<h3>Open blockers (${b.count})</h3>` +
+      `<div class="scroll">` + table(b.blockers, [
+        ["Blocker", r => esc(r.text)], ["Raised by", r => esc(r.raised_by)],
+        ["Meeting", r => esc(r.meeting_title)]]) + `</div>`;
+  } catch (e) { fail("#review-body", e); }
+}
+
+const LOADERS = {
+  overview: loadOverview,
+  meetings: () => { if (!MEETINGS.length) loadMeetings(); },
+  actions: () => { if (!ACTIONS.length) loadActions(); },
+  workstreams: loadWorkstreams,
+  ask: renderExamples,
+  review: loadReview,
+};
+
 loadHealth();
-loadTimeline();
+loadOverview();
+renderExamples();
 </script>
 </body>
 </html>

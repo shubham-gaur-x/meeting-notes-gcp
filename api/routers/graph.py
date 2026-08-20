@@ -64,3 +64,18 @@ async def digest_weekly(
 ) -> dict[str, Any]:
     """Rollup of the last week: meetings, decisions, and action items by state."""
     return await digest.weekly_digest(days=days)
+
+
+@router.get("/meeting/{meeting_id}")
+async def meeting_detail(meeting_id: str, _: Principal = Depends(principal)) -> dict[str, Any]:
+    """Everything one meeting produced — attendees, topics, decisions, actions."""
+    return await graph_client.get_meeting_detail(meeting_id)
+
+
+@router.get("/decisions")
+async def decisions(
+    limit: int = Query(25, ge=1, le=200), _: Principal = Depends(principal)
+) -> dict[str, Any]:
+    """Decisions, newest first, each traceable to the meeting that made it."""
+    found = await graph_client.get_recent_decisions(limit=limit)
+    return {"decisions": found, "count": len(found)}

@@ -375,19 +375,35 @@ def test_the_dashboard_calls_only_routes_that_exist(app: Any) -> None:
     known = set(app.openapi()["paths"])
 
     assert called, "no fetches found in the dashboard -- the regex is wrong"
+
+    # A path the dashboard builds by concatenation ("/graph/meeting/" + id)
+    # is a prefix of a parameterised route ("/graph/meeting/{meeting_id}").
+    prefixes = {p.split("{")[0] for p in known if "{" in p}
+
     for path in sorted(called):
-        assert path in known, f"dashboard calls {path}, which no route serves"
+        ok = path in known or path in prefixes or any(
+            path.startswith(pre) for pre in prefixes
+        )
+        assert ok, f"dashboard calls {path}, which no route serves"
 
 
-def test_all_four_tabs_are_present() -> None:
+def test_every_tab_has_a_panel_and_a_loader() -> None:
+    """Reorganised during the UX audit around what a user actually asks:
+    what happened (overview), what was decided and by whom (meetings),
+    what do I owe (action items), what is this project (workstreams),
+    anything else (ask), and what needs me (review)."""
+    import re
     from pathlib import Path
 
     import api
 
     html = (Path(api.__file__).parent / "static" / "dashboard.html").read_text()
-    for panel in ("timeline", "review", "insights", "memory"):
-        assert f'data-panel="{panel}"' in html
-        assert f'id="{panel}"' in html
+    tabs = set(re.findall(r'data-panel="([a-z]+)"', html))
+
+    assert tabs == {"overview", "meetings", "actions", "workstreams", "ask", "review"}
+    for panel in tabs:
+        assert f'id="{panel}"' in html, f"tab {panel} has no panel"
+        assert f"{panel}:" in html, f"tab {panel} has no entry in LOADERS"
 
 
 async def test_the_service_root_redirects_to_the_dashboard(app: Any) -> None:
@@ -484,3 +500,84 @@ def test_the_empty_leaderboard_explains_itself() -> None:
     html = (Path(api.__file__).parent / "static" / "dashboard.html").read_text()
     assert "opt-in by design" in html
     assert "tracked" in html
+
+
+# ─── UX audit: does the dashboard answer a user's questions? ──────────────────
+
+
+async def test_meeting_detail_does_not_cartesian_product(app: Any) -> None:
+    """Regression test for a real corruption. Collecting six unrelated
+    one-to-many relationships in ONE MATCH cross-products them: measured on a
+    real meeting, 3 attendees x 6 topics x 3 decisions x 9 reviews x 4 facts
+    reported 29,160 action items instead of 15."""
+    calls: list[str] = []
+
+    class _Result:
+        def __init__(self, rows): self._rows = list(rows)
+        def __aiter__(self): return self
+        async def __anext__(self):
+            if not self._rows:
+                raise StopAsyncIteration
+            return self._rows.pop(0)
+
+    class _Session:
+        async def run(self, cypher: str, **kw: Any) -> Any:
+            calls.append(cypher)
+            if "RETURN m.id AS id" in cypher:
+                return _Result([{"id": "m1", "title": "T", "date": "2026-08-20",
+                                 "kind": "meeting", "platform": "email",
+                                 "summary": "s", "duration_minutes": 30}])
+            if "FOLLOWS_UP" in cypher:
+                return _Result([{"id": "a1", "task": "do it", "owner": "A", "due": None,
+                                 "done": False, "priority": "high", "jira_key": None,
+                                 "owner_email": None}])
+            return _Result([])
+        async def __aenter__(self): return self
+        async def __aexit__(self, *e): return False
+
+    class _Driver:
+        def session(self): return _Session()
+
+    detail = await graph_client.get_meeting_detail("m1", driver=_Driver())
+
+    assert len(detail["action_items"]) == 1
+    assert len(calls) >= 6, "each collection must be its own query, not one joined MATCH"
+
+
+async def test_meeting_detail_returns_empty_for_an_unknown_meeting() -> None:
+    class _Empty:
+        def session(self): return self
+        async def run(self, *a, **k):
+            class _R:
+                def __aiter__(self): return self
+                async def __anext__(self): raise StopAsyncIteration
+            return _R()
+        async def __aenter__(self): return self
+        async def __aexit__(self, *e): return False
+
+    assert await graph_client.get_meeting_detail("nope", driver=_Empty()) == {}
+
+
+def test_the_dashboard_surfaces_decisions_and_action_items() -> None:
+    """The UX failure this audit found: 6 decisions and 28 open actions were
+    extracted and stored, and the dashboard showed neither. It listed meeting
+    titles, an admin review queue, graph clusters and a chat box -- none of
+    which answer "what was decided" or "what do I need to do"."""
+    from pathlib import Path
+
+    import api
+
+    html = (Path(api.__file__).parent / "static" / "dashboard.html").read_text()
+    assert "/graph/decisions" in html, "decisions are never fetched"
+    assert "/graph/actions/open" in html, "open action items are never fetched"
+    assert "/graph/meeting/" in html, "no per-meeting drill-down"
+
+
+def test_the_dashboard_offers_example_questions() -> None:
+    """A bare text box gives a first-time user nothing to start from."""
+    from pathlib import Path
+
+    import api
+
+    html = (Path(api.__file__).parent / "static" / "dashboard.html").read_text()
+    assert "EXAMPLES" in html and "Try one" in html
