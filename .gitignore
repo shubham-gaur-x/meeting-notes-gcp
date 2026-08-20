@@ -19,6 +19,10 @@ crash.log
 !terraform/envs/*.example.tfvars
 override.tf
 override.tf.json
+# Backend configs embed the project-derived bucket name, same reasoning as
+# *.tfvars above: the example is committed, the real file is not.
+*.backend.hcl
+!terraform/envs/*.backend.example.hcl
 
 # Python
 __pycache__/
