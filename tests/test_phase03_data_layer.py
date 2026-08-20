@@ -218,3 +218,190 @@ async def test_restaging_the_same_source_id_does_not_duplicate() -> None:
         async with pool.acquire() as conn:
             await conn.execute("DELETE FROM staged_records WHERE source_id = $1", source_id)
         await pool.close()
+
+
+# ─── graph client write path ──────────────────────────────────────────────────
+
+
+class FakeTx:
+    """Records every Cypher statement instead of running it."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict]] = []
+        self.committed = False
+
+    async def run(self, cypher: str, **params: object) -> None:
+        self.calls.append((cypher, dict(params)))
+
+    async def commit(self) -> None:
+        self.committed = True
+
+    async def __aenter__(self) -> FakeTx:
+        return self
+
+    async def __aexit__(self, *exc: object) -> bool:
+        return False
+
+    def cypher(self) -> str:
+        return "\n".join(c for c, _ in self.calls)
+
+
+class FakeSession:
+    def __init__(self, tx: FakeTx) -> None:
+        self._tx = tx
+
+    async def begin_transaction(self) -> FakeTx:
+        return self._tx
+
+    async def run(self, cypher: str, **params: object):  # type: ignore[no-untyped-def]
+        class _Empty:
+            def __aiter__(self):  # type: ignore[no-untyped-def]
+                return self
+
+            async def __anext__(self):  # type: ignore[no-untyped-def]
+                raise StopAsyncIteration
+
+        return _Empty()
+
+    async def __aenter__(self) -> FakeSession:
+        return self
+
+    async def __aexit__(self, *exc: object) -> bool:
+        return False
+
+
+class FakeDriver:
+    def __init__(self, tx: FakeTx) -> None:
+        self._tx = tx
+
+    def session(self) -> FakeSession:
+        return FakeSession(self._tx)
+
+
+def _meeting(**over: object):  # type: ignore[no-untyped-def]
+    from meeting_notes.models import ExtractedMeeting
+
+    base = {
+        "title": "Weekly sync",
+        "kind": "meeting",
+        "platform": "meet",
+        "date": "2026-08-20",
+        "summary": "we synced",
+    }
+    base.update(over)
+    return ExtractedMeeting.model_validate(base)
+
+
+async def test_the_whole_meeting_is_written_in_one_transaction() -> None:
+    """CLAUDE.md: one ACID transaction per meeting. Sequential separate driver
+    calls would leave a half-written meeting behind on failure."""
+    from meeting_notes import graph_client
+
+    tx = FakeTx()
+    await graph_client.upsert_meeting_graph(
+        _meeting(topics=["Budget"], decisions=["ship it"]),
+        "src-1",
+        driver=FakeDriver(tx),
+        known_people=[],
+    )
+    assert tx.committed, "the transaction was never committed"
+    assert len(tx.calls) > 1, "expected several statements inside the one transaction"
+
+
+async def test_unique_nodes_are_merged_never_created() -> None:
+    """CLAUDE.md: DO NOT use CREATE for unique nodes — always MERGE."""
+    from meeting_notes import graph_client
+
+    tx = FakeTx()
+    await graph_client.upsert_meeting_graph(
+        _meeting(topics=["Budget"], decisions=["ship it"], action_items=[{"owner": "a", "task": "t"}]),
+        "src-1",
+        driver=FakeDriver(tx),
+        known_people=[],
+    )
+    body = tx.cypher()
+    assert "MERGE (m:Meeting" in body
+    import re
+
+    assert not re.search(r"\bCREATE\s+\((?!.*ON CREATE)", body), "found a bare CREATE for a node"
+
+
+async def test_topic_merge_key_is_normalised() -> None:
+    """CLAUDE.md: the Topic MERGE key is lowercased and stripped. Raw case
+    fragmented one real topic across several nodes in v5 and silently
+    understated every insight query."""
+    from meeting_notes import graph_client
+
+    tx = FakeTx()
+    await graph_client.upsert_meeting_graph(
+        _meeting(topics=["  Budget Planning  "]), "src-1", driver=FakeDriver(tx), known_people=[]
+    )
+    topic_params = [p for c, p in tx.calls if "Topic" in c]
+    assert topic_params
+    assert topic_params[0]["name"] == "budget planning"
+
+
+async def test_action_owner_is_resolved_so_assigned_to_can_form() -> None:
+    """Regression test for MIGRATION_FROM_V5.md bug #1.
+
+    v5 bound `owner_email = action.owner if "@" in action.owner else None`.
+    The extractor emits display names, so that was almost always None,
+    OPTIONAL MATCH (p:Person {email: null}) matched nothing, and the live
+    ASSIGNED_TO edge count was ZERO. The owner now goes through the same
+    person resolution the attendees do.
+    """
+    from meeting_notes import graph_client
+
+    tx = FakeTx()
+    await graph_client.upsert_meeting_graph(
+        _meeting(action_items=[{"owner": "Alice Smith", "task": "ship it"}]),
+        "src-1",
+        driver=FakeDriver(tx),
+        known_people=[{"name": "Alice Smith", "email": "alice@corp.com", "tracked": True}],
+    )
+    action_params = [p for c, p in tx.calls if "ActionItem" in c]
+    assert action_params
+    assert action_params[0]["owner_email"] == "alice@corp.com", (
+        "the display-name owner was not resolved; ASSIGNED_TO will never form"
+    )
+
+
+async def test_an_unresolvable_action_owner_leaves_owner_email_null() -> None:
+    """No match must not invent an email — it just means no ASSIGNED_TO edge."""
+    from meeting_notes import graph_client
+
+    tx = FakeTx()
+    await graph_client.upsert_meeting_graph(
+        _meeting(action_items=[{"owner": "Nobody Known", "task": "t"}]),
+        "src-1",
+        driver=FakeDriver(tx),
+        known_people=[],
+    )
+    action_params = [p for c, p in tx.calls if "ActionItem" in c]
+    assert action_params[0]["owner_email"] is None
+
+
+async def test_unresolved_attendees_are_held_for_review_not_dropped() -> None:
+    """CLAUDE.md: attendees are never silently dropped."""
+    from meeting_notes import graph_client
+
+    tx = FakeTx()
+    await graph_client.upsert_meeting_graph(
+        _meeting(attendees=[{"name": "Ghost Person"}]),
+        "src-1",
+        driver=FakeDriver(tx),
+        known_people=[],
+    )
+    assert "PersonReview" in tx.cypher()
+
+
+async def test_meeting_id_is_deterministic_from_the_source_id() -> None:
+    """Re-processing the same record must MERGE onto the same Meeting."""
+    from meeting_notes import graph_client
+    from meeting_notes.utils import uuid5_id
+
+    tx = FakeTx()
+    returned = await graph_client.upsert_meeting_graph(
+        _meeting(), "src-1", driver=FakeDriver(tx), known_people=[]
+    )
+    assert returned == uuid5_id("meeting", "src-1")
