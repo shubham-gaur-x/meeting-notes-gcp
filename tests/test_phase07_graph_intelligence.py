@@ -901,3 +901,50 @@ async def test_an_unknown_step_is_rejected() -> None:
 
     with _pytest.raises(ValueError, match="unknown step"):
         await nightly.run_step("not_a_step")
+
+
+async def test_preference_consolidation_runs_once_per_person_not_per_meeting() -> None:
+    """infer_preferences() works per meeting, which is the wrong granularity:
+    it would spend one LLM call per attendee per meeting to re-derive the same
+    stable traits. Worse, it was never wired to anything, so the Preference
+    layer sat empty while the rest of semantic memory filled up."""
+    calls: list[str] = []
+
+    class _People(FakeSession):
+        async def run(self, cypher: str, **params: Any) -> Any:
+            if "count(m) AS meetings" in cypher:
+                return FakeResult([
+                    {"email": "a@corp.com", "name": "A", "meetings": 5},
+                    {"email": "b@corp.com", "name": "B", "meetings": 3},
+                ])
+            if "ORDER BY m.date DESC" in cypher:
+                return FakeResult([{"title": "Sync", "summary": "we synced"}])
+            return await super().run(cypher, **params)
+
+    async def fake_chat(system, user, **kw):
+        calls.append(user)
+        return [{"category": "work_pattern", "value": "prefers async updates"}]
+
+    result = await semantic.consolidate_preferences(
+        driver=FakeDriver(_People()), chat=fake_chat
+    )
+
+    assert result["people"] == 2
+    assert len(calls) == 2, "one LLM call per PERSON, not per person per meeting"
+
+
+async def test_preference_consolidation_skips_people_with_no_history() -> None:
+    class _Empty(FakeSession):
+        async def run(self, cypher: str, **params: Any) -> Any:
+            if "count(m) AS meetings" in cypher:
+                return FakeResult([{"email": "a@corp.com", "name": "A", "meetings": 2}])
+            return FakeResult([])
+
+    called: list[str] = []
+
+    async def fake_chat(system, user, **kw):
+        called.append(user)
+        return []
+
+    await semantic.consolidate_preferences(driver=FakeDriver(_Empty()), chat=fake_chat)
+    assert called == [], "no history means nothing to infer from"

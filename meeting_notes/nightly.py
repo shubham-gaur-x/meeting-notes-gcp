@@ -18,7 +18,9 @@ import structlog
 
 log = structlog.get_logger()
 
-STEPS: tuple[str, ...] = ("reresolve", "algorithms", "consolidate", "decay", "procedures")
+STEPS: tuple[str, ...] = (
+    "reresolve", "algorithms", "consolidate", "preferences", "decay", "procedures",
+)
 
 
 async def run_step(name: str) -> Any:
@@ -40,6 +42,10 @@ async def run_step(name: str) -> Any:
         return await graph_algorithms.run_full()
     if name == "consolidate":
         return await semantic.consolidate()
+    if name == "preferences":
+        # Once per person over their history, not once per attendee per
+        # meeting -- "how someone likes to work" is not a per-meeting trait.
+        return await semantic.consolidate_preferences()
     if name == "decay":
         return await episodic.decay_relevance()
     if name == "procedures":

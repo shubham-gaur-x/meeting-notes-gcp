@@ -287,3 +287,96 @@ async def consolidate(driver: Any = None) -> dict[str, int]:
 
     log.info("semantic.consolidate_done", facts_boosted=boosted)
     return {"facts_boosted": int(boosted)}
+
+
+async def consolidate_preferences(
+    driver: Any = None,
+    *,
+    settings: Settings | None = None,
+    chat: Any = None,
+    max_people: int = 25,
+    history: int = 12,
+) -> dict[str, int]:
+    """Nightly: infer working preferences once per person, from their history.
+
+    `infer_preferences` works per meeting, which is the wrong granularity — it
+    would spend one LLM call per attendee per meeting to re-derive the same
+    stable traits, and "how this person likes to work" is not a per-meeting
+    property anyway. This runs once per person over their recent meetings.
+
+    (It was also never wired to anything, so the Preference layer sat empty
+    while the rest of semantic memory filled up.)
+    """
+    settings = settings or get_settings()
+    driver = driver or _driver()
+    now = datetime.now(UTC).isoformat()
+
+    async with driver.session() as session:
+        result = await session.run(
+            """
+            MATCH (p:Person)-[:ATTENDED]->(m:Meeting)
+            WITH p, count(m) AS meetings
+            WHERE meetings >= 2
+            RETURN p.email AS email, p.name AS name, meetings
+            ORDER BY meetings DESC
+            LIMIT $max_people
+            """,
+            max_people=max_people,
+        )
+        people = [dict(r) async for r in result]
+
+    written = 0
+    for person in people:
+        async with driver.session() as session:
+            result = await session.run(
+                """
+                MATCH (p:Person {email: $email})-[:ATTENDED]->(m:Meeting)
+                RETURN m.title AS title, coalesce(m.summary, '') AS summary
+                ORDER BY m.date DESC
+                LIMIT $history
+                """,
+                email=person["email"],
+                history=history,
+            )
+            recent = [dict(r) async for r in result]
+
+        if not recent:
+            continue
+        context = f"Person: {person['name']} <{person['email']}>\n" + "\n".join(
+            f"- {r['title']}: {r['summary'][:180]}" for r in recent
+        )
+
+        try:
+            prefs = _parse_list(await _chat(PREF_SYSTEM, context, settings, chat))
+        except Exception as exc:  # noqa: BLE001 - one person must not sink the pass
+            log.warning("semantic.preferences_failed", email=person["email"], error=str(exc))
+            continue
+
+        async with driver.session() as session:
+            for pref in prefs:
+                if not isinstance(pref, dict):
+                    continue
+                category, value = pref.get("category"), pref.get("value")
+                if not category or not value:
+                    continue
+                try:
+                    await session.run(
+                        """
+                        MATCH (p:Person {email: $email})
+                        MERGE (pref:Preference {id: $pref_id})
+                        ON CREATE SET pref.category = $category, pref.created_at = $now
+                        SET pref.value = $value, pref.updated_at = $now
+                        MERGE (p)-[:PREFERS]->(pref)
+                        """,
+                        email=person["email"],
+                        pref_id=uuid5_id("preference", f"{person['email']}:{category}"),
+                        category=category,
+                        value=value,
+                        now=now,
+                    )
+                    written += 1
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("semantic.preference_write_failed", error=str(exc))
+
+    log.info("semantic.preferences_consolidated", people=len(people), written=written)
+    return {"people": len(people), "preferences": written}
