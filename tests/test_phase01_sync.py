@@ -19,9 +19,11 @@ from scripts.sync import (
     backup_uri,
     export_object_name,
     select_latest,
+    select_restore_pair,
     snapshot_name,
     sync_down,
     sync_up,
+    wait_for_memgraph,
 )
 
 FIXED = datetime(2026, 8, 19, 12, 45, 0, tzinfo=UTC)
@@ -210,3 +212,184 @@ def test_sync_up_raises_on_a_genuine_storage_ls_failure() -> None:
 
     with pytest.raises(SyncError, match="Cloud SQL exports"):
         sync_up("personal", "proj", "proj-backups", runner=runner)
+
+
+# ─── restore pairing (ADR-017 follow-up) ──────────────────────────────────────
+
+
+def test_restore_pair_prefers_the_newest_matched_timestamp() -> None:
+    """The bug this exists to prevent.
+
+    A sync-down that writes its export and then fails before the snapshot
+    leaves an export with no partner — observed for real during Phase 1
+    validation. Picking "latest export" and "latest snapshot" independently
+    would then restore Postgres from the orphan while the graph came from an
+    older snapshot: the database claims rows the graph never received.
+    """
+    exports = [
+        "gs://b/cloudsql/meeting-memory-20260801t000000z.sql.gz",
+        "gs://b/cloudsql/meeting-memory-20260820t022231z.sql.gz",  # orphan, newer
+    ]
+    snapshots = ["memgraph-data-20260801t000000z"]
+
+    plan = select_restore_pair(exports, snapshots)
+
+    assert plan.paired
+    assert "20260801t000000z" in (plan.export or "")
+    assert plan.snapshot == "memgraph-data-20260801t000000z"
+
+
+def test_restore_pair_picks_the_newest_when_several_match() -> None:
+    exports = [
+        "gs://b/cloudsql/meeting-memory-20260801t000000z.sql.gz",
+        "gs://b/cloudsql/meeting-memory-20260820t024109z.sql.gz",
+    ]
+    snapshots = ["memgraph-data-20260801t000000z", "memgraph-data-20260820t024109z"]
+
+    plan = select_restore_pair(exports, snapshots)
+
+    assert plan.paired
+    assert "20260820t024109z" in (plan.export or "")
+    assert plan.snapshot == "memgraph-data-20260820t024109z"
+
+
+def test_restore_pair_falls_back_loudly_when_nothing_matches() -> None:
+    """No matched pair must NOT mean discarding usable data — an export can
+    outlive its snapshot or vice versa. Restore the newest of each, but say
+    plainly that they are unpaired so the mismatch is visible."""
+    exports = ["gs://b/cloudsql/meeting-memory-20260820t000000z.sql.gz"]
+    snapshots = ["memgraph-data-20260801t000000z"]
+
+    plan = select_restore_pair(exports, snapshots)
+
+    assert not plan.paired
+    assert "20260820t000000z" in (plan.export or "")
+    assert plan.snapshot == "memgraph-data-20260801t000000z"
+
+
+def test_restore_pair_on_a_virgin_project_is_empty_but_paired() -> None:
+    """Nothing to restore is a legitimate, consistent state — not a mismatch."""
+    plan = select_restore_pair([], [])
+    assert plan.export is None
+    assert plan.snapshot is None
+    assert plan.paired
+
+
+def test_restore_pair_ignores_unparseable_names() -> None:
+    """A stray object in the bucket must not be mistaken for a backup."""
+    plan = select_restore_pair(
+        ["gs://b/cloudsql/notes.txt", "gs://b/cloudsql/meeting-memory-20260801t000000z.sql.gz"],
+        ["memgraph-data-20260801t000000z", "some-unrelated-snapshot"],
+    )
+    assert plan.paired
+    assert "20260801t000000z" in (plan.export or "")
+
+
+def test_sync_up_restores_the_matched_pair_not_the_newest_orphan() -> None:
+    """End-to-end: the orphan export must not reach `gcloud sql import`."""
+    snapshots = json.dumps(
+        [{"name": "memgraph-data-20260801t000000z", "creationTimestamp": "2026-08-01T00:00:00Z"}]
+    )
+    listing = (
+        "gs://b/cloudsql/meeting-memory-20260801t000000z.sql.gz\n"
+        "gs://b/cloudsql/meeting-memory-20260820t022231z.sql.gz\n"
+    )
+    runner = RecordingRunner({"snapshots list": _ok(snapshots), "storage ls": _ok(listing)})
+
+    sync_up("personal", "proj", "proj-backups", runner=runner)
+
+    import_cmd = next(c for c in runner.calls if "import" in " ".join(c))
+    joined = " ".join(import_cmd)
+    assert "20260801t000000z" in joined
+    assert "20260820t022231z" not in joined, "restored the orphan instead of the matched pair"
+
+
+# ─── waiting for Memgraph to actually be serving ──────────────────────────────
+
+
+def test_wait_for_memgraph_returns_when_the_marker_appears() -> None:
+    """terraform reports the VM ready as soon as the API says RUNNING, which is
+    well before Docker has pulled the images. The startup script echoes a
+    marker when the stack is actually up; poll the serial console for it."""
+    slept: list[float] = []
+    runner = RecordingRunner({"serial-port-output": _ok("...\nMemgraph bootstrap complete.\n")})
+
+    ok = wait_for_memgraph(
+        "vm", "us-central1-a", "proj", runner=runner, sleeper=slept.append, attempts=5, delay=1.0
+    )
+
+    assert ok
+    assert slept == [], "should not sleep when the marker is already present"
+
+
+def test_wait_for_memgraph_polls_until_the_marker_shows_up() -> None:
+    calls = {"n": 0}
+    slept: list[float] = []
+
+    def runner(cmd):  # type: ignore[no-untyped-def]
+        calls["n"] += 1
+        if calls["n"] < 3:
+            return _ok("still booting")
+        return _ok("Memgraph bootstrap complete.")
+
+    ok = wait_for_memgraph(
+        "vm", "us-central1-a", "proj", runner=runner, sleeper=slept.append, attempts=5, delay=2.0
+    )
+
+    assert ok
+    assert slept == [2.0, 2.0], "one sleep between each failed poll"
+
+
+def test_wait_for_memgraph_gives_up_without_raising() -> None:
+    """A VM that never finishes bootstrapping is a real problem, but the tier
+    IS up and billing by this point — raising would strand it. Report False
+    and let sync_up surface it as a visible warning instead."""
+    slept: list[float] = []
+    runner = RecordingRunner({"serial-port-output": _ok("no marker here")})
+
+    ok = wait_for_memgraph(
+        "vm", "us-central1-a", "proj", runner=runner, sleeper=slept.append, attempts=3, delay=1.0
+    )
+
+    assert not ok
+    assert len(slept) == 2, "sleeps between attempts, not after the last one"
+
+
+def test_wait_for_memgraph_tolerates_a_failing_serial_console_read() -> None:
+    """The console is not readable in the first seconds after boot. A failed
+    read is 'not ready yet', not a hard error."""
+    slept: list[float] = []
+    runner = RecordingRunner({"serial-port-output": _fail("instance not ready")})
+
+    assert not wait_for_memgraph(
+        "vm", "us-central1-a", "proj", runner=runner, sleeper=slept.append, attempts=2, delay=1.0
+    )
+
+
+def test_sync_up_waits_for_memgraph_when_a_zone_is_known() -> None:
+    """sync-up must not announce the tier is serving before it is."""
+    runner = RecordingRunner(
+        {
+            "snapshots list": _ok("[]"),
+            "storage ls": _fail("One or more URLs matched no objects."),
+            "serial-port-output": _ok("Memgraph bootstrap complete."),
+        }
+    )
+
+    steps = sync_up("personal", "proj", "proj-backups", zone="us-central1-a", runner=runner)
+
+    assert runner.ran("get-serial-port-output")
+    assert any("serving Bolt" in s for s in steps)
+
+
+def test_sync_up_skips_the_wait_when_no_zone_is_configured() -> None:
+    """A missing GCP_ZONE degrades to skipping the health wait rather than
+    blocking a session that is otherwise fine."""
+    runner = RecordingRunner(
+        {"snapshots list": _ok("[]"), "storage ls": _fail("One or more URLs matched no objects.")}
+    )
+
+    steps = sync_up("personal", "proj", "proj-backups", runner=runner)
+
+    assert not runner.ran("get-serial-port-output")
+    assert any("created" in s for s in steps)

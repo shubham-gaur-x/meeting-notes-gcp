@@ -65,7 +65,10 @@ resource "google_compute_instance" "memgraph" {
     memgraph_image = var.memgraph_image
   })
 
-  # Terraform reports the VM ready as soon as the API says RUNNING, which is
-  # well before Docker has pulled the images. scripts/sync.py polls Bolt.
+  # Terraform reports this ready as soon as the Compute API says RUNNING —
+  # about two minutes before Docker has finished pulling the images. There is
+  # no Terraform-side wait for that, so scripts/sync.py polls the serial
+  # console for the marker startup.sh echoes on completion, and `sync-up` does
+  # not claim the tier is serving until it appears.
   allow_stopping_for_update = true
 }

@@ -52,6 +52,10 @@ auth-spike:  ## Run the OAuth spike. Do this before anything else. (ARGS=--recon
 MODULE ?= ephemeral
 TF := terraform -chdir=terraform/$(MODULE)
 
+# Pinned to the ephemeral module regardless of MODULE, for targets that read
+# deployed connection details out of Terraform state.
+TF_EPHEMERAL := terraform -chdir=terraform/ephemeral
+
 tf-bootstrap:  ## Create the GCS state bucket. Run once per project.
 	./scripts/tf_bootstrap.sh $$GCP_PROJECT_ID $${GCP_REGION:-us-central1}
 
@@ -123,12 +127,21 @@ typecheck:  ## mypy over the source trees that exist
 logs:  ## Tail Cloud Run logs (SERVICE=api)
 	gcloud run services logs tail $(SERVICE) --region $$GCP_REGION
 
+# Both of these read the instance name from Terraform state rather than from an
+# env var, so they cannot drift from what is actually deployed. They only work
+# while the ephemeral tier is up (`make sync-up`).
 cypher:  ## Memgraph console on the VM (via IAP — no public Bolt port)
-	gcloud compute ssh $${MEMGRAPH_VM:-meeting-notes-memgraph} \
-	  --tunnel-through-iap --command "docker exec -it memgraph mgconsole"
+	@name=$$($(TF_EPHEMERAL) output -raw memgraph_instance_name) && \
+	  gcloud compute ssh "$$name" --zone "$$GCP_ZONE" --tunnel-through-iap \
+	    --command "docker exec -it memgraph mgconsole"
 
+# Needs the cloud-sql-proxy component:
+#   gcloud components install cloud-sql-proxy
+# Connecting to the public IP directly will hang — there are no authorized
+# networks, by design (docs/SETUP.md).
 psql:  ## Cloud SQL console
-	gcloud sql connect $$CLOUD_SQL_INSTANCE --user=$$POSTGRES_USER --database=$$POSTGRES_DB
+	@conn=$$($(TF_EPHEMERAL) output -raw cloudsql_connection_name) && \
+	  gcloud sql connect "$${conn##*:}" --user=meeting_notes --database=meeting_memory
 
 health:  ## Hit the API health endpoint
 	curl -s "$$API_URL/health" | python3 -m json.tool

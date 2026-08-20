@@ -20,8 +20,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
+import time
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 # A command runner, injected so tests never invoke gcloud or terraform.
@@ -80,6 +83,65 @@ def select_latest(
         ) from exc
 
     return newest[name_field]
+
+
+# ─── choosing what to restore from ────────────────────────────────────────────
+
+# The stamp both artifact names embed, e.g. 20260820t024109z. Anchored to the
+# exact shape _stamp() produces so a stray object in the bucket cannot be
+# mistaken for a backup.
+_STAMP_RE = re.compile(r"\d{8}t\d{6}z")
+
+
+def stamp_of(name: str) -> str | None:
+    """The shared timestamp in an export object path or a snapshot name."""
+    match = _STAMP_RE.search(name)
+    return match.group(0) if match else None
+
+
+@dataclass(frozen=True)
+class RestorePlan:
+    export: str | None
+    snapshot: str | None
+    paired: bool
+
+
+def select_restore_pair(exports: list[str], snapshots: list[str]) -> RestorePlan:
+    """Choose the export and snapshot to restore the ephemeral tier from.
+
+    `sync_down` stamps both artifacts with the same timestamp, so an export
+    and a snapshot sharing a stamp are a matched pair: Postgres holds the
+    staged rows and their `processed` flags, and the graph holds exactly what
+    was built from them.
+
+    Selecting "newest export" and "newest snapshot" independently is wrong.
+    A sync-down that writes its export and then fails before the snapshot
+    leaves an orphan export — not hypothetical, it happened during Phase 1
+    validation. Restoring that newer orphan against an older snapshot gives a
+    database claiming records the graph never received: a silent
+    inconsistency, and a miserable one to diagnose months later.
+
+    So: prefer the newest stamp present on both sides. If nothing matches,
+    still restore the newest of each rather than discarding usable data — an
+    export can outlive its snapshot once the bucket's lifecycle rule starts
+    reclaiming — but report `paired = False` so the caller can say so out loud
+    instead of hiding it.
+    """
+    by_stamp_export = {s: e for e in exports if (s := stamp_of(e))}
+    by_stamp_snapshot = {s: n for n in snapshots if (s := stamp_of(n))}
+
+    both = set(by_stamp_export) & set(by_stamp_snapshot)
+    if both:
+        newest = max(both)
+        return RestorePlan(by_stamp_export[newest], by_stamp_snapshot[newest], paired=True)
+
+    newest_export = by_stamp_export[max(by_stamp_export)] if by_stamp_export else None
+    newest_snapshot = by_stamp_snapshot[max(by_stamp_snapshot)] if by_stamp_snapshot else None
+
+    # Nothing on either side is a consistent state, not a mismatch: a virgin
+    # project has nothing to restore and nothing to be wrong about.
+    paired = newest_export is None and newest_snapshot is None
+    return RestorePlan(newest_export, newest_snapshot, paired=paired)
 
 
 # ─── orchestration ────────────────────────────────────────────────────────────
@@ -205,17 +267,61 @@ def sync_down(
     return steps
 
 
+def wait_for_memgraph(
+    instance: str,
+    zone: str,
+    project_id: str,
+    *,
+    runner: Runner = run,
+    sleeper: Callable[[float], None] = time.sleep,
+    attempts: int = 40,
+    delay: float = 15.0,
+) -> bool:
+    """Block until the Memgraph stack is actually serving, or give up.
+
+    Terraform reports the VM ready as soon as the Compute API says RUNNING,
+    which is roughly two minutes before Docker has finished pulling the images
+    — so `sync-up` used to announce "ephemeral tier is up" while a connection
+    to Bolt would still be refused.
+
+    Polls the serial console for the marker `terraform/ephemeral/startup.sh`
+    echoes on completion. That is deliberately cheaper than polling Bolt
+    itself, which would require standing up an IAP tunnel just to health-check.
+
+    Returns False rather than raising on timeout: by this point the tier is
+    created and billing, so aborting would strand it. The caller surfaces the
+    failure as a visible warning instead.
+    """
+    marker = "Memgraph bootstrap complete"
+    for attempt in range(attempts):
+        result = runner(
+            [
+                "gcloud", "compute", "instances", "get-serial-port-output", instance,
+                f"--zone={zone}", f"--project={project_id}",
+            ]
+        )
+        # A failed read is "not ready yet", not a hard error — the console is
+        # briefly unreadable in the first seconds after boot.
+        if result.returncode == 0 and marker in result.stdout:
+            return True
+        if attempt < attempts - 1:
+            sleeper(delay)
+    return False
+
+
 def sync_up(
     env_name: str,
     project_id: str,
     bucket: str,
     *,
+    zone: str = "",
     runner: Runner = run,
 ) -> list[str]:
-    """Recreate the ephemeral tier, restoring the most recent backup."""
+    """Recreate the ephemeral tier, restoring the newest matched backup pair."""
     steps: list[str] = []
 
-    # 1. Find the newest Memgraph snapshot. None on a virgin project.
+    # 1. List both sides of the backup BEFORE applying, so the export and the
+    #    snapshot can be chosen as a matched pair rather than independently.
     result = _require(
         runner(
             [
@@ -226,31 +332,8 @@ def sync_up(
         ),
         "listing Memgraph snapshots",
     )
-    snapshots = json.loads(result.stdout or "[]")
-    latest_snapshot = select_latest(snapshots, "creationTimestamp", "name") or ""
-    steps.append(
-        f"restoring Memgraph from {latest_snapshot}"
-        if latest_snapshot
-        else "no Memgraph snapshot found — starting from an empty graph"
-    )
+    snapshots = [s["name"] for s in json.loads(result.stdout or "[]") if "name" in s]
 
-    # 2. Apply, handing Terraform the snapshot to restore from.
-    _require(
-        runner(
-            _tf(
-                "ephemeral",
-                "apply",
-                "-auto-approve",
-                f"-var=memgraph_restore_snapshot={latest_snapshot}",
-                env_name=env_name,
-            )
-        ),
-        "terraform apply of the ephemeral tier",
-    )
-    steps.append("ephemeral tier is up")
-
-    # 3. Find the newest Cloud SQL export and import it.
-    #
     # `gcloud storage ls` on a prefix with zero objects exits 1 with "One or
     # more URLs matched no objects" rather than exiting 0 with empty output —
     # confirmed against the real CLI, not assumed. A virgin backup bucket is a
@@ -262,19 +345,65 @@ def sync_up(
     )
     if ls_result.returncode != 0 and "matched no objects" not in ls_result.stderr:
         _require(ls_result, "listing Cloud SQL exports")
-    exports = sorted(line for line in ls_result.stdout.splitlines() if line.endswith(".sql.gz"))
-    if exports:
+    exports = [line.strip() for line in ls_result.stdout.splitlines() if line.strip().endswith(".sql.gz")]
+
+    plan = select_restore_pair(exports, snapshots)
+    if not plan.paired:
+        # Loud, not silent. The two stores are about to disagree about which
+        # point in time they represent, and only the operator can judge
+        # whether that is acceptable.
+        steps.append(
+            "WARNING: no matching export/snapshot pair — restoring "
+            f"Postgres from {plan.export} and the graph from {plan.snapshot}. "
+            "These are from different sync-downs and may disagree."
+        )
+
+    steps.append(
+        f"restoring Memgraph from {plan.snapshot}"
+        if plan.snapshot
+        else "no Memgraph snapshot found — starting from an empty graph"
+    )
+
+    # 2. Apply, handing Terraform the snapshot to restore from.
+    _require(
+        runner(
+            _tf(
+                "ephemeral",
+                "apply",
+                "-auto-approve",
+                f"-var=memgraph_restore_snapshot={plan.snapshot or ''}",
+                env_name=env_name,
+            )
+        ),
+        "terraform apply of the ephemeral tier",
+    )
+    steps.append("ephemeral tier is created")
+
+    # 2b. ...but "created" is not "serving". Wait for the container stack.
+    if zone:
+        instance_name = terraform_output("ephemeral", "memgraph_instance_name", runner=runner)
+        if wait_for_memgraph(instance_name, zone, project_id, runner=runner):
+            steps.append("Memgraph is serving Bolt")
+        else:
+            steps.append(
+                "WARNING: Memgraph did not report a completed bootstrap. The VM is "
+                "up and billing; check `gcloud compute instances "
+                f"get-serial-port-output {instance_name} --zone={zone}`."
+            )
+
+    # 3. Import the paired Cloud SQL export.
+    if plan.export:
         instance = terraform_output("ephemeral", "cloudsql_connection_name", runner=runner)
         _require(
             runner(
                 [
-                    "gcloud", "sql", "import", "sql", instance.split(":")[-1], exports[-1],
+                    "gcloud", "sql", "import", "sql", instance.split(":")[-1], plan.export,
                     "--database=meeting_memory", f"--project={project_id}", "--quiet",
                 ]
             ),
             "Cloud SQL import",
         )
-        steps.append(f"restored Cloud SQL from {exports[-1]}")
+        steps.append(f"restored Cloud SQL from {plan.export}")
     else:
         steps.append("no Cloud SQL export found — starting from an empty database")
 
@@ -312,15 +441,20 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     zone = os.environ.get("GCP_ZONE", "").strip()
-    if args.direction == "down" and not zone:
-        print("GCP_ZONE is unset. Put it in .env — see .env.example.")
-        return 1
+    if not zone:
+        # Required for sync-down (a disk snapshot is zonal). For sync-up it is
+        # only needed to poll the VM, so a missing zone degrades to skipping
+        # that wait rather than blocking the session.
+        if args.direction == "down":
+            print("GCP_ZONE is unset. Put it in .env — see .env.example.")
+            return 1
+        print("  note: GCP_ZONE unset — skipping the wait for Memgraph to finish booting.")
 
     bucket = f"{project_id}-backups"
 
     try:
         steps = (
-            sync_up(args.env, project_id, bucket)
+            sync_up(args.env, project_id, bucket, zone=zone)
             if args.direction == "up"
             else sync_down(args.env, project_id, bucket, zone, now=datetime.now(UTC))
         )
