@@ -62,10 +62,10 @@
     "semantic_hash": "b6b5d1217aa2791584d038d2fc50a2fb"
   },
   "docs/PHASE_PLAN.md": {
-    "mtime": 1787244935.5840611,
-    "seen": 1787245025.553887,
-    "ast_hash": "5fd4f78f97630aa8d524f338603c0457",
-    "semantic_hash": "5fd4f78f97630aa8d524f338603c0457"
+    "mtime": 1787246518.9746985,
+    "seen": 1787248093.0653398,
+    "ast_hash": "eed4b1c614d86299ad12510f9d5f7b61",
+    "semantic_hash": "eed4b1c614d86299ad12510f9d5f7b61"
   },
   "docs/superpowers/plans/2026-08-13-phase-0.5-auth-spike.md": {
     "mtime": 1786657064.1348739,
@@ -335,10 +335,10 @@
     "semantic_hash": "95ac5a9e82eb54ed901ba5eb39344018"
   },
   "meeting_notes/db.py": {
-    "mtime": 1787210700.2413774,
-    "seen": 1787219616.611827,
-    "ast_hash": "ca68aba3e0d52e9d8e43fedff01d2283",
-    "semantic_hash": "ca68aba3e0d52e9d8e43fedff01d2283"
+    "mtime": 1787245511.9618404,
+    "seen": 1787248093.065297,
+    "ast_hash": "ac4efeff27864138302e52f6b14afaa7",
+    "semantic_hash": "ac4efeff27864138302e52f6b14afaa7"
   },
   "meeting_notes/graph_client.py": {
     "mtime": 1787210994.6746013,
@@ -435,5 +435,107 @@
     "seen": 1787245025.553888,
     "ast_hash": "515e21cd2304bd1cdc0dbfd2dd0884a4",
     "semantic_hash": "515e21cd2304bd1cdc0dbfd2dd0884a4"
+  },
+  "jobs/ingest_calendar.py": {
+    "mtime": 1787245874.9134805,
+    "seen": 1787248093.0652852,
+    "ast_hash": "89eb5d6e854e2277b760e546563b80de",
+    "semantic_hash": "89eb5d6e854e2277b760e546563b80de"
+  },
+  "jobs/ingest_gmail.py": {
+    "mtime": 1787245874.9012203,
+    "seen": 1787248093.065289,
+    "ast_hash": "f754f60bd99ceefa12d7163f1e2212a4",
+    "semantic_hash": "f754f60bd99ceefa12d7163f1e2212a4"
+  },
+  "jobs/ingest_jira.py": {
+    "mtime": 1787245874.928338,
+    "seen": 1787248093.06529,
+    "ast_hash": "f46fe84d2c6543b571a7d0bb5a17a158",
+    "semantic_hash": "f46fe84d2c6543b571a7d0bb5a17a158"
+  },
+  "jobs/ingest_meet.py": {
+    "mtime": 1787245874.9448292,
+    "seen": 1787248093.065291,
+    "ast_hash": "167af856ab091b1f43ceb0f55d51b38a",
+    "semantic_hash": "167af856ab091b1f43ceb0f55d51b38a"
+  },
+  "jobs/refresh_tokens.py": {
+    "mtime": 1787245942.4308481,
+    "seen": 1787248093.065291,
+    "ast_hash": "45cb80ce4f741e0a1b21f028fd6ecdc7",
+    "semantic_hash": "45cb80ce4f741e0a1b21f028fd6ecdc7"
+  },
+  "meeting_notes/google_auth.py": {
+    "mtime": 1787246056.3743012,
+    "seen": 1787248093.065299,
+    "ast_hash": "6124fb4c4d90abafb3140b21e7d91339",
+    "semantic_hash": "6124fb4c4d90abafb3140b21e7d91339"
+  },
+  "meeting_notes/jira_client.py": {
+    "mtime": 1787245720.08139,
+    "seen": 1787248093.0653,
+    "ast_hash": "cd1a74de529833061791c38735915fa9",
+    "semantic_hash": "cd1a74de529833061791c38735915fa9"
+  },
+  "meeting_notes/sources/__init__.py": {
+    "mtime": 1787245499.3060348,
+    "seen": 1787248093.065304,
+    "ast_hash": "2ab5c8caa3e2f8ccf569623abadf5eb8",
+    "semantic_hash": "2ab5c8caa3e2f8ccf569623abadf5eb8"
+  },
+  "meeting_notes/sources/base.py": {
+    "mtime": 1787245499.3276374,
+    "seen": 1787248093.065305,
+    "ast_hash": "04df11eabaa6d3da9a3a6b1538c1d1d6",
+    "semantic_hash": "04df11eabaa6d3da9a3a6b1538c1d1d6"
+  },
+  "meeting_notes/sources/calendar.py": {
+    "mtime": 1787246183.3400207,
+    "seen": 1787248093.065305,
+    "ast_hash": "c5f61b39506a055c13b4245a916605ce",
+    "semantic_hash": "c5f61b39506a055c13b4245a916605ce"
+  },
+  "meeting_notes/sources/gmail.py": {
+    "mtime": 1787245623.7790956,
+    "seen": 1787248093.0653062,
+    "ast_hash": "6ea80ff08e69e7d1cb95bdfc7dfcddb1",
+    "semantic_hash": "6ea80ff08e69e7d1cb95bdfc7dfcddb1"
+  },
+  "meeting_notes/sources/jira.py": {
+    "mtime": 1787245896.8106663,
+    "seen": 1787248093.0653062,
+    "ast_hash": "a9eb28ef3b08e2bfdd40d70c0897686b",
+    "semantic_hash": "a9eb28ef3b08e2bfdd40d70c0897686b"
+  },
+  "meeting_notes/sources/meet.py": {
+    "mtime": 1787245896.8119028,
+    "seen": 1787248093.06531,
+    "ast_hash": "4a6cb19732314278b09fba5dc2763230",
+    "semantic_hash": "4a6cb19732314278b09fba5dc2763230"
+  },
+  "meeting_notes/sources/runner.py": {
+    "mtime": 1787245896.8130274,
+    "seen": 1787248093.06531,
+    "ast_hash": "f4245aafbf1e5db1ce2584ff0eaa103d",
+    "semantic_hash": "f4245aafbf1e5db1ce2584ff0eaa103d"
+  },
+  "meeting_notes/token_health.py": {
+    "mtime": 1787245942.4121525,
+    "seen": 1787248093.065311,
+    "ast_hash": "0a570df33b2ca978fda185874d9a7f43",
+    "semantic_hash": "0a570df33b2ca978fda185874d9a7f43"
+  },
+  "tests/test_phase05_connectors.py": {
+    "mtime": 1787246206.087342,
+    "seen": 1787248093.0653389,
+    "ast_hash": "a8424cafb929f18e7ad044c6cd564874",
+    "semantic_hash": "a8424cafb929f18e7ad044c6cd564874"
+  },
+  "docs/superpowers/plans/2026-08-20-phase-5-connectors.md": {
+    "mtime": 1787245462.8870976,
+    "seen": 1787248093.065341,
+    "ast_hash": "2d1a6546017be7b1dead5b105ce04d7a",
+    "semantic_hash": "2d1a6546017be7b1dead5b105ce04d7a"
   }
 }
