@@ -11,6 +11,7 @@ import pytest
 
 from meeting_notes.classifier import classify
 from meeting_notes.config import Settings
+from meeting_notes.dedup import best_match, cosine, similarity
 from meeting_notes.meeting_type_router import TYPES, prompt_hint, route
 from meeting_notes.models import (
     ActionItem,
@@ -349,3 +350,68 @@ def test_router_types_and_extracted_meeting_kind_are_deliberately_different() ->
 
     assert router_only, "the vocabularies have been merged — see this test's docstring"
     assert {"planning", "one_on_one", "general"} <= router_only
+
+
+# ─── dedup ────────────────────────────────────────────────────────────────────
+
+
+def test_cosine_of_identical_vectors_is_one() -> None:
+    assert cosine([1.0, 0.0], [1.0, 0.0]) == 1.0
+
+
+def test_cosine_of_orthogonal_vectors_is_zero() -> None:
+    assert cosine([1.0, 0.0], [0.0, 1.0]) == 0.0
+
+
+def test_cosine_handles_a_zero_vector_without_dividing_by_zero() -> None:
+    """An all-zero embedding is what a failed embed() call looks like. It must
+    return 0.0, not raise ZeroDivisionError inside the drain."""
+    assert cosine([0.0, 0.0], [1.0, 1.0]) == 0.0
+
+
+def test_cosine_handles_mismatched_lengths() -> None:
+    """A dimension change (768 vs anything else) must not crash the pipeline."""
+    assert cosine([1.0, 0.0], [1.0]) == 0.0
+
+
+def test_identical_text_is_maximally_similar_without_embeddings() -> None:
+    """Dedup must still work when embeddings are unavailable — the text path
+    is the fallback, not an optimisation. Candidates are keyed on `task`."""
+    assert similarity("deploy the api", None, {"task": "deploy the api"}) == 1.0
+
+
+def test_text_similarity_ignores_case_and_whitespace() -> None:
+    assert similarity("Deploy   The API", None, {"task": "deploy the api"}) == 1.0
+
+
+def test_unrelated_text_is_not_similar() -> None:
+    assert similarity("deploy the api", None, {"task": "order more coffee"}) < 0.9
+
+
+def test_embeddings_take_precedence_over_text_when_both_sides_have_them() -> None:
+    """Identical text but orthogonal embeddings must score by the embedding —
+    otherwise the cheaper text path would silently win."""
+    score = similarity("same words", [1.0, 0.0], {"task": "same words", "embedding": [0.0, 1.0]})
+    assert score == 0.0
+
+
+def test_best_match_returns_none_below_threshold() -> None:
+    """Below threshold there is no duplicate, so jira_pusher opens a new ticket."""
+    assert best_match("deploy the api", None, [{"task": "order more coffee"}], 0.9) is None
+
+
+def test_best_match_returns_the_winner_with_its_score() -> None:
+    """The caller needs the score to log why it deduped."""
+    match = best_match(
+        "deploy the api",
+        None,
+        [{"task": "order more coffee"}, {"task": "deploy the api", "jira_key": "SCRUM-1"}],
+        0.9,
+    )
+    assert match is not None
+    assert match["jira_key"] == "SCRUM-1"
+    assert match["score"] == 1.0
+
+
+def test_best_match_on_no_candidates_is_none() -> None:
+    assert best_match("anything", None, [], 0.9) is None
