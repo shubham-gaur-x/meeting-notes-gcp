@@ -447,7 +447,47 @@ The only genuinely new code in the project.
 
 ---
 
-## Phase 6 — Pipeline 🟩
+## Phase 6 — Pipeline ✅ DONE (2026-08-20)
+
+**All four exit criteria met live — including the literal "Jira ticket" hop.**
+
+| Criterion | Result |
+|---|---|
+| One real record end-to-end: staged → classified → routed → extracted → graph → Jira ticket | **Proven fully.** One real staged email → real Vertex extraction → real Memgraph write → **15 real Jira tickets (MNV-1..MNV-15)** on a freshly created board, correctly labeled, correctly populated |
+| `ASSIGNED_TO` edges exist | **10 live edges** across 95 real Meeting / 29 real ActionItem nodes from Phase 5's staged Onix data — e.g. the display name "Namrata Mehta" correctly resolved to `namrata.mehta@onixnet.com` |
+| Confidence gating works | Write mechanism verified directly against a real node (then restored — real data was uniformly 0.7-1.0 confidence, nothing to gate); full behaviour covered by 6 unit tests |
+| Dedup works | **Genuine 0.923 text-similarity match found** in real recurring-meeting data (two "share the agenda for the Verizon GE kickoff" items), above the real 0.9 default threshold — `MENTIONED_IN` written and verified live |
+
+**A new Jira project was created for this** (`shubhamgaur1.atlassian.net`, key `MNV`, Kanban
+template) rather than reusing v5's `SCRUM` board, so v6's live test tickets stay isolated. A
+fresh API token was minted rather than reusing v5's.
+
+**One live bug found and fixed**: `active_sprint_id` retried a **permanent** 400 ("Kanban
+boards don't support sprints") three times before falling back — ~14s wasted on every single
+push for no benefit, since the fallback already existed. Fixed to recognise the 400 and skip
+straight to it (0.88s after the fix, confirmed live).
+
+**Two real gaps fixed before `jira_pusher` was built on top of them**, found reading v5's
+`memgraph_client.py` closely rather than porting blind:
+
+- `get_open_actions_for_owner` had no `exclude_id` — by the time `jira_pusher` runs,
+  `upsert_meeting_graph` has already written *every* action item in the meeting, so without
+  excluding the current one, an item could match itself at similarity 1.0.
+- `update_action_jira_status` returned `None` instead of whether a node matched, derived from
+  the write summary's counters — `jira_sync`'s batch counters needed to be able to tell "no
+  such key" (real signal) from "nothing happened" (a bug).
+
+**`pipeline.py` collapses v5's three ~90%-identical `process_*` functions into one
+`process(record, adapter)`** (ADR-010). `MeetAdapter` keeps v5's one deliberate behavioural
+difference: a real transcript is strong signal on its own and bypasses the classifier's score
+gate, which was tuned for email subjects.
+
+Bug #1 (`ASSIGNED_TO`) was not re-fixed here — Phase 3 already fixed it; this phase just
+proved it holds at real scale.
+
+---
+
+### Original plan
 
 **Tasks**
 1. `pipeline.py` — one `process(record, adapter)` (ADR-010) with per-source adapters.
