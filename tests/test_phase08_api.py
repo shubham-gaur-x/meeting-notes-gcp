@@ -471,3 +471,16 @@ def test_bookkeeping_nodes_are_excluded_from_insights() -> None:
         start = source.index(f"async def {name}(")
         body = source[start : start + 1400]
         assert "bookkeeping" in body, f"{name} does not exclude bookkeeping nodes"
+
+
+def test_the_empty_leaderboard_explains_itself() -> None:
+    """"Most connected Person (0)" with a bare "Nothing here yet" reads as
+    broken, when it is actually the governance gate working. The empty state
+    must say WHY it is empty."""
+    from pathlib import Path
+
+    import api
+
+    html = (Path(api.__file__).parent / "static" / "dashboard.html").read_text()
+    assert "opt-in by design" in html
+    assert "tracked" in html

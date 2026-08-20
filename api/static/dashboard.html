@@ -181,11 +181,16 @@ async function loadInsights() {
     $("#insights-body").innerHTML =
       `<h3>Most connected ${esc(label)} (${inf.count})</h3>` +
       `<p class="muted">Ranked by how central each one is to the meeting graph.</p>` +
-      `<div class="scroll">` +
-      table(inf.nodes, [["Name", r => r.name],
-                        ["PageRank", r => (r.pagerank_score ?? 0).toFixed?.(5) ?? r.pagerank_score],
-                        ["Community", r => r.community_id]]) +
-      `</div><h3>Workstreams (${com.count})</h3>` +
+      (inf.count === 0 && label === "Person"
+        ? `<div class="empty">No one is opted in.<br><span class="muted">Naming individuals ` +
+          `is opt-in by design — a person appears here only once <code>tracked</code> is set ` +
+          `on them. Everything else on this page is an aggregate.</span></div>`
+        : `<div class="scroll">` +
+          table(inf.nodes, [["Name", r => r.name],
+                            ["Centrality", r => (r.pagerank_score ?? 0).toFixed?.(5) ?? r.pagerank_score],
+                            ["Workstream", r => r.community_id]]) + `</div>`) +
+      `` +
+      `<h3>Workstreams (${com.count})</h3>` +
       `<p class="muted">Clusters the graph found on its own, named by the topics inside them.</p>` +
       `<div class="scroll">` +
       table(com.communities.slice(0, 15),
