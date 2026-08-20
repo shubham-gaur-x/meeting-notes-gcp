@@ -581,7 +581,61 @@ its own bias.
 
 ---
 
-## Phase 8 — API and dashboard 🟩
+## Phase 8 — API and dashboard ✅ DONE (2026-08-20)
+
+**25 routes, four working tabs, verified in a browser against the real 95-meeting graph.**
+
+**The governance criterion, proven live.** Same endpoint, same graph, same algorithms — the
+only difference is the `Person.tracked` gate:
+
+| request | result |
+|---|---|
+| `/graph/insights/influential?label=Person` | **0 nodes** — 12 real people have PageRank scores, none is `tracked` |
+| `/graph/insights/influential?label=Topic` | 4 nodes with real scores — no privacy interest, so no gate |
+
+The gate lives in `graph_client.get_influential_nodes`, so every caller inherits it rather than
+each endpoint remembering to filter. A test drives the **real** function with a fake driver —
+using a reference captured at import time, before the autouse stub fixture can replace it —
+and was verified to fail when the gate is removed.
+
+**All four tabs render live data with no console errors.** Timeline (7 meetings, 6 decisions,
+28 actions from the weekly digest) · Review Queue (**50 unresolved attendees held** with
+reason `no-email-no-match` — the "never silently dropped" promise, visible) · Insights (36
+communities: 63, 41, 37, 22…) · Memory (a Vertex-backed answer about the Verizon engagement,
+grounded in 5 graph nodes).
+
+**Every route is driven through the real ASGI app.** `MIGRATION_FROM_V5.md` #3 exists because
+v5's tests called handler functions directly, so a structlog `event=` collision inside a route
+was never exercised and reached production as a 500. There is now both a route test that runs
+the webhook's own log call **and** a static check that no route passes `event=`.
+
+**Three things live verification caught that tests did not:**
+
+- **`GET /` returned 404** — the deployed service's front door. Nothing in the suite requested
+  `/`. Now a 307 to `/dashboard`.
+- **`/graph/digest/weekly` did not exist** — porting v5's dashboard revealed its timeline tab
+  calls it. Added, with the shaping as a pure function.
+- **Route enumeration by walking `app.routes` finds only 6 of 25** — this FastAPI version keeps
+  included routers nested. The dashboard-wiring test reads the OpenAPI schema instead;
+  otherwise it would have passed vacuously while every real route went unchecked.
+
+**Deliberate differences from v5:**
+
+| | |
+|---|---|
+| `GITHUB_WEBHOOK_SECRET` unset | Accepts locally, **rejects when deployed**. v5 accepted unconditionally, turning a missing production secret into an unauthenticated write path into the graph. |
+| `/webhook/jira` | Acknowledge-only. Jira Cloud webhooks carry no HMAC, so `jira_sync` polls instead — authenticated and unspoofable. |
+| `/webhook/airbyte` | **Dropped** — no Airbyte in v6. |
+| `/agent/actions/run` | **v2** — `action_agent` is out of scope (ADR-008). |
+| Provenance readers | Ship returning empty. ADR-008 puts their writers in v2; empty is correct, not broken. |
+| APScheduler | **Zero references** (v5's `main.py` had 17), asserted by test. |
+
+**Deferred to Phase 9:** Cloud Run deployment. It needs the ephemeral tier up, and the API is
+fully verifiable locally against the same graph.
+
+---
+
+### Original plan
 
 **Tasks**
 1. `api/main.py` + `api/routers/` — every v5 endpoint, **zero APScheduler**.
