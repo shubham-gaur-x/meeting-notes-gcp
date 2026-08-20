@@ -405,3 +405,57 @@ async def test_meeting_id_is_deterministic_from_the_source_id() -> None:
         _meeting(), "src-1", driver=FakeDriver(tx), known_people=[]
     )
     assert returned == uuid5_id("meeting", "src-1")
+
+
+# ─── memgraph schema (ADR-008) ────────────────────────────────────────────────
+
+
+def test_every_core_and_memory_label_is_constrained() -> None:
+    """CLAUDE.md's schema: every node has a unique id. A label with no
+    constraint silently permits duplicates that MERGE cannot collapse."""
+    from scripts.setup_memgraph import statements
+
+    body = "\n".join(statements(embedding_dimension=768))
+    for label in (
+        "Meeting", "Person", "Organization", "Topic", "Decision", "ActionItem",
+        "Fact", "Preference", "Procedure", "ProcedureStep", "MemorySession",
+        "PersonReview", "Blocker",
+    ):
+        assert label in body, f"{label} has no constraint or index"
+
+
+def test_provenance_labels_ship_in_v1_even_though_writers_are_v2() -> None:
+    """ADR-008: provenance cannot be backfilled. A merge that happens before
+    the schema exists is lost forever, so the schema ships now and only the
+    writers wait for v2."""
+    from scripts.setup_memgraph import statements
+
+    body = "\n".join(statements(embedding_dimension=768))
+    for label in ("Ticket", "PullRequest", "AgentRun", "Commit", "FileChange"):
+        assert label in body, f"provenance label {label} missing — ADR-008 requires it in v1"
+
+
+def test_both_vector_indexes_use_the_configured_dimension() -> None:
+    """CLAUDE.md: 768 in both backends because the indexes are built for 768.
+    Hardcoding a different number silently breaks semantic search."""
+    from scripts.setup_memgraph import statements
+
+    vector = [s for s in statements(embedding_dimension=768) if "VECTOR INDEX" in s.upper()]
+    assert len(vector) >= 2, "expected a Meeting and a Fact vector index"
+    assert all('"dimension": 768' in s for s in vector)
+
+
+def test_vector_dimension_follows_settings_rather_than_being_hardcoded() -> None:
+    """If someone migrates the indexes, the setting is the single knob."""
+    from scripts.setup_memgraph import statements
+
+    vector = [s for s in statements(embedding_dimension=1024) if "VECTOR INDEX" in s.upper()]
+    assert vector and all('"dimension": 1024' in s for s in vector)
+
+
+def test_statements_are_individually_runnable() -> None:
+    """Memgraph takes one statement per run(); a semicolon-joined blob fails."""
+    from scripts.setup_memgraph import statements
+
+    for s in statements(embedding_dimension=768):
+        assert ";" not in s, f"statement contains a semicolon: {s[:60]}"
