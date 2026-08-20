@@ -608,3 +608,138 @@ async def test_matching_increments_the_occurrence_count() -> None:
 
     assert "incident_response" in matched
     assert "p.occurrence_count + 1" in session.cypher()
+
+
+# ─── memory/retrieval ─────────────────────────────────────────────────────────
+
+from meeting_notes.config import Settings  # noqa: E402
+from meeting_notes.memory import retrieval  # noqa: E402
+
+
+def test_pipeline_never_imports_retrieval() -> None:
+    """CLAUDE.md: DO NOT call memory/retrieval.py from pipeline.py.
+
+    Retrieval is query-time only; importing it into the pipeline would put an
+    LLM synthesis call on the ingestion path.
+    """
+    from pathlib import Path
+
+    import meeting_notes.pipeline as pipeline_module
+
+    source = Path(pipeline_module.__file__).read_text()
+    assert "memory.retrieval" not in source
+    assert "import retrieval" not in source
+
+
+async def test_an_untracked_person_yields_no_profile() -> None:
+    """The governance promise: per-person analytics are opt-in. Aggregates are
+    the default; naming individuals requires Person.tracked."""
+    session = FakeSession(results={"MATCH (p:Person {email: $email})": [
+        {"id": "p1", "name": "Alice", "email": "a@corp.com", "tracked": False,
+         "pagerank_score": 0.9, "community_id": 1,
+         "betweenness_centrality": 0.5, "degree_centrality": 0.4},
+    ]})
+
+    profile = await retrieval.person_memory_profile("a@corp.com", driver=FakeDriver(session))
+    assert profile == {}, "an untracked person must not get a per-person profile"
+
+
+async def test_a_tracked_person_yields_a_profile() -> None:
+    session = FakeSession(results={"MATCH (p:Person {email: $email})": [
+        {"id": "p1", "name": "Alice", "email": "a@corp.com", "tracked": True,
+         "pagerank_score": 0.9, "community_id": 1,
+         "betweenness_centrality": 0.5, "degree_centrality": 0.4},
+    ]})
+
+    profile = await retrieval.person_memory_profile("a@corp.com", driver=FakeDriver(session))
+    assert profile["name"] == "Alice"
+    assert "facts" in profile and "knows" in profile
+
+
+async def test_an_unknown_person_yields_no_profile() -> None:
+    profile = await retrieval.person_memory_profile("nobody@corp.com", driver=FakeDriver(FakeSession()))
+    assert profile == {}
+
+
+async def test_low_confidence_facts_are_filtered_at_read_time() -> None:
+    """Facts seed at 0.3 and gain 0.1 per corroboration, so an unfiltered read
+    surfaces one-off noise at the same weight as a well-corroborated fact."""
+    session = FakeSession(results={"MATCH (p:Person {email: $email})": [
+        {"id": "p1", "name": "A", "email": "a@corp.com", "tracked": True,
+         "pagerank_score": None, "community_id": None,
+         "betweenness_centrality": None, "degree_centrality": None},
+    ]})
+    settings = Settings(_env_file=None, FACT_MIN_CONFIDENCE=0.75)
+
+    await retrieval.person_memory_profile("a@corp.com", driver=FakeDriver(session), settings=settings)
+
+    fact_params = [p for c, p in session.calls if "HAS_FACT" in c]
+    assert fact_params and fact_params[0]["min_confidence"] == 0.75
+
+
+async def test_knows_is_matched_in_both_directions() -> None:
+    """KNOWS is stored in one canonical direction (lexicographically ordered
+    emails), so a directed match would lose half the edges."""
+    session = FakeSession(results={"MATCH (p:Person {email: $email})": [
+        {"id": "p1", "name": "A", "email": "a@corp.com", "tracked": True,
+         "pagerank_score": None, "community_id": None,
+         "betweenness_centrality": None, "degree_centrality": None},
+    ]})
+    await retrieval.person_memory_profile("a@corp.com", driver=FakeDriver(session))
+
+    knows = [c for c, _ in session.calls if "KNOWS" in c]
+    assert knows and "-[k:KNOWS]-(" in knows[0], "KNOWS must be matched undirected"
+
+
+async def test_a_question_with_no_matching_context_is_answered_honestly() -> None:
+    """Honest emptiness beats a confident guess — the point of a memory system
+    is that its answers are grounded."""
+    async def fake_chat(system, user, **kw):
+        return {"people": [], "topics": [], "date_hint": None}
+
+    result = await retrieval.full_memory_query(
+        "what did we decide about nothing?", driver=FakeDriver(FakeSession()), chat=fake_chat
+    )
+
+    assert result["node_ids"] == []
+    assert "don't have" in result["answer"]
+
+
+async def test_an_answer_reports_the_nodes_it_came_from() -> None:
+    """The caller can show its working rather than presenting an unsourced
+    assertion."""
+    session = FakeSession(results={"MATCH (f:Fact)": [
+        {"id": "f1", "text": "Alice leads backend", "confidence": 0.8},
+    ]})
+
+    calls: list[str] = []
+
+    async def fake_chat(system, user, **kw):
+        calls.append(system)
+        if "Extract entities" in system:
+            return {"people": ["Alice"], "topics": [], "date_hint": None}
+        return {"answer": "Alice leads the backend team."}
+
+    result = await retrieval.full_memory_query(
+        "who leads backend?", driver=FakeDriver(session), chat=fake_chat, log_session=False
+    )
+
+    assert "f1" in result["node_ids"]
+    assert result["answer"] == "Alice leads the backend team."
+    assert any("Context:" in s for s in calls), "the graph context must reach the model"
+
+
+async def test_synthesis_failure_degrades_rather_than_raising() -> None:
+    session = FakeSession(results={"MATCH (f:Fact)": [
+        {"id": "f1", "text": "a fact", "confidence": 0.9},
+    ]})
+
+    async def half_broken_chat(system, user, **kw):
+        if "Extract entities" in system:
+            return {"people": [], "topics": [], "date_hint": None}
+        raise RuntimeError("model down")
+
+    result = await retrieval.full_memory_query(
+        "anything?", driver=FakeDriver(session), chat=half_broken_chat, log_session=False
+    )
+    assert result["answer"] == retrieval.NO_CONTEXT_ANSWER
