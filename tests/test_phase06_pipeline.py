@@ -382,6 +382,27 @@ async def test_active_sprint_id_returns_the_first_active_sprint() -> None:
     assert await active_sprint_id(settings=_jira_settings(), transport=transport) == 7
 
 
+async def test_a_kanban_boards_400_is_not_retried_and_returns_none() -> None:
+    """Regression test for a live finding: a Kanban board returns 400 'the
+    board does not support sprints' for this endpoint, a permanent property
+    of the board rather than a transient failure. Retrying it three times
+    wasted ~14s on every push for no benefit, since jira_pusher already
+    treats any failure here as 'proceed without a sprint'."""
+    import httpx
+
+    calls: list[str] = []
+
+    async def transport(method, url, headers, params, json_body):
+        calls.append(url)
+        request = httpx.Request("GET", url)
+        response = httpx.Response(400, request=request)
+        raise httpx.HTTPStatusError("400", request=request, response=response)
+
+    result = await active_sprint_id(settings=_jira_settings(), transport=transport)
+    assert result is None
+    assert len(calls) == 1, "a permanent 400 must not be retried"
+
+
 async def test_move_to_sprint_posts_the_issue_key() -> None:
     seen: dict = {}
 

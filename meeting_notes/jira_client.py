@@ -167,15 +167,30 @@ MEETING_ACTION_ITEM_LABEL = "meeting-action-item"
 _PRIORITY_MAP = {"high": "High", "medium": "Medium", "low": "Low"}
 
 
-@with_retry(max_attempts=3, base_delay=2.0)
 async def active_sprint_id(
     *, settings: Settings | None = None, transport: Transport | None = None
 ) -> int | None:
-    """The current active sprint on the configured board, or None."""
+    """The current active sprint on the configured board, or None.
+
+    Not retried: a Kanban board returns 400 "the board does not support
+    sprints" for this endpoint, which is a permanent property of the board,
+    not a transient failure. Confirmed live against a real Kanban board --
+    retrying it three times (2s/4s/8s backoff) wasted ~14s on every push for
+    no benefit, since jira_pusher already treats any failure here as
+    "proceed without a sprint". A genuine transient error (timeout, 5xx)
+    still surfaces to that same fallback, just without the wasted retries.
+    """
     settings = settings or get_settings()
     transport = transport or _default_transport
     url = f"https://{settings.jira_domain}/rest/agile/1.0/board/{settings.jira_board_id}/sprint"
-    _, body = await transport("GET", url, jira_headers(settings), {"state": "active"}, None)
+    try:
+        _, body = await transport("GET", url, jira_headers(settings), {"state": "active"}, None)
+    except Exception as exc:
+        import httpx
+
+        if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 400:
+            return None
+        raise
     sprints = (body or {}).get("values", [])
     return int(sprints[0]["id"]) if sprints else None
 
