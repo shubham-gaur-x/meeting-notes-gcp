@@ -320,7 +320,50 @@ v6's migration at `localhost:5432` would have applied v6 schema **into v5's data
 
 ---
 
-## Phase 4 — LLM seam 🟩
+## Phase 4 — LLM seam ✅ DONE (2026-08-20)
+
+**All four exit criteria met, the live ones verified against real Vertex.**
+
+**Model names confirmed, not assumed** — the phase explicitly warned they change.
+`gemini-2.5-flash` responds on Vertex in `us-central1`, and **`text-embedding-005` returns
+exactly 768 dimensions**, already unit-normalised, which is what the cosine-metric vector
+indexes want. `.env.example` now carries both as confirmed defaults with the date checked.
+
+**Four backends behind one protocol** (ADR-014) — `fake` · `gemini` · `lmstudio` · `vertex`.
+Every one is exercised through an injected transport, so all 259 tests run with no network, no
+API key and no LM Studio.
+
+**Retry semantics are now a test rather than a comment.** Transport errors retry three times;
+a parse failure returns `None` and is **not** retried, because at temperature 0 an identical
+retry yields identical output and would only burn quota to fail the same way.
+
+**Tier 0 works offline.** Three recorded fixtures replay with `duration_ms=0` and no
+credentials. Extraction quality on the corpus is good: `kind` correct per meeting type, due
+dates parsed from prose ("September 5th" → `2026-09-05`), `is_engineering_task` separating
+"tell the exec team" from "spec the dual-write", and a negative decision ("no contractor")
+captured rather than dropped.
+
+**Where v5's helpers landed.** `_loads_lenient` moved to `llm_client.py` — its body unchanged.
+That follows from the protocol `CLAUDE.md` mandates: `chat_json` returns a `dict`, so turning
+model output into one is the seam's job. `_is_null_like` stayed with the extractor, where it
+repairs fields against *our* schema.
+
+**The prompt is carried byte for byte** and lives in `meeting_notes/prompts.py`, with a test
+that diffs it against v5's file. Verified the test catches drift — changing one word fails it.
+It sits in its own module because it contains over-length lines, and reflowing tuned prompt
+text to satisfy a linter is not a trade worth making; E501 is waived there alone.
+
+**Fixture keys cannot drift.** The recorder derives prompts from the extractor's own helper,
+and a test proves what it writes is exactly what `extract_meeting` looks up. `CLAUDE.md` calls
+writer/reader id drift a known v5 bug class that cost real debugging time twice.
+
+**Note on `kind`:** required in v6 exactly as in v5, so no porting regression. Deliberately
+*not* given a repair — silently coercing an unknown kind to `other` would distort the very
+Phase 7 algorithms that key off meeting type.
+
+---
+
+### Original plan
 
 **Tasks**
 1. `llm_client.py` — `chat_json()` and `embed()`, backends `vertex` and `lmstudio`.
