@@ -1,0 +1,22 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "api",
+      "runtimeExecutable": ".venv/bin/python",
+      "runtimeArgs": ["-m", "uvicorn", "api.main:app", "--port", "8080"],
+      "port": 8080,
+      "env": {
+        "MEMGRAPH_HOST": "localhost",
+        "MEMGRAPH_PORT": "57687",
+        "POSTGRES_HOST": "localhost",
+        "POSTGRES_PORT": "55432",
+        "LLM_BACKEND": "vertex",
+        "VERTEX_CHAT_MODEL": "gemini-2.5-flash",
+        "VERTEX_EMBEDDING_MODEL": "text-embedding-005",
+        "VERTEX_LOCATION": "us-central1",
+        "GCP_PROJECT_ID": "meeting-notes-gcp-personal"
+      }
+    }
+  ]
+}

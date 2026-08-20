@@ -15,7 +15,7 @@ from typing import Any
 
 import structlog
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 
 from api.routers import graph, insights, memory, review, webhooks
 from meeting_notes.config import get_settings
@@ -75,6 +75,16 @@ def create_app() -> FastAPI:
             "memgraph": graph_ok,
             "llm_backend": settings.llm_backend,
         }
+
+    @app.get("/", include_in_schema=False)
+    async def root() -> RedirectResponse:
+        """The service root points at the dashboard.
+
+        Without this, the first thing anyone opening the deployed Cloud Run URL
+        sees is a 404 — found by checking the browser console rather than the
+        tests, which never requested `/`.
+        """
+        return RedirectResponse(url="/dashboard")
 
     @app.get("/dashboard", response_class=HTMLResponse)
     async def dashboard() -> HTMLResponse:

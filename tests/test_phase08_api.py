@@ -387,3 +387,14 @@ def test_all_four_tabs_are_present() -> None:
     for panel in ("timeline", "review", "insights", "memory"):
         assert f'data-panel="{panel}"' in html
         assert f'id="{panel}"' in html
+
+
+async def test_the_service_root_redirects_to_the_dashboard(app: Any) -> None:
+    """Found by reading the browser console, not the tests: nothing requested
+    `/`, so the deployed service's front door 404'd."""
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/", follow_redirects=False)
+
+    assert response.status_code in (307, 308)
+    assert response.headers["location"] == "/dashboard"
