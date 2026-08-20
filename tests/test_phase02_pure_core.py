@@ -26,6 +26,15 @@ from meeting_notes.access_control import (
 from meeting_notes.classifier import classify
 from meeting_notes.config import Settings
 from meeting_notes.dedup import best_match, cosine, similarity
+from meeting_notes.meeting_quality import (
+    composite_quality,
+    percentile_rank,
+    score_action_completion,
+    score_agenda_present,
+    score_attendance_ratio,
+    score_recurrence_health,
+    top_and_bottom,
+)
 from meeting_notes.meeting_type_router import TYPES, prompt_hint, route
 from meeting_notes.models import (
     ActionItem,
@@ -626,3 +635,86 @@ def test_load_policy_with_no_path_returns_the_in_code_default() -> None:
     policy = load_policy(None)
     assert policy
     assert all(isinstance(p, Principal) for p in policy.values())
+
+
+# ─── meeting quality ──────────────────────────────────────────────────────────
+
+
+def test_percentile_rank_of_the_maximum_is_one() -> None:
+    assert percentile_rank(10.0, [1.0, 5.0, 10.0]) == 1.0
+
+
+def test_percentile_rank_on_too_small_a_population_is_neutral() -> None:
+    """A first-ever meeting has nothing to rank against. Returning a neutral
+    0.5 is honest; returning 0.0 would punish it for being first."""
+    assert percentile_rank(1.0, []) == 0.5
+    assert percentile_rank(1.0, [3.0]) == 0.5
+
+
+def test_missing_inputs_score_none_rather_than_zero() -> None:
+    """None means 'not measurable', 0.0 means 'measured and bad'. Collapsing
+    the two would drag composite scores down for meetings that simply lack
+    attendance data."""
+    assert score_attendance_ratio(None, 10) is None
+    assert score_attendance_ratio(5, None) is None
+    assert score_attendance_ratio(5, 0) is None
+    assert score_action_completion(None, None) is None
+    assert score_action_completion(3, 0) is None
+
+
+def test_attendance_ratio_is_a_clamped_fraction() -> None:
+    assert score_attendance_ratio(5, 10) == 0.5
+    assert score_attendance_ratio(20, 10) == 1.0
+
+
+def test_agenda_detection_distinguishes_absent_from_unmeasurable() -> None:
+    """The whole None-vs-0.0 contract in one place: no text at all cannot be
+    judged (None); prose that simply has no agenda was judged (0.0)."""
+    assert score_agenda_present("Agenda:\n1. budget\n2. hiring") == 1.0
+    assert score_agenda_present("hey, are we still on for later?") == 0.0
+    assert score_agenda_present("") is None
+    assert score_agenda_present("   ") is None
+    assert score_agenda_present(None) is None
+
+
+def test_composite_ignores_missing_components_and_renormalizes() -> None:
+    """A meeting missing one signal is scored on the rest, not penalised."""
+    both = composite_quality({"attendance_ratio": 1.0, "action_completion": 1.0})
+    one = composite_quality({"attendance_ratio": 1.0, "action_completion": None})
+    assert both == 1.0
+    assert one == 1.0
+
+
+def test_composite_with_no_data_at_all_is_none_not_zero() -> None:
+    """Honest 'insufficient data'. Scoring it 0.0 would rank a meeting we know
+    nothing about below one we know was bad."""
+    assert composite_quality({"attendance_ratio": None}) is None
+    assert composite_quality({}) is None
+
+
+def test_recurrence_health_needs_a_series() -> None:
+    assert score_recurrence_health([0.5]) is None
+    assert score_recurrence_health([]) is None
+
+
+def test_a_declining_series_scores_below_its_mean() -> None:
+    declining = score_recurrence_health([0.9, 0.7, 0.5])
+    improving = score_recurrence_health([0.5, 0.7, 0.9])
+    assert declining is not None and improving is not None
+    assert declining < improving
+
+
+def test_top_and_bottom_ignores_unscored_meetings() -> None:
+    """Meetings with insufficient data must not appear in a leaderboard at
+    either end — they are unknown, not bad."""
+    ranked = top_and_bottom(
+        [
+            {"id": "a", "quality_score": 0.9},
+            {"id": "b", "quality_score": 0.1},
+            {"id": "c", "quality_score": None},
+        ],
+        k=5,
+    )
+    assert [m["id"] for m in ranked["lowest"]] == ["b", "a"]
+    assert [m["id"] for m in ranked["highest"]] == ["a", "b"]
+    assert all(m["id"] != "c" for m in ranked["lowest"] + ranked["highest"])
