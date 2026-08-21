@@ -29,6 +29,8 @@ import asyncpg
 import structlog
 
 from meeting_notes.config import Settings, get_settings
+from meeting_notes.dev_agent.lifecycle import TERMINAL_STATES
+from meeting_notes.dev_agent.models import DevAgentRun
 from meeting_notes.models import SourceType, StagedRecord
 
 log = structlog.get_logger()
@@ -66,6 +68,73 @@ CREATE TABLE IF NOT EXISTS watermarks (
     value       TEXT NOT NULL,
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+"""
+
+# Phase 11 (ADR-020): the dev agent's own run tracking. One `state` column,
+# not v5's parallel `state` + `status` pair -- two overlapping vocabularies
+# for "is this run done" is exactly the kind of duplicated source of truth
+# that let them drift and produce the SHIPPED resume-loop bug. `state` is
+# always one of meeting_notes.dev_agent.lifecycle.ALL_STATES.
+DEV_AGENT_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS dev_agent_runs (
+    ticket_key    TEXT PRIMARY KEY,
+    state         TEXT NOT NULL,
+    branch_name   TEXT,
+    pr_url        TEXT,
+    pr_number     INTEGER,
+    error         TEXT,
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    state_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+    started_at    TIMESTAMPTZ,
+    finished_at   TIMESTAMPTZ,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+"""
+
+# The other half of the ADR-020 fix: this set is TERMINAL_STATES itself, not
+# a second spelling of it. v5 hardcoded 'CLOSED','FAILED','NEEDS_HUMAN' a
+# second time in this exact query and it silently drifted from
+# TERMINAL_STATES (which was missing SHIPPED) -- that drift, not a typo, was
+# the bug. Building the SQL from the constant makes the two unable to
+# disagree by construction.
+ACTIVE_RUN_EXCLUDED_STATES = TERMINAL_STATES
+
+_active_run_placeholders = ", ".join(f"${i + 1}" for i in range(len(ACTIVE_RUN_EXCLUDED_STATES)))
+_GET_ACTIVE_DEV_AGENT_RUN_SQL = f"""
+SELECT * FROM dev_agent_runs
+WHERE state NOT IN ({_active_run_placeholders})
+ORDER BY started_at DESC NULLS LAST
+LIMIT 1
+"""
+
+_GET_DEV_AGENT_RUN_SQL = "SELECT * FROM dev_agent_runs WHERE ticket_key = $1"
+
+_CLAIM_DEV_AGENT_RUN_SQL = """
+INSERT INTO dev_agent_runs (ticket_key, state, branch_name, attempt_count, started_at)
+VALUES ($1, $2, $3, 1, now())
+ON CONFLICT (ticket_key) DO UPDATE
+SET state         = EXCLUDED.state,
+    branch_name   = EXCLUDED.branch_name,
+    attempt_count = dev_agent_runs.attempt_count + 1,
+    started_at    = now(),
+    finished_at   = NULL,
+    error         = NULL
+"""
+
+_FINISH_DEV_AGENT_RUN_SQL = """
+UPDATE dev_agent_runs
+SET state       = $2,
+    pr_url      = $3,
+    pr_number   = $4,
+    error       = $5,
+    finished_at = now()
+WHERE ticket_key = $1
+"""
+
+_SET_DEV_AGENT_STATE_SQL = "UPDATE dev_agent_runs SET state = $2 WHERE ticket_key = $1"
+
+_SET_DEV_AGENT_SESSION_MEMORY_SQL = """
+UPDATE dev_agent_runs SET state_payload = $2::jsonb WHERE ticket_key = $1
 """
 
 # ─── the claim (ADR-006) ──────────────────────────────────────────────────────
@@ -182,6 +251,7 @@ async def apply_migrations(pool: asyncpg.Pool | None = None) -> None:
     pool = pool or await get_pool()
     async with pool.acquire() as conn:
         await conn.execute(SCHEMA_SQL)
+        await conn.execute(DEV_AGENT_SCHEMA_SQL)
     log.info("db.migrations_applied")
 
 
@@ -255,6 +325,118 @@ async def set_watermark(source_type: str, value: str, pool: asyncpg.Pool | None 
     pool = pool or await get_pool()
     async with pool.acquire() as conn:
         await conn.execute(_SET_WATERMARK_SQL, source_type, value)
+
+
+# ─── dev_agent_runs (Phase 11, ADR-020) ───────────────────────────────────────
+# All Postgres access for the dev agent goes through these functions.
+# meeting_notes/dev_agent/* owns no SQL of its own (CLAUDE.md: one SQL module).
+
+
+def _row_to_dev_agent_run(row: Any) -> DevAgentRun:
+    return DevAgentRun(**dict(row))
+
+
+async def claim_dev_agent_run(
+    ticket_key: str, state: str, branch_name: str, pool: asyncpg.Pool | None = None
+) -> None:
+    """Start (or restart) a run. `attempt_count` increments on every claim of an
+    already-known ticket_key — a fresh attempt after FAILED, or a resume."""
+    pool = pool or await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(_CLAIM_DEV_AGENT_RUN_SQL, ticket_key, state, branch_name)
+
+
+async def finish_dev_agent_run(
+    ticket_key: str,
+    state: str,
+    pr_url: str | None = None,
+    pr_number: int | None = None,
+    error: str | None = None,
+    pool: asyncpg.Pool | None = None,
+) -> None:
+    pool = pool or await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(_FINISH_DEV_AGENT_RUN_SQL, ticket_key, state, pr_url, pr_number, error)
+
+
+async def set_dev_agent_state(
+    ticket_key: str, state: str, pool: asyncpg.Pool | None = None
+) -> None:
+    """Persist a lifecycle transition. Callers validate the edge themselves via
+    `dev_agent.lifecycle` — this function writes whatever state it is given."""
+    pool = pool or await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(_SET_DEV_AGENT_STATE_SQL, ticket_key, state)
+
+
+async def get_dev_agent_run(
+    ticket_key: str, pool: asyncpg.Pool | None = None
+) -> DevAgentRun | None:
+    pool = pool or await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(_GET_DEV_AGENT_RUN_SQL, ticket_key)
+    return _row_to_dev_agent_run(row) if row else None
+
+
+async def get_active_dev_agent_run(pool: asyncpg.Pool | None = None) -> DevAgentRun | None:
+    """The single non-terminal run to resume, if any (one active run at a time).
+
+    Excludes every state in ACTIVE_RUN_EXCLUDED_STATES == TERMINAL_STATES —
+    the ADR-020 fix. A run in any of those states, including SHIPPED, is done
+    and must not be picked up again here.
+    """
+    pool = pool or await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(_GET_ACTIVE_DEV_AGENT_RUN_SQL, *ACTIVE_RUN_EXCLUDED_STATES)
+    return _row_to_dev_agent_run(row) if row else None
+
+
+async def should_attempt_dev_agent_run(
+    ticket_key: str, max_attempts: int, pool: asyncpg.Pool | None = None
+) -> bool:
+    """Whether a NEW attempt on this ticket is allowed.
+
+    The second, independent half of the ADR-020 fix: a caller resuming a run
+    found by `get_active_dev_agent_run` must ALSO pass this check, not rely on
+    the exclusion list alone. A terminal state (including SHIPPED) always
+    returns False, regardless of attempt_count.
+    """
+    run = await get_dev_agent_run(ticket_key, pool=pool)
+    if run is None:
+        return True
+    if run.state in TERMINAL_STATES:
+        if run.state == "FAILED":
+            return run.attempt_count < max_attempts
+        return False
+    # An active, non-terminal state (e.g. IMPLEMENTING) means a run is already
+    # in flight — do not start a second one on top of it.
+    return False
+
+
+async def get_dev_agent_session_memory(
+    ticket_key: str, pool: asyncpg.Pool | None = None
+) -> dict[str, Any] | None:
+    run = await get_dev_agent_run(ticket_key, pool=pool)
+    return run.state_payload if run else None
+
+
+async def set_dev_agent_session_memory(
+    ticket_key: str, memory: dict[str, Any], pool: asyncpg.Pool | None = None
+) -> None:
+    pool = pool or await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(_SET_DEV_AGENT_SESSION_MEMORY_SQL, ticket_key, json.dumps(memory))
+
+
+async def list_recent_dev_agent_runs(
+    limit: int = 50, pool: asyncpg.Pool | None = None
+) -> list[DevAgentRun]:
+    pool = pool or await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT * FROM dev_agent_runs ORDER BY created_at DESC LIMIT $1", limit
+        )
+    return [_row_to_dev_agent_run(r) for r in rows]
 
 
 def _main() -> int:
