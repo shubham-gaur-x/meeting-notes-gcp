@@ -48,7 +48,7 @@ async def run_source(source: Source, settings: Settings | None = None) -> StageR
 async def build_google_source(name: str, settings: Settings | None = None) -> Any:
     """Construct a Google-backed source with a fresh access token.
 
-    Token refresh raises TokenExpired rather than returning None, so a dead
+    Token refresh raises TokenExpiredError rather than returning None, so a dead
     token surfaces as a failed job rather than a successful run that staged
     nothing.
     """

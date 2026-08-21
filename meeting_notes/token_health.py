@@ -34,7 +34,7 @@ async def check(settings: Settings | None = None, *, transport: object = None) -
     settings = settings or get_settings()
     try:
         await google_auth.get_access_token(settings, transport=transport)  # type: ignore[arg-type]
-    except google_auth.TokenExpired as exc:
+    except google_auth.TokenExpiredError as exc:
         # log.error, not warning: this stops all ingestion until fixed.
         log.error("token_health.expired", reason=str(exc))
         return TokenHealth(False, "refresh token rejected", google_auth.RECONSENT_HINT)

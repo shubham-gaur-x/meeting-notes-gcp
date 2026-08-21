@@ -13,7 +13,7 @@ import pytest
 
 from meeting_notes.config import Settings
 from meeting_notes.llm_client import (
-    FixtureMiss,
+    FixtureMissError,
     _loads_lenient,
     chat_json,
     embed,
@@ -76,7 +76,7 @@ async def test_a_fixture_miss_raises_rather_than_returning_none(tmp_path: Path) 
     extraction. A silently-wrong extraction is the worst outcome available, so
     the failure is loud and says how to fix itself.
     """
-    with pytest.raises(FixtureMiss) as exc:
+    with pytest.raises(FixtureMissError) as exc:
         await chat_json("unrecorded system", "unrecorded user", settings=_fake_settings(tmp_path))
 
     message = str(exc.value)
@@ -88,7 +88,7 @@ async def test_a_prompt_edit_produces_a_miss_not_a_stale_replay(tmp_path: Path) 
     settings = _fake_settings(tmp_path)
     _record(tmp_path, "original system", "usr", {"title": "old"})
 
-    with pytest.raises(FixtureMiss):
+    with pytest.raises(FixtureMissError):
         await chat_json("edited system", "usr", settings=settings)
 
 

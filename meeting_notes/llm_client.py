@@ -45,7 +45,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_FIXTURE_DIR = REPO_ROOT / "sample_data" / "llm_fixtures"
 
 
-class FixtureMiss(RuntimeError):
+class FixtureMissError(RuntimeError):
     """No recorded fixture for this prompt.
 
     Deliberately fatal (ADR-014). Falling back to None here would turn a
@@ -175,7 +175,7 @@ async def _fake_chat_json(system: str, user: str, temperature: float, settings: 
     path = directory / f"{key}.json"
 
     if not path.exists():
-        raise FixtureMiss(
+        raise FixtureMissError(
             f"No fixture {key}.json in {directory}.\n"
             "The fake backend never guesses — a missing recording is a hard failure "
             "so a changed prompt cannot silently produce an empty extraction.\n"
@@ -185,7 +185,7 @@ async def _fake_chat_json(system: str, user: str, temperature: float, settings: 
 
     parsed = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(parsed, dict):
-        raise FixtureMiss(f"Fixture {path} is not a JSON object")
+        raise FixtureMissError(f"Fixture {path} is not a JSON object")
     return parsed
 
 

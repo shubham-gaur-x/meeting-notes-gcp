@@ -131,7 +131,7 @@ async def test_the_since_value_is_passed_through_to_the_source() -> None:
 # ─── google_auth: the expiry path is an exit criterion ────────────────────────
 
 from meeting_notes.config import Settings  # noqa: E402
-from meeting_notes.google_auth import TokenExpired, get_access_token  # noqa: E402
+from meeting_notes.google_auth import TokenExpiredError, get_access_token  # noqa: E402
 
 
 def _google_settings(**over: object) -> Settings:
@@ -164,7 +164,7 @@ async def test_an_expired_refresh_token_raises_rather_than_returning_none() -> N
     async def expired(url: str, data: dict) -> tuple[int, str]:
         return 400, json.dumps({"error": "invalid_grant", "error_description": "Token expired"})
 
-    with pytest.raises(TokenExpired) as exc:
+    with pytest.raises(TokenExpiredError) as exc:
         await get_access_token(_google_settings(), transport=expired)
 
     assert "auth-spike" in str(exc.value), "the alert must name the command that fixes it"
@@ -177,7 +177,7 @@ async def test_the_refresh_token_is_never_in_the_error_message() -> None:
     async def expired(url: str, data: dict) -> tuple[int, str]:
         return 400, json.dumps({"error": "invalid_grant"})
 
-    with pytest.raises(TokenExpired) as exc:
+    with pytest.raises(TokenExpiredError) as exc:
         await get_access_token(_google_settings(), transport=expired)
 
     assert "leakcanary" not in str(exc.value)
@@ -186,7 +186,7 @@ async def test_the_refresh_token_is_never_in_the_error_message() -> None:
 async def test_a_missing_refresh_token_is_a_clear_error_not_a_crash(tmp_path) -> None:
     """token_path is injected so this proves the no-token path regardless of
     whether the machine running it has a real token.json."""
-    with pytest.raises(TokenExpired) as exc:
+    with pytest.raises(TokenExpiredError) as exc:
         await get_access_token(
             _google_settings(GOOGLE_REFRESH_TOKEN=""), token_path=tmp_path / "absent.json"
         )
@@ -201,7 +201,7 @@ async def test_a_server_error_is_not_mistaken_for_an_expired_token() -> None:
 
     with pytest.raises(Exception) as exc:
         await get_access_token(_google_settings(), transport=boom)
-    assert not isinstance(exc.value, TokenExpired)
+    assert not isinstance(exc.value, TokenExpiredError)
 
 
 # ─── gmail ────────────────────────────────────────────────────────────────────

@@ -14,7 +14,7 @@ from meeting_notes.access_control import (
     ADMIN,
     LEAD,
     MEMBER,
-    AccessDenied,
+    AccessDeniedError,
     Principal,
     Scope,
     aggregates_only,
@@ -590,7 +590,7 @@ def test_parse_scope_rejects_garbage() -> None:
 
 def test_a_member_cannot_reach_another_team() -> None:
     policy = _policy(bob=Principal(name="bob", role=MEMBER, team="platform"))
-    with pytest.raises(AccessDenied):
+    with pytest.raises(AccessDeniedError):
         authorize("bob", "team:payments", policy=policy)
 
 
@@ -601,7 +601,7 @@ def test_a_member_can_reach_their_own_team() -> None:
 
 def test_a_member_cannot_reach_org_level() -> None:
     policy = _policy(bob=Principal(name="bob", role=MEMBER, team="platform"))
-    with pytest.raises(AccessDenied):
+    with pytest.raises(AccessDeniedError):
         authorize("bob", "org", policy=policy)
 
 
@@ -613,7 +613,7 @@ def test_an_admin_can_reach_everything() -> None:
 
 def test_an_unknown_principal_is_denied_not_defaulted() -> None:
     """Failing open here would hand a stranger whatever the default role is."""
-    with pytest.raises(AccessDenied):
+    with pytest.raises(AccessDeniedError):
         authorize("nobody", "org", policy=_policy())
 
 

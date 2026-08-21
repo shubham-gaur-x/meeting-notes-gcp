@@ -65,7 +65,12 @@ line-length = 110
 target-version = "py311"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "ASYNC"]
+# N  — PEP 8 naming, incl. the Error suffix on exceptions (N818)
+# C90 — cyclomatic complexity; the ceiling below is enforced, not advisory
+select = ["E", "F", "I", "UP", "B", "ASYNC", "N", "C90"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 12
 
 # B008 flags function calls in argument defaults, but Depends()/Query()/Header()
 # in a signature IS the FastAPI idiom -- they are declarations, not mutable

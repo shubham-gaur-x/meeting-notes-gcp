@@ -21,7 +21,7 @@ from typing import Any
 MEMBER = "member"   # own team only
 LEAD = "lead"       # own team + org-level rollups (aggregates), not other teams' detail
 ADMIN = "admin"     # everything, including cross-team detail
-class AccessDenied(RuntimeError):
+class AccessDeniedError(RuntimeError):
     """Raised when a principal requests a scope its policy does not allow."""
 
 
@@ -93,7 +93,7 @@ def load_policy(path: str | None = None) -> dict[str, Principal]:
 def resolve_principal(name: str, policy: dict[str, Principal] | None = None) -> Principal:
     policy = policy if policy is not None else load_policy()
     if name not in policy:
-        raise AccessDenied(f"unknown principal {name!r}")
+        raise AccessDeniedError(f"unknown principal {name!r}")
     return policy[name]
 
 
@@ -118,11 +118,11 @@ def _scope_allowed(principal: Principal, scope: Scope) -> bool:
 def authorize(
     name: str, requested_scope: str, policy: dict[str, Principal] | None = None
 ) -> Scope:
-    """Resolve principal + scope, raising AccessDenied if the scope is not permitted."""
+    """Resolve principal + scope, raising AccessDeniedError if the scope is not permitted."""
     principal = resolve_principal(name, policy)
     scope = parse_scope(requested_scope)
     if not _scope_allowed(principal, scope):
-        raise AccessDenied(
+        raise AccessDeniedError(
             f"principal {name!r} (role={principal.role}) may not access scope {scope.token()!r}"
         )
     return scope

@@ -71,7 +71,7 @@ _TRANSITIONS = {
 }
 
 
-class IllegalTransition(RuntimeError):
+class IllegalTransitionError(RuntimeError):
     """Raised when a run is asked to move between two states with no legal edge."""
 
 
@@ -81,13 +81,13 @@ def can_transition(from_state: str, to_state: str) -> bool:
 
 
 def assert_transition(from_state: str, to_state: str) -> None:
-    """Raise :class:`IllegalTransition` unless the edge is legal."""
+    """Raise :class:`IllegalTransitionError` unless the edge is legal."""
     if from_state not in ALL_STATES:
-        raise IllegalTransition(f"unknown source state {from_state!r}")
+        raise IllegalTransitionError(f"unknown source state {from_state!r}")
     if to_state not in ALL_STATES:
-        raise IllegalTransition(f"unknown target state {to_state!r}")
+        raise IllegalTransitionError(f"unknown target state {to_state!r}")
     if not can_transition(from_state, to_state):
-        raise IllegalTransition(f"illegal transition {from_state} -> {to_state}")
+        raise IllegalTransitionError(f"illegal transition {from_state} -> {to_state}")
 
 
 def is_terminal(state: str) -> bool:

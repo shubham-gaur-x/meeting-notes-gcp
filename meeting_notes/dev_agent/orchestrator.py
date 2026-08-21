@@ -12,6 +12,7 @@ just unit-by-unit in `lifecycle.py` and `db.py`.
 
 from __future__ import annotations
 
+from dataclasses import dataclass, fields
 from typing import Any
 
 import structlog
@@ -116,301 +117,427 @@ async def _advance_state(key: str, new_state: str, set_state: Any, get_run: Any)
     await set_state(key, new_state)
 
 
-async def process_ticket(
-    ticket: dict[str, Any],
-    settings: Settings | None = None,
-    *,
-    claim_run: Any = None,
-    set_state: Any = None,
-    get_run: Any = None,
-    finish_run: Any = None,
-    transition_issue: Any = None,
-    add_comment: Any = None,
-    get_issue_detail: Any = None,
-    create_worktree: Any = None,
-    remove_worktree: Any = None,
-    run_agent: Any = None,
-    find_open_pr: Any = None,
-    get_pr_diff: Any = None,
-    verify_pr: Any = None,
-    write_run_provenance: Any = None,
-    load_resume_context: Any = None,
-    record_session_memory: Any = None,
-    run_gates: Any = None,
-    review_pr: Any = None,
-) -> None:
-    """Implement one ticket end to end. Every I/O dependency is injectable so
-    the whole flow is testable with no live Jira, git, GitHub, or Memgraph."""
-    settings = settings or get_settings()
+@dataclass(frozen=True)
+class _Dependencies:
+    """Every I/O call `process_ticket` makes, resolved once.
 
-    if claim_run is None:
-        from meeting_notes.db import claim_dev_agent_run as claim_run
-    if set_state is None:
-        from meeting_notes.db import set_dev_agent_state as set_state
-    if get_run is None:
-        from meeting_notes.db import get_dev_agent_run as get_run
-    if finish_run is None:
-        from meeting_notes.db import finish_dev_agent_run as finish_run
-    if transition_issue is None:
-        from meeting_notes.jira_client import transition_issue
-    if add_comment is None:
-        from meeting_notes.jira_client import add_comment
-    if get_issue_detail is None:
-        from meeting_notes.jira_client import get_issue_detail
-    if create_worktree is None:
-        create_worktree = git_ops.create_worktree
-    if remove_worktree is None:
-        remove_worktree = git_ops.remove_worktree
-    if run_agent is None:
-        from meeting_notes.dev_agent.gemini_runner import run_agent
-    if find_open_pr is None:
-        from meeting_notes.dev_agent.github_client import find_open_pr
-    if get_pr_diff is None:
-        from meeting_notes.dev_agent.github_client import get_pr_diff
-    if verify_pr is None:
-        from meeting_notes.dev_agent.self_verify import verify_pr
-    if write_run_provenance is None:
-        from meeting_notes.graph_client import write_run_provenance
-    if load_resume_context is None:
-        load_resume_context = session_memory.load_resume_context
-    if record_session_memory is None:
-        record_session_memory = session_memory.record
-    if run_gates is None:
-        from meeting_notes.dev_agent.gate_runner import run_gates
-    if review_pr is None:
-        from meeting_notes.dev_agent.reviewer import review_pr
+    These exist so the whole flow is testable with no live Jira, git, GitHub
+    or Memgraph. They were once eighteen `if x is None:` blocks inline, which
+    was most of this function's branching on its own.
+    """
+
+    claim_run: Any
+    set_state: Any
+    get_run: Any
+    finish_run: Any
+    transition_issue: Any
+    add_comment: Any
+    get_issue_detail: Any
+    create_worktree: Any
+    remove_worktree: Any
+    run_agent: Any
+    find_open_pr: Any
+    get_pr_diff: Any
+    verify_pr: Any
+    write_run_provenance: Any
+    load_resume_context: Any
+    record_session_memory: Any
+    run_gates: Any
+    review_pr: Any
+
+
+def _default_dependencies() -> dict[str, Any]:
+    """The real implementations. Imported here rather than at module scope so
+    importing the orchestrator does not drag in a database driver."""
+    from meeting_notes import db, jira_client
+    from meeting_notes.dev_agent import (
+        gate_runner,
+        gemini_runner,
+        github_client,
+        reviewer,
+        self_verify,
+    )
+    from meeting_notes.graph_client import write_run_provenance
+
+    return {
+        "claim_run": db.claim_dev_agent_run,
+        "set_state": db.set_dev_agent_state,
+        "get_run": db.get_dev_agent_run,
+        "finish_run": db.finish_dev_agent_run,
+        "transition_issue": jira_client.transition_issue,
+        "add_comment": jira_client.add_comment,
+        "get_issue_detail": jira_client.get_issue_detail,
+        "create_worktree": git_ops.create_worktree,
+        "remove_worktree": git_ops.remove_worktree,
+        "run_agent": gemini_runner.run_agent,
+        "find_open_pr": github_client.find_open_pr,
+        "get_pr_diff": github_client.get_pr_diff,
+        "verify_pr": self_verify.verify_pr,
+        "write_run_provenance": write_run_provenance,
+        "load_resume_context": session_memory.load_resume_context,
+        "record_session_memory": session_memory.record,
+        "run_gates": gate_runner.run_gates,
+        "review_pr": reviewer.review_pr,
+    }
+
+
+def _resolve_dependencies(overrides: dict[str, Any]) -> _Dependencies:
+    """Real implementations, with any override substituted.
+
+    An unknown key raises rather than being ignored: a mistyped injection in a
+    test would otherwise silently leave the REAL implementation in place, and
+    for `review_pr` or `run_agent` that means a live billed model call.
+    """
+    unknown = set(overrides) - {f.name for f in fields(_Dependencies)}
+    if unknown:
+        raise TypeError(f"unknown dependency override(s): {sorted(unknown)}")
+    resolved = _default_dependencies()
+    resolved.update({k: v for k, v in overrides.items() if v is not None})
+    return _Dependencies(**resolved)
+
+
+async def _run_coding_agent(
+    key: str, detail: dict[str, Any], settings: Settings, deps: _Dependencies,
+    *, work_dir: str, branch_name: str, dev_backend: str, log_: Any,
+) -> AgentRunResult:
+    """Take the ticket from PLANNED to a finished agent run."""
+    await deps.create_worktree(settings.dev_agent_repo_dir, work_dir, branch_name)
+    resume_context = await deps.load_resume_context(key)
+    prompt = build_prompt(detail, resume_context=resume_context)
+
+    await _advance_state(key, lc.IMPLEMENTING, deps.set_state, deps.get_run)
+    result: AgentRunResult = await deps.run_agent(
+        work_dir, prompt,
+        timeout_seconds=settings.dev_agent_timeout_seconds,
+        model=backend.model_for_run(dev_backend, settings),
+        settings=settings,
+    )
+    await _advance_state(key, lc.DEBUGGING, deps.set_state, deps.get_run)
+    return result
+
+
+async def _finish_without_pr(
+    key: str, detail: dict[str, Any], result: AgentRunResult,
+    settings: Settings, deps: _Dependencies, *, log_: Any,
+) -> None:
+    """No PR exists, so there is nothing to review and nothing to preserve.
+
+    The ticket returns to To Do — the opposite of the has-a-PR paths, which
+    never revert it.
+
+    No graph Blocker is written: a Blocker hangs off a Meeting (CLAUDE.md's
+    schema, `Meeting-[:RAISES_BLOCKER]->Blocker`) and a dev-agent failure has
+    no meeting behind it. The reason is in the Jira comment and in session
+    memory, which is what a retry actually reads.
+    """
+    reason = (result.result_text or "").strip()[:500] or "no error detail captured"
+    if result.success:
+        log_.error("orchestrator.pr_not_found")
+        await deps.finish_run(key, lc.FAILED, error="reported success but no PR was found")
+        await deps.add_comment(
+            key, "Dev agent reported success but no PR was found. Needs human follow-up.",
+            settings=settings,
+        )
+    else:
+        log_.error("orchestrator.agent_failed", error=result.result_text[:200])
+        await deps.finish_run(key, lc.FAILED, error=result.result_text[:2000])
+        await deps.add_comment(
+            key,
+            "Dev agent could not complete this ticket automatically. Needs human "
+            f"follow-up.\n\nError: {reason}",
+            settings=settings,
+        )
+    await deps.record_session_memory(
+        detail, outcome="failed", error=reason, raw_notes=result.result_text or ""
+    )
+    await _advance_state(key, lc.FAILED, deps.set_state, deps.get_run)
+    await deps.transition_issue(key, "To Do", settings=settings)
+
+
+async def _self_verify(
+    ticket: dict[str, Any], pr: dict[str, Any], settings: Settings, deps: _Dependencies,
+    *, dev_backend: str, log_: Any,
+) -> tuple[str, Any]:
+    """Fetch the diff and score it against the ticket. Never blocks (ADR-020)."""
+    diff = ""
+    verdict = None
+    try:
+        diff = await deps.get_pr_diff(
+            settings.github_owner, settings.github_repo, pr["number"], settings.github_token
+        )
+        verdict = await deps.verify_pr(
+            ticket, diff, model=backend.model_for_run(dev_backend, settings),
+            threshold=settings.dev_agent_verify_threshold,
+        )
+    except Exception:  # noqa: BLE001 - self-verify never blocks the review
+        log_.warning("orchestrator.self_verify_failed", exc_info=True)
+    return diff, verdict
+
+
+async def _evaluate_pr(
+    detail: dict[str, Any], diff: str, work_dir: str, settings: Settings,
+    deps: _Dependencies, *, dev_backend: str, log_: Any,
+) -> tuple[list[Any], Any]:
+    """Both safety-net layers (ADR-020, ADR-022, ADR-024).
+
+    The gates run in the worktree, so this must happen before it is removed.
+    The reviewer is skipped when a gate already failed: the run is stopping
+    either way, and the call would be spent reaching a settled conclusion.
+    """
+    try:
+        gates = await deps.run_gates(work_dir, diff, detail.get("description", ""), settings)
+    except Exception as exc:  # noqa: BLE001 - an unrunnable gate is a human's problem
+        log_.error("orchestrator.gates_errored", exc_info=True)
+        gates = [
+            guardrails.GateResult(
+                name="gates_errored", passed=False,
+                evidence=f"the gate step itself failed: {exc}",
+            )
+        ]
+
+    review = None
+    if not guardrails.failed_gates(gates):
+        try:
+            review = await deps.review_pr(
+                detail, diff, gates, model=backend.model_for_run(dev_backend, settings)
+            )
+        except Exception:  # noqa: BLE001 - a model outage must not halt the run
+            log_.warning("orchestrator.review_errored", exc_info=True)
+    return gates, review
+
+
+def _rejection_reason(failed: list[Any], review: Any) -> str:
+    parts = []
+    if failed:
+        parts.append("Failed gates:\n" + "\n".join(f"- {g.name}: {g.evidence}" for g in failed))
+    if review is not None and review.blocking:
+        parts.append("Reviewer findings:\n" + review.summary())
+    return "\n\n".join(parts)
+
+
+async def _record_provenance(
+    key: str, pr: dict[str, Any], ticket: dict[str, Any], status: str,
+    verified: bool | None, deps: _Dependencies, *, branch_name: str, log_: Any,
+) -> None:
+    """Write the AgentRun node the merge webhook later finds by PR url.
+
+    Best-effort: a graph hiccup must not lose the PR link or undo the Jira
+    transition that already happened.
+    """
+    run_after = await deps.get_run(key)
+    try:
+        await deps.write_run_provenance(
+            ticket_key=key, attempt=run_after.attempt_count if run_after else 1,
+            pr_url=pr["html_url"], pr_number=pr.get("number"), branch=branch_name,
+            ticket_summary=ticket.get("summary", ""), status=status, verified=verified,
+        )
+    except Exception:  # noqa: BLE001 - provenance is not worth failing the run over
+        log_.warning("orchestrator.provenance_write_failed", exc_info=True)
+
+
+async def _escalate_to_human(
+    key: str, ticket: dict[str, Any], detail: dict[str, Any], pr: dict[str, Any],
+    result: AgentRunResult, diff: str, verdict: Any, failed: list[Any], review: Any,
+    verified: bool | None, settings: Settings, deps: _Dependencies,
+    *, branch_name: str, log_: Any,
+) -> None:
+    """A PR that did not pass review. NEEDS_HUMAN is terminal, so the poller
+    will not retry it, and the PR is deliberately left open: the work is real,
+    it just needs a person."""
+    log_.warning(
+        "orchestrator.review_blocked", failed=[g.name for g in failed],
+        review_blocking=bool(review and review.blocking), pr_url=pr["html_url"],
+    )
+    await deps.add_comment(
+        key,
+        "Dev agent opened a PR but it did NOT pass review, so it has not been marked "
+        f"shipped.\n\n{_rejection_reason(failed, review)}\n\n"
+        f"PR: {pr['html_url']}\n\nA human needs to review this before it merges.",
+        settings=settings,
+    )
+    if not await deps.transition_issue(key, "In Review", settings=settings):
+        log_.warning("orchestrator.review_transition_failed")
+    await deps.finish_run(
+        key, lc.NEEDS_HUMAN, pr_url=pr["html_url"], pr_number=pr["number"],
+        error=(
+            "failed gates: " + ", ".join(g.name for g in failed) if failed
+            else "reviewer requested changes"
+        ),
+    )
+    await _advance_state(key, lc.NEEDS_HUMAN, deps.set_state, deps.get_run)
+    await _record_provenance(
+        key, pr, ticket, lc.NEEDS_HUMAN, verified, deps, branch_name=branch_name, log_=log_,
+    )
+    await deps.record_session_memory(
+        detail, outcome="pr_opened", pr=pr,
+        files_changed=session_memory.files_from_diff(diff),
+        verdict=verdict, raw_notes=result.result_text or "",
+    )
+
+
+def _ship_comment(result: AgentRunResult, verdict: Any, pr: dict[str, Any]) -> str:
+    base = (
+        "Implemented automatically." if result.success
+        else "PR opened, but the agent's run ended early (e.g. turn limit) before finishing."
+    )
+    if verdict and verdict.checked and not verdict.passed:
+        flag = (
+            " Automated check could NOT confirm the diff addresses the ticket "
+            f"(confidence {verdict.confidence:.2f}: {verdict.reason}) — review carefully."
+        )
+    elif verdict and verdict.passed:
+        flag = " Automated check: the diff appears to address the ticket."
+    else:
+        flag = ""
+    return f"{base}{flag} PR: {pr['html_url']}"
+
+
+async def _ship(
+    key: str, ticket: dict[str, Any], detail: dict[str, Any], pr: dict[str, Any],
+    result: AgentRunResult, diff: str, verdict: Any, verified: bool | None,
+    settings: Settings, deps: _Dependencies, *, branch_name: str, log_: Any,
+) -> None:
+    """Gates and reviewer both passed. SHIPPED means the PR is open and the
+    ticket is in review — CLOSED happens only when a human actually merges,
+    via `/webhook/github`."""
+    await deps.add_comment(key, _ship_comment(result, verdict, pr), settings=settings)
+    if not await deps.transition_issue(key, "In Review", settings=settings):
+        log_.warning("orchestrator.review_transition_failed")
+
+    await deps.finish_run(key, lc.SHIPPED, pr_url=pr["html_url"], pr_number=pr["number"])
+    await _advance_state(key, lc.SHIPPED, deps.set_state, deps.get_run)
+    await _record_provenance(
+        key, pr, ticket, lc.SHIPPED, verified, deps, branch_name=branch_name, log_=log_,
+    )
+    await deps.record_session_memory(
+        detail, outcome="pr_opened", pr=pr,
+        files_changed=session_memory.files_from_diff(diff),
+        verdict=verdict, raw_notes=result.result_text or "",
+    )
+    log_.info(
+        "orchestrator.ticket_done", pr_url=pr["html_url"],
+        run_success=result.success, verified=verified,
+    )
+
+
+async def process_ticket(
+    ticket: dict[str, Any], settings: Settings | None = None, **overrides: Any
+) -> None:
+    """Implement one ticket end to end.
+
+    Any of the I/O calls named on `_Dependencies` can be passed as a keyword
+    argument to substitute a fake; an unknown name raises rather than being
+    silently ignored.
+    """
+    settings = settings or get_settings()
+    deps = _resolve_dependencies(overrides)
 
     key = ticket["key"]
     bound_log = log.bind(ticket_key=key)
     branch_name = f"agent/{key}"
+    work_dir = f"{settings.dev_agent_work_root}/{key}"
     dev_backend = backend.select_backend(settings)
 
-    await claim_run(key, lc.TRIAGED, branch_name)
+    await deps.claim_run(key, lc.TRIAGED, branch_name)
 
     try:
-        ok = await transition_issue(key, "In Progress", settings=settings)
-        if not ok:
+        if not await deps.transition_issue(key, "In Progress", settings=settings):
             bound_log.warning("orchestrator.in_progress_transition_failed")
-        await add_comment(key, f"Picked up by dev_agent (backend={dev_backend}).", settings=settings)
-
-        detail = await get_issue_detail(key, settings=settings)
-        await _advance_state(key, lc.PLANNED, set_state, get_run)
-        work_dir = f"{settings.dev_agent_work_root}/{key}"
-
-        await create_worktree(settings.dev_agent_repo_dir, work_dir, branch_name)
-        resume_context = await load_resume_context(key)
-        prompt = build_prompt(detail, resume_context=resume_context)
-
-        await _advance_state(key, lc.IMPLEMENTING, set_state, get_run)
-        result: AgentRunResult = await run_agent(
-            work_dir, prompt,
-            timeout_seconds=settings.dev_agent_timeout_seconds,
-            model=backend.model_for_run(dev_backend, settings),
-            settings=settings,
+        await deps.add_comment(
+            key, f"Picked up by dev_agent (backend={dev_backend}).", settings=settings
         )
-        await _advance_state(key, lc.DEBUGGING, set_state, get_run)
+
+        detail = await deps.get_issue_detail(key, settings=settings)
+        await _advance_state(key, lc.PLANNED, deps.set_state, deps.get_run)
+
+        result = await _run_coding_agent(
+            key, detail, settings, deps, work_dir=work_dir,
+            branch_name=branch_name, dev_backend=dev_backend, log_=bound_log,
+        )
 
         # The PR check gates the outcome, not result.success: a run can push a
         # branch and open a PR, then still report failure on a later step
-        # (e.g. hits the turn limit on verification). Dropping that PR and
-        # reverting the ticket to TO DO would lose good work.
-        pr = await find_open_pr(
+        # (e.g. hits the turn limit). Dropping that PR and reverting the ticket
+        # to To Do would lose good work.
+        pr = await deps.find_open_pr(
             settings.github_owner, settings.github_repo, branch_name, settings.github_token
         )
-
         if pr is None:
-            reason = (result.result_text or "").strip()[:500] or "no error detail captured"
-            if result.success:
-                bound_log.error("orchestrator.pr_not_found")
-                await finish_run(key, lc.FAILED, error="reported success but no PR was found")
-                await add_comment(
-                    key, "Dev agent reported success but no PR was found. Needs human follow-up.",
-                    settings=settings,
-                )
-            else:
-                bound_log.error("orchestrator.agent_failed", error=result.result_text[:200])
-                await finish_run(key, lc.FAILED, error=result.result_text[:2000])
-                await add_comment(
-                    key,
-                    "Dev agent could not complete this ticket automatically. Needs human "
-                    f"follow-up.\n\nError: {reason}",
-                    settings=settings,
-                )
-            await record_session_memory(
-                detail, outcome="failed", error=reason, raw_notes=result.result_text or ""
-            )
-            # No graph Blocker write here: a Blocker hangs off a Meeting
-            # (CLAUDE.md's schema: Meeting-[:RAISES_BLOCKER]->Blocker) and is
-            # written inside that meeting's transaction from the extraction. A
-            # dev-agent failure has no meeting behind it. The failure reason is
-            # already in the Jira comment above and in session_memory, which is
-            # what a retry actually reads from -- inventing a meeting_id to
-            # force-fit the schema would misrepresent the data.
-            await _advance_state(key, lc.FAILED, set_state, get_run)
-            await transition_issue(key, "To Do", settings=settings)
+            await _finish_without_pr(key, detail, result, settings, deps, log_=bound_log)
             return
 
-        await _advance_state(key, lc.REVIEWING, set_state, get_run)
-        verdict = None
-        diff = ""
-        try:
-            diff = await get_pr_diff(
-                settings.github_owner, settings.github_repo, pr["number"], settings.github_token
-            )
-            verdict = await verify_pr(
-                ticket, diff, model=backend.model_for_run(dev_backend, settings),
-                threshold=settings.dev_agent_verify_threshold,
-            )
-        except Exception:
-            bound_log.warning("orchestrator.self_verify_failed", exc_info=True)
+        await _advance_state(key, lc.REVIEWING, deps.set_state, deps.get_run)
+        diff, verdict = await _self_verify(
+            ticket, pr, settings, deps, dev_backend=dev_backend, log_=bound_log
+        )
         verified = verdict.passed if (verdict and verdict.checked) else None
 
-        # The deterministic half of the safety net (ADR-020). Runs in the
-        # worktree, so it must happen before the `finally` removes it. A gate
-        # that fails means this PR is NOT shippable: the run escalates to
-        # NEEDS_HUMAN, which is terminal, so the poller will not silently
-        # retry it. The PR itself is deliberately left open — the work is
-        # real, it just needs a person.
-        try:
-            gates = await run_gates(work_dir, diff, detail.get("description", ""), settings)
-        except Exception as exc:  # noqa: BLE001 - an unrunnable gate is a human's problem
-            bound_log.error("orchestrator.gates_errored", exc_info=True)
-            gates = [
-                guardrails.GateResult(
-                    name="gates_errored", passed=False,
-                    evidence=f"the gate step itself failed: {exc}",
-                )
-            ]
+        gates, review = await _evaluate_pr(
+            detail, diff, work_dir, settings, deps, dev_backend=dev_backend, log_=bound_log
+        )
         failed = guardrails.failed_gates(gates)
 
-        # Layer 2 (ADR-020): an independent reviewer, given the gate results so
-        # it judges what they cannot rather than re-deriving them. It is skipped
-        # when a gate already failed -- the run is stopping either way, and the
-        # model call would be spent to reach a conclusion already reached.
-        review = None
-        if not failed:
-            try:
-                review = await review_pr(
-                    detail, diff, gates,
-                    model=backend.model_for_run(dev_backend, settings),
-                )
-            except Exception:  # noqa: BLE001 - an outage must not halt the run
-                bound_log.warning("orchestrator.review_errored", exc_info=True)
-
-        blocked_by_review = bool(review and review.blocking)
-
-        if failed or blocked_by_review:
-            reasons = []
-            if failed:
-                reasons.append(
-                    "Failed gates:\n" + "\n".join(f"- {g.name}: {g.evidence}" for g in failed)
-                )
-            if blocked_by_review and review is not None:
-                reasons.append("Reviewer findings:\n" + review.summary())
-            detail_text = "\n\n".join(reasons)
-            bound_log.warning(
-                "orchestrator.review_blocked", failed=[g.name for g in failed],
-                review_blocking=blocked_by_review, pr_url=pr["html_url"],
-            )
-            await add_comment(
-                key,
-                "Dev agent opened a PR but it did NOT pass review, so it has "
-                f"not been marked shipped.\n\n{detail_text}\n\n"
-                f"PR: {pr['html_url']}\n\nA human needs to review this before it merges.",
-                settings=settings,
-            )
-            if not await transition_issue(key, "In Review", settings=settings):
-                bound_log.warning("orchestrator.review_transition_failed")
-            await finish_run(
-                key, lc.NEEDS_HUMAN, pr_url=pr["html_url"], pr_number=pr["number"],
-                error=(
-                    "failed gates: " + ", ".join(g.name for g in failed) if failed
-                    else "reviewer requested changes"
-                ),
-            )
-            await _advance_state(key, lc.NEEDS_HUMAN, set_state, get_run)
-            run_after = await get_run(key)
-            try:
-                await write_run_provenance(
-                    ticket_key=key, attempt=run_after.attempt_count if run_after else 1,
-                    pr_url=pr["html_url"], pr_number=pr.get("number"), branch=branch_name,
-                    ticket_summary=ticket.get("summary", ""), status=lc.NEEDS_HUMAN,
-                    verified=verified,
-                )
-            except Exception:
-                bound_log.warning("orchestrator.provenance_write_failed", exc_info=True)
-            await record_session_memory(
-                detail, outcome="pr_opened", pr=pr,
-                files_changed=session_memory.files_from_diff(diff),
-                verdict=verdict, raw_notes=result.result_text or "",
+        if failed or (review and review.blocking):
+            await _escalate_to_human(
+                key, ticket, detail, pr, result, diff, verdict, failed, review,
+                verified, settings, deps, branch_name=branch_name, log_=bound_log,
             )
             return
 
-        base = (
-            "Implemented automatically." if result.success
-            else "PR opened, but the agent's run ended early (e.g. turn limit) before finishing."
-        )
-        if verdict and verdict.checked and not verdict.passed:
-            flag = (
-                " Automated check could NOT confirm the diff addresses the ticket "
-                f"(confidence {verdict.confidence:.2f}: {verdict.reason}) — review carefully."
-            )
-        elif verdict and verdict.passed:
-            flag = " Automated check: the diff appears to address the ticket."
-        else:
-            flag = ""
-        await add_comment(key, f"{base}{flag} PR: {pr['html_url']}", settings=settings)
-
-        ok = await transition_issue(key, "In Review", settings=settings)
-        if not ok:
-            bound_log.warning("orchestrator.review_transition_failed")
-
-        await finish_run(key, lc.SHIPPED, pr_url=pr["html_url"], pr_number=pr["number"])
-        # SHIPPED: PR opened, ticket moved to review. CLOSED happens only via
-        # /webhook/github's pull_request.merged handler — an actual human merge.
-        await _advance_state(key, lc.SHIPPED, set_state, get_run)
-
-        # Provenance: the AgentRun node /webhook/github's merge handler later
-        # finds by PR url. Best-effort -- a graph hiccup must not lose the PR
-        # link or block the Jira transition that already happened above.
-        run_after = await get_run(key)
-        attempt = run_after.attempt_count if run_after else 1
-        try:
-            await write_run_provenance(
-                ticket_key=key, attempt=attempt, pr_url=pr["html_url"],
-                pr_number=pr.get("number"), branch=branch_name,
-                ticket_summary=ticket.get("summary", ""), status="SHIPPED",
-                verified=verified,
-            )
-        except Exception:
-            bound_log.warning("orchestrator.provenance_write_failed", exc_info=True)
-        await record_session_memory(
-            detail, outcome="pr_opened", pr=pr,
-            files_changed=session_memory.files_from_diff(diff),
-            verdict=verdict, raw_notes=result.result_text or "",
-        )
-        bound_log.info(
-            "orchestrator.ticket_done", pr_url=pr["html_url"],
-            run_success=result.success, verified=verified,
+        await _ship(
+            key, ticket, detail, pr, result, diff, verdict, verified,
+            settings, deps, branch_name=branch_name, log_=bound_log,
         )
 
     except Exception as exc:
         bound_log.error("orchestrator.unexpected_error", exc_info=True)
         error_text = str(exc)
-        steps: list[Any] = [
-            lambda: finish_run(key, lc.FAILED, error=error_text),
-            lambda: _advance_state(key, lc.FAILED, set_state, get_run),
-            lambda: record_session_memory(ticket, outcome="failed", error=error_text),
-            lambda: transition_issue(key, "To Do", settings=settings),
+        cleanup: list[Any] = [
+            lambda: deps.finish_run(key, lc.FAILED, error=error_text),
+            lambda: _advance_state(key, lc.FAILED, deps.set_state, deps.get_run),
+            lambda: deps.record_session_memory(ticket, outcome="failed", error=error_text),
+            lambda: deps.transition_issue(key, "To Do", settings=settings),
         ]
-        for step in steps:
+        for step in cleanup:
             try:
                 await step()
-            except Exception:
+            except Exception:  # noqa: BLE001 - best-effort bookkeeping
                 pass
     finally:
-        work_dir = f"{settings.dev_agent_work_root}/{key}"
-        await remove_worktree(settings.dev_agent_repo_dir, work_dir, branch_name, ignore_errors=True)
+        await deps.remove_worktree(
+            settings.dev_agent_repo_dir, work_dir, branch_name, ignore_errors=True
+        )
+
+
+async def _resume_crashed_run(
+    active: Any, settings: Settings, *, should_attempt: Any, get_issue_detail: Any,
+    process: Any,
+) -> None:
+    """Resume a run left active by a crash — if it is still attemptable.
+
+    **The ADR-020 fix, end to end.** A run `get_active_run` returns must ALSO
+    pass `should_attempt` before being resumed, rather than relying on the
+    terminal-state exclusion the query already applies. That second,
+    independent check is what stops a future drift in the terminal set from
+    silently reproducing the SHIPPED resume loop — 61 AgentRun nodes for one
+    ticket in the live v5 graph.
+    """
+    if not await should_attempt(active.ticket_key, settings.dev_agent_max_attempts):
+        log.info(
+            "orchestrator.poll.active_run_not_attemptable",
+            ticket_key=active.ticket_key, state=active.state,
+        )
+        return
+
+    log.info(
+        "orchestrator.poll.resuming_crashed_run",
+        ticket_key=active.ticket_key, state=active.state,
+    )
+    try:
+        detail = await get_issue_detail(active.ticket_key, settings=settings)
+        await process(detail, settings)
+    except Exception:  # noqa: BLE001 - a bad resume must not stop new work
+        log.error("orchestrator.poll.resume_failed", ticket_key=active.ticket_key, exc_info=True)
 
 
 async def poll_and_process(
@@ -424,14 +551,7 @@ async def poll_and_process(
     find_sprint_candidates: Any = find_sprint_candidates,
     process_ticket: Any = process_ticket,
 ) -> dict[str, Any]:
-    """One poll cycle: preflight, resume a crashed run, then take new candidates.
-
-    **The ADR-020 fix, end to end.** A run `get_active_run` returns must ALSO
-    pass `should_attempt` before being resumed — not merely rely on the
-    terminal-state exclusion the query already applies. That second,
-    independent check is what stops a future drift in the terminal set from
-    silently reproducing the SHIPPED resume loop.
-    """
+    """One poll cycle: preflight, resume a crashed run, then take new candidates."""
     settings = settings or get_settings()
 
     if preflight is None:
@@ -460,43 +580,27 @@ async def poll_and_process(
             settings.dev_agent_repo_dir, settings.github_owner, settings.github_repo,
             settings.github_token,
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - reported, not raised, so the job exits cleanly
         log.error("orchestrator.poll.repo_unavailable", error=str(exc))
         return {"attempted": 0, "reason": "repo_unavailable"}
 
     active = await get_active_run()
     if active is not None:
-        # The independent second check (ADR-020) — resuming still requires
-        # should_attempt to agree, regardless of what the exclusion query said.
-        if not await should_attempt(active.ticket_key, settings.dev_agent_max_attempts):
-            log.info(
-                "orchestrator.poll.active_run_not_attemptable",
-                ticket_key=active.ticket_key, state=active.state,
-            )
-        else:
-            log.info(
-                "orchestrator.poll.resuming_crashed_run",
-                ticket_key=active.ticket_key, state=active.state,
-            )
-            try:
-                active_detail = await get_issue_detail(active.ticket_key, settings=settings)
-                await process_ticket(active_detail, settings)
-            except Exception:
-                log.error(
-                    "orchestrator.poll.resume_failed", ticket_key=active.ticket_key, exc_info=True
-                )
+        await _resume_crashed_run(
+            active, settings, should_attempt=should_attempt,
+            get_issue_detail=get_issue_detail, process=process_ticket,
+        )
 
     tickets = await find_sprint_candidates(settings)
-    eligible = []
-    for ticket in tickets:
-        if await should_attempt(ticket["key"], settings.dev_agent_max_attempts):
-            eligible.append(ticket)
+    eligible = [
+        ticket for ticket in tickets
+        if await should_attempt(ticket["key"], settings.dev_agent_max_attempts)
+    ]
 
     batch = eligible[: settings.dev_agent_poll_batch_size]
-    skipped = len(eligible) - len(batch)
     log.info(
         "orchestrator.poll.batch", considered=len(tickets), eligible=len(eligible),
-        attempting=len(batch), deferred=skipped,
+        attempting=len(batch), deferred=len(eligible) - len(batch),
     )
 
     for ticket in batch:

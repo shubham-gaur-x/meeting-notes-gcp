@@ -43,7 +43,7 @@ RECONSENT_HINT = (
 Transport = Callable[[str, dict[str, str]], Awaitable[tuple[int, str]]]
 
 
-class TokenExpired(RuntimeError):
+class TokenExpiredError(RuntimeError):
     """The refresh token is gone or rejected. Deliberately fatal."""
 
 
@@ -101,7 +101,7 @@ async def get_access_token(
     refresh_token = load_refresh_token(settings, path=token_path)
 
     if not refresh_token:
-        raise TokenExpired(
+        raise TokenExpiredError(
             "No refresh token: GOOGLE_REFRESH_TOKEN is unset and there is no "
             f"token.json. {RECONSENT_HINT}"
         )
@@ -128,7 +128,7 @@ async def get_access_token(
         # string is the easiest place for a credential to reach logs.
         if error in ("invalid_grant", "invalid_request", "unauthorized_client"):
             log.error("google_auth.refresh_token_expired", oauth_error=error)
-            raise TokenExpired(f"Refresh token rejected ({error}). {RECONSENT_HINT}")
+            raise TokenExpiredError(f"Refresh token rejected ({error}). {RECONSENT_HINT}")
         raise RuntimeError(f"Token refresh failed with HTTP {status} ({error or 'no error code'})")
 
     payload: dict[str, Any] = json.loads(body)

@@ -34,7 +34,7 @@ async def principal(authorization: str | None = Header(default=None)) -> Princip
         raise HTTPException(status_code=401, detail="missing bearer token")
     try:
         return access_control.resolve_principal(name)
-    except access_control.AccessDenied as exc:
+    except access_control.AccessDeniedError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except KeyError as exc:
         raise HTTPException(status_code=403, detail="unknown principal") from exc

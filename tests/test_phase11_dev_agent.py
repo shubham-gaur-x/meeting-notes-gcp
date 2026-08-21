@@ -49,7 +49,7 @@ def test_shipped_does_not_escalate() -> None:
 
 
 def test_illegal_transitions_raise() -> None:
-    with pytest.raises(lifecycle.IllegalTransition):
+    with pytest.raises(lifecycle.IllegalTransitionError):
         lifecycle.assert_transition(lifecycle.TRIAGED, lifecycle.SHIPPED)
 
 
@@ -58,9 +58,9 @@ def test_assert_transition_passes_silently_for_a_legal_edge() -> None:
 
 
 def test_unknown_states_raise() -> None:
-    with pytest.raises(lifecycle.IllegalTransition):
+    with pytest.raises(lifecycle.IllegalTransitionError):
         lifecycle.assert_transition("NOT_A_STATE", lifecycle.PLANNED)
-    with pytest.raises(lifecycle.IllegalTransition):
+    with pytest.raises(lifecycle.IllegalTransitionError):
         lifecycle.assert_transition(lifecycle.TRIAGED, "NOT_A_STATE")
 
 
