@@ -691,12 +691,83 @@ fully verifiable locally against the same graph.
 
 ---
 
+## Phase 11 — Autonomous dev agent 🟦 (ADR-020)
+
+Moved from v2 to v1. `PHASE_PLAN` originally deferred `dev_agent` reasoning that the pipeline
+had to be solid first — that held while Phases 1-8 were unbuilt. Reading v5's implementation
+end to end (required before porting anything, same discipline as every phase before this one)
+found it was never actually the "port a proven component" job the deferral assumed: v5's own
+`docs/CHECKPOINT-live-run-backend.md` records it blocked on free-tier LLM quotas, never
+resumed. v6's Vertex AI project — verified working this session for real extraction and
+768-dim embeddings — clears the exact bar v5 couldn't. Full reasoning: ADR-020.
+
+**Port:** v5's `dev_agent/` (12 modules, 1,815 lines) — lifecycle, guardrails, self-verify,
+session memory, git worktrees, the GitHub read client, the headless Claude Code runner, the
+orchestrator.
+
+**Fix while porting (ADR-020, confirmed live in v5):** the `SHIPPED`-state resume loop.
+`lifecycle.TERMINAL_STATES` was missing `SHIPPED`; `db.get_active_run()`'s SQL independently
+hardcoded the same three-state exclusion, already drifted from it; the poller resumed a
+shipped run on every poll with no `should_attempt()` check at all. 61 `AgentRun` nodes for one
+ticket in the live graph. The fix: one definition of "terminal", and `should_attempt()`
+consulted before any resume, not just at new-ticket time.
+
+**Structural departures from a literal port (ADR-020), each required by rules the rest of v6
+already holds to:**
+- No APScheduler. v5 ran an in-process `AsyncIOScheduler` inside its own FastAPI service.
+  `jobs/dev_agent_poll.py` is a Cloud Run Job on Cloud Scheduler; manual trigger and run status
+  become routes on the existing `api/` service rather than a second FastAPI process.
+- One SQL-owning module. v5's `dev_agent/db.py` opened its own pool. `dev_agent_runs` and its
+  queries move into `meeting_notes/db.py`.
+- Coding-model routing stays out of `llm_client.py` on purpose — `meeting_notes/dev_agent/
+  backend.py` owns it, because invoking headless Claude Code is a subprocess with tool access,
+  not a `chat_json`/`embed` call.
+- A Vertex backend is new (v5 only had local/claude/openrouter/gemini/groq): `CLAUDE_CODE_USE_
+  VERTEX=1` over the same Application Default Credentials `llm_client.py` already proved.
+
+**Unchanged, because it was already sound:** the seven deterministic guardrail gates (tests
+green, lint/type clean, diff budget, protected paths, no new deps without opt-in, secret scan,
+module boundaries) plus an independent LLM reviewer; git worktrees, one per ticket; resumable
+session memory that feeds a retry instead of starting cold; self-verification that flags a
+low-confidence diff but never blocks review; the rule that the agent never merges its own PR.
+
+**Tasks**
+1. `meeting_notes/db.py` — add the `dev_agent_runs` table and its queries (claim, finish,
+   session-memory read/write, `get_active_run`, `should_attempt`).
+2. `meeting_notes/dev_agent/lifecycle.py` — the state machine, `SHIPPED` terminal, deterministic
+   IDs (`run_id`, `ticket_node_id`, `pull_request_node_id`) in one place.
+3. `meeting_notes/dev_agent/guardrails.py` + `self_verify.py` — port. These are pure/testable
+   with no live services.
+4. `meeting_notes/dev_agent/backend.py` — local (LM Studio, $0) + vertex (new, ADR-020) +
+   claude (direct key, optional). Preflight each with an actionable failure message.
+5. `meeting_notes/dev_agent/git_ops.py`, `github_client.py`, `claude_runner.py`,
+   `session_memory.py` — port, adjusted for Cloud Run's ephemeral filesystem (no assumed
+   long-lived `REPO_DIR`).
+6. `meeting_notes/dev_agent/orchestrator.py` — `triage`, `process_ticket`, `poll_and_process`,
+   with the `SHIPPED`/`should_attempt` fix wired through both the state machine and the query.
+7. `jobs/dev_agent_poll.py` — thin entrypoint, Cloud Scheduler cadence.
+8. `api/routers/dev_agent.py` — manual trigger, preflight check, recent-runs listing, folded
+   into the existing service rather than a second one.
+9. `/webhook/github`'s `pull_request.merged` handler writes `CLOSED` and the `RESOLVED_BY` edge
+   — the provenance write path ADR-008 deferred, now un-deferred by this phase existing.
+
+**Exit criteria**
+- A regression test proves the fix: a `SHIPPED` run is excluded from `get_active_run()`, and
+  `should_attempt()` returns `False` for it independently of that exclusion.
+- All seven guardrail gates have a test with a planted violation that fails it.
+- Every lifecycle transition table entry is tested; every illegal edge raises.
+- **Live verification is explicitly gated on credentials this session may not have** — a real
+  `GITHUB_TOKEN` with repo scope, a real Jira sprint ticket labelled for the agent, billing
+  headroom on the Vertex project. Do not claim an end-to-end run succeeded without one actually
+  producing a real PR against a real ticket — the entire point of ADR-020 was refusing to
+  repeat v5's unverified-checkpoint pattern.
+
+---
+
 ## v2 — Deferred scope
 
 Not in v1. See ADR-008.
 
-- `dev_agent` — port with bug #2 fixed (the `SHIPPED` resume loop that created 61 `AgentRun`
-  nodes for one ticket).
 - `action_agent` — re-evaluate whether it should exist at all. It is built on the Airbyte
   Agents SDK, the dependency v6 deliberately removes.
 - Gmail/Calendar push notifications via `users.watch` → Pub/Sub, replacing polling.

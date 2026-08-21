@@ -608,6 +608,100 @@ must not assume the database will reject bad data for them.
 
 ---
 
+## ADR-020 — `dev_agent` moves from v2 to v1, ported now rather than deferred
+
+**Date:** 2026-08-20 · **Status:** Accepted
+
+**Context.** `CLAUDE.md` and `PHASE_PLAN.md` deferred `dev_agent` (the autonomous Jira-ticket
+implementer) to v2, reasoning that "the pipeline has to be solid first." That reasoning was
+sound in isolation but rested on an unstated assumption: that porting it would be cheap once
+the time came. Reading v5's implementation end to end to check that assumption surfaced two
+things that change the calculus.
+
+**Finding 1 — v5's `dev_agent` never completed an autonomous run.** It is substantial and
+well-engineered — 1,815 lines across 12 modules: an explicit lifecycle state machine, seven
+deterministic pre-merge gates plus an independent LLM reviewer, resumable session memory,
+self-verification of the diff against ticket intent, git-worktree isolation per ticket. But
+`docs/CHECKPOINT-live-run-backend.md`, still present at v5's HEAD, records the actual outcome:
+blocked on free-tier LLM quotas. Groq's free tier is 12k TPM against a 68k-token request (5-6x
+over); Gemini's free-tier `generateContent` quota was set to 0, requiring billing even for the
+nominally free allowance. The checkpoint doc ends with "to resume the live run, pick one" and
+names the abandoned test ticket. Every commit after that checkpoint is unrelated work. So
+"port it in v2" was never "port a proven component" — it was always "finish something v5 left
+blocked," and that fact was invisible until read closely.
+
+**Finding 2 — the specific blocker is already gone.** v6 has Vertex AI with real billing,
+verified working this session for both chat extraction and 768-dim embeddings. v5 hit its wall
+specifically because every backend it tried was either free-tier-limited or required a card it
+didn't have. v6's Vertex project already clears that bar. Claude Code supports Vertex AI
+natively (`CLAUDE_CODE_USE_VERTEX=1` + Application Default Credentials, the same auth path
+already proven in `llm_client.py`'s `_vertex_auth_header()`), so this is not a new integration
+to build — it is pointing an existing, working credential at a feature Claude Code already
+has.
+
+**Finding 3 — a live, confirmed bug in the state machine, with an exact fix.** v5's own
+migration notes (`MIGRATION_FROM_V5.md` #2) flagged this as "fix it when porting," and reading
+the code confirms both halves precisely:
+
+- `lifecycle.TERMINAL_STATES = {CLOSED, FAILED, NEEDS_HUMAN}` — `SHIPPED` (a successful run
+  that opened a PR and moved the ticket to review) is *not* terminal.
+- `db.get_active_run()`'s SQL independently hardcodes `state NOT IN ('CLOSED', 'FAILED',
+  'NEEDS_HUMAN')` — the same three states, spelled a second time, already drifted from
+  `TERMINAL_STATES` in the sense that nothing keeps them in sync.
+- `orchestrator.poll_and_process()` calls `get_active_run()` first and, if it finds a
+  "non-terminal" run, calls `process_ticket()` on it directly — bypassing `should_attempt()`
+  entirely.
+
+The result, live: a `SHIPPED` run matches the SQL's exclusion list, so every subsequent poll
+treats it as a crashed run to resume, reprocesses the ticket, and `db.start_run()`'s
+`ON CONFLICT ... attempt_count = attempt_count + 1` increments forever. **61 `AgentRun` nodes
+for one ticket** in the live v5 graph, confirmed in `MIGRATION_FROM_V5.md`'s node counts.
+
+**Decision.** Port `dev_agent` now, as Phase 11, with three deliberate departures from a
+literal port:
+
+1. **`SHIPPED` joins `TERMINAL_STATES`, and the terminal set has exactly one definition.**
+   `db.get_active_run()`'s query is built from `lifecycle.TERMINAL_STATES` rather than a
+   second hardcoded tuple — the drift between two spellings of the same fact is the root
+   cause, not a coincidence, so the fix is a single source of truth, not a corrected copy.
+   `poll_and_process()` also calls `should_attempt()` before resuming an active run, as a
+   second independent check — belt and suspenders, per `MIGRATION_FROM_V5.md`'s explicit
+   instruction.
+2. **No APScheduler.** v5's `orchestrator.py` ran an in-process `AsyncIOScheduler` inside its
+   own FastAPI service — a direct violation of the rule the rest of v6 already holds to.
+   `jobs/dev_agent_poll.py` is a Cloud Run Job on a Cloud Scheduler cadence; manual
+   trigger/status becomes routes on the existing `api/` service rather than a second FastAPI
+   process, since v6 (unlike v5) already has one.
+3. **One SQL-owning module, still.** v5's `dev_agent/db.py` opened its own pool and owned its
+   own queries — a second SQL module, which `CLAUDE.md` forbids in v6. The `dev_agent_runs`
+   table and its queries move into `meeting_notes/db.py`; `meeting_notes/dev_agent/*` calls
+   those functions rather than touching Postgres directly.
+
+Everything else — the seven deterministic guardrail gates, the independent LLM reviewer, git
+worktrees per ticket, resumable session memory, self-verification that flags rather than
+blocks, and the rule that the agent **never merges its own PR** — carries across as designed.
+That design is sound; what was missing was runway, not correctness.
+
+**Consequences.** This is real new scope, not a formality: git/GitHub/Jira write access, a
+container image with the `claude` CLI and `gh` installed, and a guardrail surface that has to
+actually hold up against a real PR before anyone trusts it unattended. The `CLOSED` transition
+(an actual merge) is driven by `/webhook/github`'s `pull_request.merged` event, which Phase 8
+built as acknowledge-only specifically because ADR-008 deferred provenance *writers* to v2 —
+this ADR is what un-defers that write path. Live end-to-end verification (a real ticket, a
+real PR, a real merge) needs credentials this session does not have on hand and should not be
+assumed; it is called out explicitly in the Phase 11 plan rather than claimed.
+
+**Rejected:**
+- *Leave it in v2 as originally decided.* The reasoning for deferring it ("pipeline has to be
+  solid first") was about sequencing risk, not about the component being unsound — and eight
+  phases of the pipeline are now built and tested. Continuing to defer a component whose only
+  real blocker is already resolved trades a stale caution for no benefit.
+- *Port literally, fix the bug later.* The bug is fully diagnosed now, with its exact location
+  and fix already known from reading the code. Porting it in and coming back later means
+  reintroducing a documented, confirmed-live data-corruption bug on purpose.
+
+---
+
 ## Template
 
 ```

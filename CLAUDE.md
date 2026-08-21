@@ -42,7 +42,7 @@ system with 363 passing tests. **Read from it freely. Never write to it.**
 
 - Not a rewrite. Port deliberately; justify every file that does *not* come across.
 - Not multi-tenant. One Workspace user (`shubham.gaur@onixnet.com`), one graph.
-- Not v2-scope. `dev_agent` and `action_agent` are **deferred to v2** — see "Deferred" below.
+- Not v2-scope for `action_agent` — see "Deferred" below. `dev_agent` moved to v1 (ADR-020).
 
 ---
 
@@ -167,12 +167,23 @@ meeting-notes-gcp/
 │   ├── access_control.py
 │   ├── meeting_quality.py
 │   ├── memory/{semantic,episodic,procedural,vector,retrieval}.py
-│   └── sources/{base,gmail,calendar,meet,jira}.py
+│   ├── sources/{base,gmail,calendar,meet,jira}.py
+│   └── dev_agent/              Phase 11, ADR-020 — autonomous ticket implementer
+│       ├── lifecycle.py        state machine; SHIPPED is terminal
+│       ├── guardrails.py       7 deterministic gates + independent LLM reviewer
+│       ├── self_verify.py      cheap diff-vs-ticket scoring, never blocks review
+│       ├── session_memory.py   resumable record per ticket, survives across attempts
+│       ├── backend.py          coding-model routing — NOT llm_client, see Scope rules
+│       ├── claude_runner.py    spawns headless `claude` as a subprocess
+│       ├── git_ops.py          worktree per ticket
+│       ├── github_client.py    read-only: find the PR the agent opened, fetch its diff
+│       └── orchestrator.py     triage → process_ticket → poll_and_process
 ├── jobs/                      Cloud Run Job entrypoints — thin main() only
 │   ├── ingest_{gmail,calendar,meet,jira}.py
 │   ├── pipeline_drain.py
 │   ├── nightly.py
-│   └── refresh_tokens.py
+│   ├── refresh_tokens.py
+│   └── dev_agent_poll.py      Cloud Scheduler cadence, not an in-process scheduler
 ├── api/                       Cloud Run Service — FastAPI
 │   ├── main.py
 │   ├── routers/
@@ -222,25 +233,41 @@ If a job file grows past ~50 lines, the logic belongs in the package.
   id drift is a known past bug class in v5 — it cost real debugging time twice.
 
 ### Scope
-- DO NOT build `dev_agent` or `action_agent` in v1. They are deferred (see below).
-- DO NOT auto-merge a pull request. Human review is the checkpoint, in v2 as in v5.
+- `dev_agent` moved from v2 to v1 (ADR-020) — Phase 11. `action_agent` stays deferred (see
+  below).
+- DO NOT auto-merge a pull request. Human review is the checkpoint. `dev_agent` opens PRs and
+  never merges them; `CLOSED` is driven only by `/webhook/github`'s `pull_request.merged`
+  event, i.e. a human actually merging.
+- DO NOT let `dev_agent`'s coding-model selection go through `meeting_notes/llm_client.py`.
+  That seam's contract (`chat_json`/`embed`, temperature 0, extraction-shaped) is for meeting
+  data; invoking headless Claude Code is a different kind of call entirely — a subprocess with
+  tool access, not a structured completion. `meeting_notes/dev_agent/backend.py` owns that
+  routing, deliberately separate, exactly as v5 kept it separate.
+- DO NOT let `meeting_notes/dev_agent/*` open its own Postgres connection or write its own SQL.
+  `dev_agent_runs` and its queries live in `meeting_notes/db.py` like everything else — v5's
+  `dev_agent/db.py` was a second SQL-owning module, which v6 does not permit.
+- DO NOT let `dev_agent`'s poll loop run in-process. It is `jobs/dev_agent_poll.py`, a Cloud
+  Run Job on a Cloud Scheduler cadence — v5 ran an `AsyncIOScheduler` inside its own FastAPI
+  service, which is exactly the pattern the rest of this project removed.
+- DO NOT treat `SHIPPED` as a non-terminal lifecycle state, and DO NOT let two places spell
+  "terminal" independently. This is a confirmed-live v5 bug (ADR-020): `SHIPPED` was missing
+  from `TERMINAL_STATES`, a second hardcoded exclusion list in `get_active_run()`'s SQL had
+  drifted from it, and the poller resumed a shipped run on every single poll — 61 `AgentRun`
+  nodes for one ticket in the live graph. The terminal set has exactly one definition, and
+  `should_attempt()` is consulted before resuming an active run as a second, independent check.
 
 ---
 
 ## Deferred to v2 (do not build, but do not block)
 
-`dev_agent` (autonomous Jira ticket implementer) and `action_agent` (Airbyte Agents SDK
-deliverable drafter) are **out of scope for v1**. The pipeline has to be solid first.
+`action_agent` (Airbyte Agents SDK deliverable drafter) is **out of scope for v1**. `dev_agent`
+is no longer deferred — see Phase 11 and ADR-020.
 
-Two consequences you must respect while building v1:
+One consequence you must respect while building v1:
 
-1. **The provenance graph schema ships in v1 anyway.** `Ticket`, `PullRequest`, `AgentRun`,
-   `Commit`, `FileChange`, `Blocker` and their edges are created by `scripts/setup_memgraph.py`
-   from day one, and `/webhook/github` exists. Provenance cannot be backfilled — a merge that
-   happens before the schema exists is lost forever. Ship the schema, leave the writers for v2.
-2. **`action_agent` may not survive at all.** It is built on the Airbyte Agents SDK, which is
-   exactly the dependency v6 is walking away from. Re-evaluate its purpose in v2 rather than
-   porting it reflexively.
+- **`action_agent` may not survive at all.** It is built on the Airbyte Agents SDK, which is
+  exactly the dependency v6 is walking away from. Re-evaluate its purpose in v2 rather than
+  porting it reflexively.
 
 ---
 
