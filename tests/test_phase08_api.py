@@ -241,6 +241,76 @@ async def test_github_webhook_accepts_a_valid_signature(app: Any, monkeypatch: A
     assert response.json()["event"] == "pull_request"
 
 
+async def _github_post(app: Any, monkeypatch: Any, payload: dict) -> httpx.Response:
+    import json as _json
+
+    import api.routers.webhooks as wh
+
+    body = _json.dumps(payload).encode()
+    monkeypatch.setattr(
+        wh, "get_settings",
+        lambda: Settings(_env_file=None, GITHUB_WEBHOOK_SECRET="s3cret", GCP_PROJECT_ID="p"),
+    )
+    return await _post(
+        app, "/webhook/github", content=body,
+        headers={"X-Hub-Signature-256": github_webhook.sign(body, "s3cret"),
+                 "X-GitHub-Event": "pull_request"},
+    )
+
+
+async def test_a_merged_pr_closes_its_agent_run(app: Any, monkeypatch: Any) -> None:
+    """ADR-020: this is the ONE place dev_agent's CLOSED state is written."""
+    import api.routers.webhooks as wh
+
+    seen: dict[str, Any] = {}
+
+    async def fake_close(pr_url: str, driver: Any = None) -> dict | None:
+        seen["pr_url"] = pr_url
+        return {"ticket_key": "SCRUM-1"}
+
+    monkeypatch.setattr(wh, "close_agent_run_on_merge", fake_close)
+    response = await _github_post(app, monkeypatch, {
+        "action": "closed",
+        "pull_request": {"merged": True, "html_url": "https://github.com/o/r/pull/9"},
+    })
+
+    assert response.status_code == 200
+    assert seen["pr_url"] == "https://github.com/o/r/pull/9"
+
+
+async def test_a_closed_but_unmerged_pr_does_not_close_any_agent_run(app: Any, monkeypatch: Any) -> None:
+    import api.routers.webhooks as wh
+
+    called = []
+    monkeypatch.setattr(wh, "close_agent_run_on_merge", lambda *a, **k: called.append(1))
+    response = await _github_post(app, monkeypatch, {
+        "action": "closed",
+        "pull_request": {"merged": False, "html_url": "https://github.com/o/r/pull/9"},
+    })
+
+    assert response.status_code == 200
+    assert called == []
+
+
+async def test_a_failed_agent_run_close_does_not_break_the_webhook_response(
+    app: Any, monkeypatch: Any
+) -> None:
+    """Most merged PRs aren't the agent's, and a graph hiccup on the ones that
+    are must never turn GitHub's webhook into a retry storm."""
+    import api.routers.webhooks as wh
+
+    async def boom(pr_url: str, driver: Any = None) -> dict | None:
+        raise RuntimeError("memgraph unavailable")
+
+    monkeypatch.setattr(wh, "close_agent_run_on_merge", boom)
+    response = await _github_post(app, monkeypatch, {
+        "action": "closed",
+        "pull_request": {"merged": True, "html_url": "https://github.com/o/r/pull/9"},
+    })
+
+    assert response.status_code == 200
+
+
 async def test_jira_webhook_acknowledges(app: Any) -> None:
     response = await _post(app, "/webhook/jira", json={"webhookEvent": "jira:issue_updated"})
     assert response.status_code == 200
