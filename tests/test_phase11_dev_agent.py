@@ -615,3 +615,131 @@ def test_dev_agent_never_imports_llm_client() -> None:
     source = Path(dab.__file__).read_text()
     importing = re.compile(r"^\s*(from\s+\S*llm_client\S*\s+import|import\s+\S*llm_client)", re.M)
     assert not importing.search(source)
+
+
+# ─── git_ops.py, github_client.py, claude_runner.py, session_memory.py (Task 7)
+
+from meeting_notes.dev_agent import git_ops, session_memory  # noqa: E402
+
+
+def test_authed_remote_url_embeds_the_token() -> None:
+    url = git_ops.authed_remote_url("acme", "repo", "gh-tok")
+    assert url == "https://x-access-token:gh-tok@github.com/acme/repo.git"
+
+
+async def test_create_worktree_removes_a_stale_worktree_first() -> None:
+    """A previous failed attempt can leave a worktree/branch behind. The next
+    attempt must not fail trying to create over it."""
+    calls: list[list[str]] = []
+
+    async def fake_run_git(args, cwd=None):
+        calls.append(args)
+        if args[:2] == ["worktree", "remove"]:
+            return ""  # succeeds this time
+        return ""
+
+    original = git_ops._run_git
+    git_ops._run_git = fake_run_git  # type: ignore[assignment]
+    try:
+        await git_ops.create_worktree("/repo", "/work/SCRUM-1", "agent/SCRUM-1")
+    finally:
+        git_ops._run_git = original  # type: ignore[assignment]
+
+    kinds = [c[0] for c in calls]
+    assert "fetch" in kinds
+
+    add_index = next(i for i, c in enumerate(calls) if c[:2] == ["worktree", "add"])
+    assert calls[add_index] == [
+        "worktree", "add", "-b", "agent/SCRUM-1", "/work/SCRUM-1", "origin/main"
+    ]
+    # the stale-removal attempts happened before the add, not after
+    assert any(c[:2] == ["worktree", "remove"] for c in calls[:add_index])
+
+
+async def test_ensure_repo_cloned_always_clones_fresh() -> None:
+    """Cloud Run Jobs have no persistent filesystem between executions -- there
+    is never an existing checkout to fetch into, unlike v5's Docker Compose
+    assumption."""
+    calls: list[list[str]] = []
+
+    async def fake_run_git(args, cwd=None):
+        calls.append(args)
+        return ""
+
+    original = git_ops._run_git
+    git_ops._run_git = fake_run_git  # type: ignore[assignment]
+    try:
+        await git_ops.ensure_repo_cloned("/repo", "acme", "widget", "tok")
+    finally:
+        git_ops._run_git = original  # type: ignore[assignment]
+
+    assert calls == [["clone", git_ops.authed_remote_url("acme", "widget", "tok"), "/repo"]]
+
+
+def test_files_from_diff_extracts_the_b_side() -> None:
+    diff = (
+        "diff --git a/meeting_notes/db.py b/meeting_notes/db.py\n"
+        "index abc..def 100644\n"
+        "diff --git a/tests/test_db.py b/tests/test_db.py\n"
+    )
+    assert session_memory.files_from_diff(diff) == ["meeting_notes/db.py", "tests/test_db.py"]
+
+
+def test_files_from_diff_handles_no_diff() -> None:
+    assert session_memory.files_from_diff("") == []
+
+
+def test_build_memory_shapes_pr_opened_differently_from_failed() -> None:
+    opened = session_memory.build_memory(
+        {"key": "SCRUM-1", "summary": "x"}, outcome="pr_opened",
+        pr={"html_url": "https://x/1"}, files_changed=["a.py"],
+    )
+    failed = session_memory.build_memory(
+        {"key": "SCRUM-1", "summary": "x"}, outcome="failed", error="tests failed",
+    )
+    assert "Opened PR" in opened["work_completed"][0]
+    assert opened["blockers"] == []
+    assert failed["work_completed"] == []
+    assert "tests failed" in failed["blockers"][0]
+
+
+def test_build_memory_flags_a_low_confidence_verdict_as_a_next_action() -> None:
+    class _Verdict:
+        checked = True
+        passed = False
+
+    memory = session_memory.build_memory(
+        {"key": "SCRUM-1", "summary": "x"}, outcome="pr_opened",
+        pr={"html_url": "https://x/1"}, verdict=_Verdict(),
+    )
+    assert any("human review" in a.lower() for a in memory["next_actions"])
+
+
+async def test_record_never_raises_when_persistence_fails() -> None:
+    """Session memory is best-effort -- a failing save must not crash the run."""
+    async def exploding_save(ticket_key, memory):
+        raise RuntimeError("db down")
+
+    memory = await session_memory.record(
+        {"key": "SCRUM-1", "summary": "x"}, outcome="failed", error="e", save=exploding_save
+    )
+    assert memory["outcome"] == "failed"  # still returns the built memory
+
+
+async def test_load_resume_context_returns_none_when_nothing_saved() -> None:
+    async def empty_load(ticket_key):
+        return None
+
+    assert await session_memory.load_resume_context("SCRUM-1", load=empty_load) is None
+
+
+async def test_load_resume_context_returns_the_saved_context() -> None:
+    async def fake_load(ticket_key):
+        return {"resume_context": "pick up where you left off"}
+
+    result = await session_memory.load_resume_context("SCRUM-1", load=fake_load)
+    assert result == "pick up where you left off"
+
+
+# claude_runner and github_client are exercised via orchestrator tests (Task 8),
+# where they are naturally injected as dependencies of process_ticket.
