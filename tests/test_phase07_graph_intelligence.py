@@ -834,7 +834,21 @@ async def test_one_failing_enrichment_layer_does_not_skip_the_others() -> None:
 
     # Every step appears in the outcome, whether it succeeded or was caught.
     assert set(outcome) >= {"facts", "relationships", "temporal", "causality",
-                            "procedures", "embed_meeting", "embed_actions", "algorithms"}
+                            "procedures", "embed_meeting", "embed_actions",
+                            "embed_facts", "algorithms"}
+
+
+async def test_facts_are_embedded_or_fact_search_can_never_return_anything() -> None:
+    """`/graph/search/facts` queries the Fact vector index, so a Fact with no
+    embedding is invisible to it forever.
+
+    Found live: the pipeline embedded Meetings and ActionItems but not Facts,
+    so the endpoint answered `count: 0` against 83 real Facts. The enrich step
+    is what populates the index the endpoint reads.
+    """
+    assert "embed_facts" in pipeline.enrich_step_names(), (
+        "enrich() must embed Facts, or search/facts is dead on arrival"
+    )
 
 
 async def test_enrichment_is_skipped_for_a_low_score_record() -> None:

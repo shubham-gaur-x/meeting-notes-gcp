@@ -206,6 +206,20 @@ def adapter_for(source_type: str) -> Adapter:
         raise ValueError(f"no pipeline adapter for source_type {source_type!r}") from None
 
 
+# The enrichment layers, in run order. Declared once here so callers and tests
+# can introspect the set without executing it; `enrich` asserts the list it
+# builds still matches, so the two cannot drift apart silently.
+ENRICH_STEPS: tuple[str, ...] = (
+    "facts", "relationships", "temporal", "causality", "procedures",
+    "embed_meeting", "embed_actions", "embed_facts", "algorithms",
+)
+
+
+def enrich_step_names() -> tuple[str, ...]:
+    """The enrichment layers `enrich()` runs, in order."""
+    return ENRICH_STEPS
+
+
 async def enrich(
     meeting: ExtractedMeeting,
     meeting_id: str,
@@ -243,8 +257,13 @@ async def enrich(
         ("procedures", lambda: procedural.match_to_procedure(meeting, meeting_id)),
         ("embed_meeting", lambda: vector.embed_meeting(meeting_id, meeting.summary, settings=settings)),
         ("embed_actions", lambda: vector.embed_action_items_for_meeting(meeting_id, settings=settings)),
+        # Without this, every Fact stays outside the vector index and
+        # /graph/search/facts can never return a result -- found live against
+        # 83 real Facts, all unembedded.
+        ("embed_facts", lambda: vector.embed_facts_for_meeting(meeting_id, settings=settings)),
         ("algorithms", lambda: graph_algorithms.run_fast()),
     ]
+    assert tuple(n for n, _ in steps) == ENRICH_STEPS, "ENRICH_STEPS drifted from enrich()"
 
     for name, step in steps:
         try:
