@@ -827,3 +827,43 @@ def test_an_attendee_without_an_email_is_not_invented() -> None:
                        {"name": "Real Person", "email": "real@onixnet.com"}]}
     )
     assert [a["email"] for a in overrides["attendees"]] == ["real@onixnet.com"]
+
+
+async def test_source_overrides_are_validated_not_just_assigned() -> None:
+    """`model_copy(update=...)` does NOT validate.
+
+    Passing the calendar invitee list through it left `meeting.attendees` as
+    raw dicts, and `person_resolver.resolve` reads attributes with getattr, so
+    every dict silently became an attendee with no name and no email and went
+    straight to the review queue. Re-running 10 calendar records with the
+    override in place moved Person 6 -> 6 and PersonReview 95 -> 103: the fix
+    made things worse, silently.
+
+    The date override survived the same bug only by luck -- a str where a date
+    was expected still renders through str().
+    """
+    from meeting_notes.models import Attendee
+    from meeting_notes.pipeline import apply_source_overrides
+
+    meeting = _meeting(attendees=[{"name": "Guessed", "role": "attendee"}])
+    updated = apply_source_overrides(meeting, {
+        "date": "2026-02-26",
+        "attendees": [{"name": "Matteo Vaiente", "email": "matteo@onixnet.com",
+                       "role": "organizer"}],
+    })
+
+    assert all(isinstance(a, Attendee) for a in updated.attendees), (
+        "attendees must be validated models, not raw dicts"
+    )
+    assert updated.attendees[0].email == "matteo@onixnet.com"
+    assert str(updated.date) == "2026-02-26"
+
+
+def test_a_mapping_attendee_still_resolves_by_email() -> None:
+    """Defence in depth for the failure above: `resolve` accepts Any, and a
+    dict silently produced an empty attendee rather than failing loudly."""
+    from meeting_notes.person_resolver import Roster, resolve
+
+    r = resolve({"name": "Matteo Vaiente", "email": "matteo@onixnet.com"}, Roster([]))
+    assert r.email == "matteo@onixnet.com", f"a mapping was dropped: {r.reason}"
+    assert r.status == "resolved"

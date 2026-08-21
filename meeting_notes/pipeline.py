@@ -259,6 +259,23 @@ def enrich_step_names() -> tuple[str, ...]:
     return ENRICH_STEPS
 
 
+def apply_source_overrides(
+    meeting: ExtractedMeeting, overrides: dict[str, Any]
+) -> ExtractedMeeting:
+    """Apply source-authoritative fields, re-validating the result.
+
+    `model_copy(update=...)` assigns without validation, so a list of attendee
+    dicts stayed a list of dicts. `person_resolver.resolve` reads attributes
+    with getattr, which on a dict quietly returns the default -- so every
+    overridden attendee became one with no name and no email and went to the
+    review queue. The bug was silent in both directions: no exception, and the
+    date override had survived it only because a str still renders via str().
+    """
+    if not overrides:
+        return meeting
+    return ExtractedMeeting.model_validate({**meeting.model_dump(), **overrides})
+
+
 async def enrich(
     meeting: ExtractedMeeting,
     meeting_id: str,
@@ -375,9 +392,7 @@ async def process(
         return PipelineResult(status="extract_failed", score=score)
 
     # Source-authoritative fields win over whatever the model inferred.
-    overrides = adapter.extract_overrides(payload)
-    if overrides:
-        meeting = meeting.model_copy(update=overrides)
+    meeting = apply_source_overrides(meeting, adapter.extract_overrides(payload))
 
     bound = bound.bind(step="graph_write", meeting_title=meeting.title)
     meeting_id: str = await upsert(meeting, record.source_id)

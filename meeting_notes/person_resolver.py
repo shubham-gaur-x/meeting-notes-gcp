@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from difflib import SequenceMatcher
@@ -151,9 +152,17 @@ def resolve(
 ) -> Resolution:
     """Resolve one attendee (anything with .name/.email/.role) to a canonical Resolution."""
     known_people = known_people or []
-    name = getattr(attendee, "name", "") or ""
-    role = getattr(attendee, "role", "attendee") or "attendee"
-    email = getattr(attendee, "email", None)
+    # A mapping reads through getattr as an attendee with no fields at all,
+    # which resolves to "no-email-no-match" instead of failing -- silent data
+    # loss. Accept both shapes rather than trusting every caller to validate.
+    if isinstance(attendee, Mapping):
+        name = attendee.get("name") or ""
+        role = attendee.get("role") or "attendee"
+        email = attendee.get("email")
+    else:
+        name = getattr(attendee, "name", "") or ""
+        role = getattr(attendee, "role", "attendee") or "attendee"
+        email = getattr(attendee, "email", None)
 
     # Tier 1 — deterministic (email present)
     if email and "@" in email:
