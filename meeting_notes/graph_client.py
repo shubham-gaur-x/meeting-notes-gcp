@@ -99,6 +99,223 @@ def _resolve_owner_email(
 
 
 @with_retry(max_attempts=3, base_delay=1.0)
+async def _write_meeting(
+    tx: Any, meeting: ExtractedMeeting, meeting_id: str, source_id: str, now: str
+) -> None:
+    await tx.run(
+        """
+        MERGE (m:Meeting {id: $id})
+        ON CREATE SET m.created_at = $now, m.relevance_weight = 1.0
+        SET m.title = $title,
+            m.kind = $kind,
+            m.platform = $platform,
+            m.date = $date,
+            m.duration_minutes = $duration,
+            m.summary = $summary,
+            m.sentiment = $sentiment,
+            m.follow_up_needed = $follow_up,
+            m.confidence = $confidence,
+            m.source_id = $source_id,
+            m.updated_at = $now
+        """,
+        id=meeting_id,
+        title=meeting.title,
+        kind=meeting.kind,
+        platform=meeting.platform,
+        date=str(meeting.date),
+        duration=meeting.duration_minutes,
+        summary=meeting.summary,
+        sentiment=meeting.sentiment,
+        follow_up=meeting.follow_up_needed,
+        confidence=meeting.confidence,
+        source_id=source_id,
+        now=now,
+    )
+
+
+async def _write_attendees(tx: Any, resolved: Any, meeting_id: str, now: str) -> None:
+    """Person + Organization + ATTENDED, one statement per attendee.
+
+    `tracked` is never downgraded: a person opted into per-person analytics
+    stays opted in even if a later meeting resolves them without the flag.
+    """
+    for res in resolved:
+        email = res.email or ""
+        domain = email.split("@")[-1] if "@" in email else "unknown"
+        await tx.run(
+            """
+            MERGE (p:Person {email: $email})
+            ON CREATE SET p.created_at = $now, p.tracked = $tracked
+            SET p.name = $name, p.id = $person_id, p.updated_at = $now,
+                p.tracked = CASE WHEN $tracked THEN true ELSE coalesce(p.tracked, false) END
+
+            MERGE (o:Organization {domain: $domain})
+            ON CREATE SET o.created_at = $now
+            SET o.id = $org_id, o.updated_at = $now
+
+            WITH p, o
+            MERGE (p)-[:WORKS_AT]->(o)
+
+            WITH p
+            MATCH (m:Meeting {id: $meeting_id})
+            MERGE (p)-[:ATTENDED {role: $role}]->(m)
+            """,
+            email=email,
+            name=res.name,
+            person_id=uuid5_id("person", email),
+            tracked=res.tracked,
+            domain=domain,
+            org_id=uuid5_id("org", domain),
+            role=res.role,
+            meeting_id=meeting_id,
+            now=now,
+        )
+
+
+async def _write_person_reviews(
+    tx: Any, reviews: Any, source_id: str, meeting_id: str, now: str
+) -> None:
+    """Attendees that could not be resolved are HELD for review, never dropped."""
+    for rev in reviews:
+        await tx.run(
+            """
+            MERGE (r:PersonReview {id: $id})
+            ON CREATE SET r.created_at = $now
+            SET r.name = $name, r.role = $role, r.reason = $reason,
+                r.status = 'pending', r.updated_at = $now
+            WITH r
+            MATCH (m:Meeting {id: $meeting_id})
+            MERGE (m)-[:NEEDS_REVIEW]->(r)
+            """,
+            id=uuid5_id("person-review", f"{source_id}:{rev.name}:{rev.role}"),
+            name=rev.name,
+            role=rev.role,
+            reason=rev.reason,
+            meeting_id=meeting_id,
+            now=now,
+        )
+
+
+async def _write_topics(tx: Any, topics: list[str], meeting_id: str, now: str) -> None:
+    """The Topic MERGE key is normalised (lowercase + strip) to match the id's
+    normalisation.
+
+    Using the raw-case name created a second Topic node per case variant — with
+    a colliding `.id`, since both hash to the same uuid5 — fragmenting one real
+    topic and understating it in every insight query, which all key off these
+    nodes.
+    """
+    for topic_name in topics:
+        norm_name = _normalise_topic(topic_name)
+        await tx.run(
+            """
+            MERGE (t:Topic {name: $name})
+            ON CREATE SET t.created_at = $now
+            SET t.id = $topic_id, t.updated_at = $now
+
+            WITH t
+            MATCH (m:Meeting {id: $meeting_id})
+            MERGE (m)-[:DISCUSSED]->(t)
+            """,
+            name=norm_name,
+            topic_id=uuid5_id("topic", norm_name),
+            meeting_id=meeting_id,
+            now=now,
+        )
+
+
+async def _write_decisions(
+    tx: Any, decisions: Any, source_id: str, meeting_id: str, now: str
+) -> None:
+    for i, decision in enumerate(decisions):
+        await tx.run(
+            """
+            MERGE (d:Decision {id: $id})
+            ON CREATE SET d.created_at = $now
+            SET d.text = $text, d.confidence = $confidence, d.updated_at = $now
+
+            WITH d
+            MATCH (m:Meeting {id: $meeting_id})
+            MERGE (m)-[:PRODUCED]->(d)
+            """,
+            id=uuid5_id("decision", f"{source_id}:{i}"),
+            text=decision.text,
+            confidence=decision.confidence,
+            meeting_id=meeting_id,
+            now=now,
+        )
+
+
+async def _write_blockers(
+    tx: Any, blockers: Any, source_id: str, meeting_id: str, now: str
+) -> None:
+    for i, blocker in enumerate(blockers):
+        await tx.run(
+            """
+            MERGE (b:Blocker {id: $id})
+            ON CREATE SET b.created_at = $now, b.status = 'open'
+            SET b.text = $text, b.raised_by = $raised_by, b.updated_at = $now
+
+            WITH b
+            MATCH (m:Meeting {id: $meeting_id})
+            MERGE (m)-[:RAISES_BLOCKER]->(b)
+            """,
+            id=uuid5_id("blocker", f"{source_id}:{i}"),
+            text=blocker.text,
+            raised_by=blocker.raised_by,
+            meeting_id=meeting_id,
+            now=now,
+        )
+
+
+async def _write_action_items(
+    tx: Any, actions: Any, source_id: str, meeting_id: str, now: str,
+    *, roster: Roster, known_people: list[dict[str, Any]],
+) -> None:
+    """ActionItem + FOLLOWS_UP, and ASSIGNED_TO when the owner resolves.
+
+    The owner is resolved to an email rather than checked for an "@": a naive
+    check left ASSIGNED_TO unformed for every owner written as a display name,
+    and the edge simply never appeared.
+    """
+    for i, action in enumerate(actions):
+        await tx.run(
+            """
+            MERGE (a:ActionItem {id: $id})
+            ON CREATE SET a.created_at = $now
+            SET a.task = $task,
+                a.owner = $owner,
+                a.due = $due,
+                a.done = $done,
+                a.priority = $priority,
+                a.is_engineering_task = $is_engineering_task,
+                a.confidence = $confidence,
+                a.updated_at = $now
+
+            WITH a
+            MATCH (m:Meeting {id: $meeting_id})
+            MERGE (m)-[:FOLLOWS_UP]->(a)
+
+            WITH a
+            OPTIONAL MATCH (p:Person {email: $owner_email})
+            FOREACH (_ IN CASE WHEN p IS NOT NULL THEN [1] ELSE [] END |
+                MERGE (a)-[:ASSIGNED_TO]->(p)
+            )
+            """,
+            id=uuid5_id("action", f"{source_id}:{i}:{action.task}"),
+            task=action.task,
+            owner=action.owner,
+            due=str(action.due) if action.due else None,
+            done=action.done,
+            priority=action.priority,
+            is_engineering_task=action.is_engineering_task,
+            confidence=action.confidence,
+            meeting_id=meeting_id,
+            owner_email=_resolve_owner_email(action.owner, roster, known_people),
+            now=now,
+        )
+
+
 async def upsert_meeting_graph(
     meeting: ExtractedMeeting,
     source_id: str,
@@ -109,9 +326,12 @@ async def upsert_meeting_graph(
 ) -> str:
     """MERGE a whole meeting into the graph in ONE transaction.
 
-    Meeting, People, Organizations, Topics, Decisions and ActionItems all
-    commit together or not at all (CLAUDE.md). Reads — resolving attendees —
-    happen before the transaction opens.
+    Meeting, People, Organizations, Topics, Decisions, Blockers and
+    ActionItems all commit together or not at all (CLAUDE.md). Every `_write_*`
+    helper below takes the same `tx` for that reason — they are steps in one
+    transaction, not separate calls.
+
+    Reads — resolving attendees — happen before the transaction opens.
     """
     now = datetime.now(UTC).isoformat()
     meeting_id = uuid5_id("meeting", source_id)
@@ -130,189 +350,16 @@ async def upsert_meeting_graph(
 
     async with driver.session() as session:
         async with await session.begin_transaction() as tx:
-            await tx.run(
-                """
-                MERGE (m:Meeting {id: $id})
-                ON CREATE SET m.created_at = $now, m.relevance_weight = 1.0
-                SET m.title = $title,
-                    m.kind = $kind,
-                    m.platform = $platform,
-                    m.date = $date,
-                    m.duration_minutes = $duration,
-                    m.summary = $summary,
-                    m.sentiment = $sentiment,
-                    m.follow_up_needed = $follow_up,
-                    m.confidence = $confidence,
-                    m.source_id = $source_id,
-                    m.updated_at = $now
-                """,
-                id=meeting_id,
-                title=meeting.title,
-                kind=meeting.kind,
-                platform=meeting.platform,
-                date=str(meeting.date),
-                duration=meeting.duration_minutes,
-                summary=meeting.summary,
-                sentiment=meeting.sentiment,
-                follow_up=meeting.follow_up_needed,
-                confidence=meeting.confidence,
-                source_id=source_id,
-                now=now,
+            await _write_meeting(tx, meeting, meeting_id, source_id, now)
+            await _write_attendees(tx, resolved, meeting_id, now)
+            await _write_person_reviews(tx, reviews, source_id, meeting_id, now)
+            await _write_topics(tx, meeting.topics, meeting_id, now)
+            await _write_decisions(tx, meeting.decisions, source_id, meeting_id, now)
+            await _write_blockers(tx, meeting.blockers, source_id, meeting_id, now)
+            await _write_action_items(
+                tx, meeting.action_items, source_id, meeting_id, now,
+                roster=roster, known_people=known_people,
             )
-
-            for res in resolved:
-                email = res.email or ""
-                person_id = uuid5_id("person", email)
-                domain = email.split("@")[-1] if "@" in email else "unknown"
-                org_id = uuid5_id("org", domain)
-
-                await tx.run(
-                    """
-                    MERGE (p:Person {email: $email})
-                    ON CREATE SET p.created_at = $now, p.tracked = $tracked
-                    SET p.name = $name, p.id = $person_id, p.updated_at = $now,
-                        p.tracked = CASE WHEN $tracked THEN true ELSE coalesce(p.tracked, false) END
-
-                    MERGE (o:Organization {domain: $domain})
-                    ON CREATE SET o.created_at = $now
-                    SET o.id = $org_id, o.updated_at = $now
-
-                    WITH p, o
-                    MERGE (p)-[:WORKS_AT]->(o)
-
-                    WITH p
-                    MATCH (m:Meeting {id: $meeting_id})
-                    MERGE (p)-[:ATTENDED {role: $role}]->(m)
-                    """,
-                    email=email,
-                    name=res.name,
-                    person_id=person_id,
-                    tracked=res.tracked,
-                    domain=domain,
-                    org_id=org_id,
-                    role=res.role,
-                    meeting_id=meeting_id,
-                    now=now,
-                )
-
-            # Unresolved attendees are HELD for review, never silently dropped.
-            for rev in reviews:
-                review_id = uuid5_id("person-review", f"{source_id}:{rev.name}:{rev.role}")
-                await tx.run(
-                    """
-                    MERGE (r:PersonReview {id: $id})
-                    ON CREATE SET r.created_at = $now
-                    SET r.name = $name, r.role = $role, r.reason = $reason,
-                        r.status = 'pending', r.updated_at = $now
-                    WITH r
-                    MATCH (m:Meeting {id: $meeting_id})
-                    MERGE (m)-[:NEEDS_REVIEW]->(r)
-                    """,
-                    id=review_id,
-                    name=rev.name,
-                    role=rev.role,
-                    reason=rev.reason,
-                    meeting_id=meeting_id,
-                    now=now,
-                )
-
-            # Topic MERGE key is normalised (lowercase + strip) to match the id's
-            # normalisation. Using the raw-case name created a second Topic node
-            # per case variant — with a colliding .id, since both hash to the same
-            # uuid5 — fragmenting one real topic and understating it in every
-            # insight query, which all key off these nodes.
-            for topic_name in meeting.topics:
-                norm_name = topic_name.lower().strip()
-                await tx.run(
-                    """
-                    MERGE (t:Topic {name: $name})
-                    ON CREATE SET t.created_at = $now
-                    SET t.id = $topic_id, t.updated_at = $now
-
-                    WITH t
-                    MATCH (m:Meeting {id: $meeting_id})
-                    MERGE (m)-[:DISCUSSED]->(t)
-                    """,
-                    name=norm_name,
-                    topic_id=uuid5_id("topic", norm_name),
-                    meeting_id=meeting_id,
-                    now=now,
-                )
-
-            for i, decision in enumerate(meeting.decisions):
-                await tx.run(
-                    """
-                    MERGE (d:Decision {id: $id})
-                    ON CREATE SET d.created_at = $now
-                    SET d.text = $text, d.confidence = $confidence, d.updated_at = $now
-
-                    WITH d
-                    MATCH (m:Meeting {id: $meeting_id})
-                    MERGE (m)-[:PRODUCED]->(d)
-                    """,
-                    id=uuid5_id("decision", f"{source_id}:{i}"),
-                    text=decision.text,
-                    confidence=decision.confidence,
-                    meeting_id=meeting_id,
-                    now=now,
-                )
-
-            for i, blocker in enumerate(meeting.blockers):
-                await tx.run(
-                    """
-                    MERGE (b:Blocker {id: $id})
-                    ON CREATE SET b.created_at = $now, b.status = 'open'
-                    SET b.text = $text, b.raised_by = $raised_by, b.updated_at = $now
-
-                    WITH b
-                    MATCH (m:Meeting {id: $meeting_id})
-                    MERGE (m)-[:RAISES_BLOCKER]->(b)
-                    """,
-                    id=uuid5_id("blocker", f"{source_id}:{i}"),
-                    text=blocker.text,
-                    raised_by=blocker.raised_by,
-                    meeting_id=meeting_id,
-                    now=now,
-                )
-
-            for i, action in enumerate(meeting.action_items):
-                await tx.run(
-                    """
-                    MERGE (a:ActionItem {id: $id})
-                    ON CREATE SET a.created_at = $now
-                    SET a.task = $task,
-                        a.owner = $owner,
-                        a.due = $due,
-                        a.done = $done,
-                        a.priority = $priority,
-                        a.is_engineering_task = $is_engineering_task,
-                        a.confidence = $confidence,
-                        a.updated_at = $now
-
-                    WITH a
-                    MATCH (m:Meeting {id: $meeting_id})
-                    MERGE (m)-[:FOLLOWS_UP]->(a)
-
-                    WITH a
-                    OPTIONAL MATCH (p:Person {email: $owner_email})
-                    FOREACH (_ IN CASE WHEN p IS NOT NULL THEN [1] ELSE [] END |
-                        MERGE (a)-[:ASSIGNED_TO]->(p)
-                    )
-                    """,
-                    id=uuid5_id("action", f"{source_id}:{i}:{action.task}"),
-                    task=action.task,
-                    owner=action.owner,
-                    due=str(action.due) if action.due else None,
-                    done=action.done,
-                    priority=action.priority,
-                    is_engineering_task=action.is_engineering_task,
-                    confidence=action.confidence,
-                    meeting_id=meeting_id,
-                    # Bug #1: resolved, not a naive "@" check on a display name.
-                    owner_email=_resolve_owner_email(action.owner, roster, known_people),
-                    now=now,
-                )
-
             await tx.commit()
 
     log.info(

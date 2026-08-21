@@ -198,7 +198,7 @@ def _resolve_dependencies(overrides: dict[str, Any]) -> _Dependencies:
 
 async def _run_coding_agent(
     key: str, detail: dict[str, Any], settings: Settings, deps: _Dependencies,
-    *, work_dir: str, branch_name: str, dev_backend: str, log_: Any,
+    *, work_dir: str, branch_name: str, dev_backend: str, logger: Any,
 ) -> AgentRunResult:
     """Take the ticket from PLANNED to a finished agent run."""
     await deps.create_worktree(settings.dev_agent_repo_dir, work_dir, branch_name)
@@ -218,7 +218,7 @@ async def _run_coding_agent(
 
 async def _finish_without_pr(
     key: str, detail: dict[str, Any], result: AgentRunResult,
-    settings: Settings, deps: _Dependencies, *, log_: Any,
+    settings: Settings, deps: _Dependencies, *, logger: Any,
 ) -> None:
     """No PR exists, so there is nothing to review and nothing to preserve.
 
@@ -232,14 +232,14 @@ async def _finish_without_pr(
     """
     reason = (result.result_text or "").strip()[:500] or "no error detail captured"
     if result.success:
-        log_.error("orchestrator.pr_not_found")
+        logger.error("orchestrator.pr_not_found")
         await deps.finish_run(key, lc.FAILED, error="reported success but no PR was found")
         await deps.add_comment(
             key, "Dev agent reported success but no PR was found. Needs human follow-up.",
             settings=settings,
         )
     else:
-        log_.error("orchestrator.agent_failed", error=result.result_text[:200])
+        logger.error("orchestrator.agent_failed", error=result.result_text[:200])
         await deps.finish_run(key, lc.FAILED, error=result.result_text[:2000])
         await deps.add_comment(
             key,
@@ -256,7 +256,7 @@ async def _finish_without_pr(
 
 async def _self_verify(
     ticket: dict[str, Any], pr: dict[str, Any], settings: Settings, deps: _Dependencies,
-    *, dev_backend: str, log_: Any,
+    *, dev_backend: str, logger: Any,
 ) -> tuple[str, Any]:
     """Fetch the diff and score it against the ticket. Never blocks (ADR-020)."""
     diff = ""
@@ -270,13 +270,13 @@ async def _self_verify(
             threshold=settings.dev_agent_verify_threshold,
         )
     except Exception:  # noqa: BLE001 - self-verify never blocks the review
-        log_.warning("orchestrator.self_verify_failed", exc_info=True)
+        logger.warning("orchestrator.self_verify_failed", exc_info=True)
     return diff, verdict
 
 
 async def _evaluate_pr(
     detail: dict[str, Any], diff: str, work_dir: str, settings: Settings,
-    deps: _Dependencies, *, dev_backend: str, log_: Any,
+    deps: _Dependencies, *, dev_backend: str, logger: Any,
 ) -> tuple[list[Any], Any]:
     """Both safety-net layers (ADR-020, ADR-022, ADR-024).
 
@@ -287,7 +287,7 @@ async def _evaluate_pr(
     try:
         gates = await deps.run_gates(work_dir, diff, detail.get("description", ""), settings)
     except Exception as exc:  # noqa: BLE001 - an unrunnable gate is a human's problem
-        log_.error("orchestrator.gates_errored", exc_info=True)
+        logger.error("orchestrator.gates_errored", exc_info=True)
         gates = [
             guardrails.GateResult(
                 name="gates_errored", passed=False,
@@ -302,7 +302,7 @@ async def _evaluate_pr(
                 detail, diff, gates, model=backend.model_for_run(dev_backend, settings)
             )
         except Exception:  # noqa: BLE001 - a model outage must not halt the run
-            log_.warning("orchestrator.review_errored", exc_info=True)
+            logger.warning("orchestrator.review_errored", exc_info=True)
     return gates, review
 
 
@@ -317,7 +317,7 @@ def _rejection_reason(failed: list[Any], review: Any) -> str:
 
 async def _record_provenance(
     key: str, pr: dict[str, Any], ticket: dict[str, Any], status: str,
-    verified: bool | None, deps: _Dependencies, *, branch_name: str, log_: Any,
+    verified: bool | None, deps: _Dependencies, *, branch_name: str, logger: Any,
 ) -> None:
     """Write the AgentRun node the merge webhook later finds by PR url.
 
@@ -332,19 +332,19 @@ async def _record_provenance(
             ticket_summary=ticket.get("summary", ""), status=status, verified=verified,
         )
     except Exception:  # noqa: BLE001 - provenance is not worth failing the run over
-        log_.warning("orchestrator.provenance_write_failed", exc_info=True)
+        logger.warning("orchestrator.provenance_write_failed", exc_info=True)
 
 
 async def _escalate_to_human(
     key: str, ticket: dict[str, Any], detail: dict[str, Any], pr: dict[str, Any],
     result: AgentRunResult, diff: str, verdict: Any, failed: list[Any], review: Any,
     verified: bool | None, settings: Settings, deps: _Dependencies,
-    *, branch_name: str, log_: Any,
+    *, branch_name: str, logger: Any,
 ) -> None:
     """A PR that did not pass review. NEEDS_HUMAN is terminal, so the poller
     will not retry it, and the PR is deliberately left open: the work is real,
     it just needs a person."""
-    log_.warning(
+    logger.warning(
         "orchestrator.review_blocked", failed=[g.name for g in failed],
         review_blocking=bool(review and review.blocking), pr_url=pr["html_url"],
     )
@@ -356,7 +356,7 @@ async def _escalate_to_human(
         settings=settings,
     )
     if not await deps.transition_issue(key, "In Review", settings=settings):
-        log_.warning("orchestrator.review_transition_failed")
+        logger.warning("orchestrator.review_transition_failed")
     await deps.finish_run(
         key, lc.NEEDS_HUMAN, pr_url=pr["html_url"], pr_number=pr["number"],
         error=(
@@ -366,7 +366,7 @@ async def _escalate_to_human(
     )
     await _advance_state(key, lc.NEEDS_HUMAN, deps.set_state, deps.get_run)
     await _record_provenance(
-        key, pr, ticket, lc.NEEDS_HUMAN, verified, deps, branch_name=branch_name, log_=log_,
+        key, pr, ticket, lc.NEEDS_HUMAN, verified, deps, branch_name=branch_name, logger=logger,
     )
     await deps.record_session_memory(
         detail, outcome="pr_opened", pr=pr,
@@ -395,26 +395,26 @@ def _ship_comment(result: AgentRunResult, verdict: Any, pr: dict[str, Any]) -> s
 async def _ship(
     key: str, ticket: dict[str, Any], detail: dict[str, Any], pr: dict[str, Any],
     result: AgentRunResult, diff: str, verdict: Any, verified: bool | None,
-    settings: Settings, deps: _Dependencies, *, branch_name: str, log_: Any,
+    settings: Settings, deps: _Dependencies, *, branch_name: str, logger: Any,
 ) -> None:
     """Gates and reviewer both passed. SHIPPED means the PR is open and the
     ticket is in review — CLOSED happens only when a human actually merges,
     via `/webhook/github`."""
     await deps.add_comment(key, _ship_comment(result, verdict, pr), settings=settings)
     if not await deps.transition_issue(key, "In Review", settings=settings):
-        log_.warning("orchestrator.review_transition_failed")
+        logger.warning("orchestrator.review_transition_failed")
 
     await deps.finish_run(key, lc.SHIPPED, pr_url=pr["html_url"], pr_number=pr["number"])
     await _advance_state(key, lc.SHIPPED, deps.set_state, deps.get_run)
     await _record_provenance(
-        key, pr, ticket, lc.SHIPPED, verified, deps, branch_name=branch_name, log_=log_,
+        key, pr, ticket, lc.SHIPPED, verified, deps, branch_name=branch_name, logger=logger,
     )
     await deps.record_session_memory(
         detail, outcome="pr_opened", pr=pr,
         files_changed=session_memory.files_from_diff(diff),
         verdict=verdict, raw_notes=result.result_text or "",
     )
-    log_.info(
+    logger.info(
         "orchestrator.ticket_done", pr_url=pr["html_url"],
         run_success=result.success, verified=verified,
     )
@@ -452,7 +452,7 @@ async def process_ticket(
 
         result = await _run_coding_agent(
             key, detail, settings, deps, work_dir=work_dir,
-            branch_name=branch_name, dev_backend=dev_backend, log_=bound_log,
+            branch_name=branch_name, dev_backend=dev_backend, logger=bound_log,
         )
 
         # The PR check gates the outcome, not result.success: a run can push a
@@ -463,30 +463,30 @@ async def process_ticket(
             settings.github_owner, settings.github_repo, branch_name, settings.github_token
         )
         if pr is None:
-            await _finish_without_pr(key, detail, result, settings, deps, log_=bound_log)
+            await _finish_without_pr(key, detail, result, settings, deps, logger=bound_log)
             return
 
         await _advance_state(key, lc.REVIEWING, deps.set_state, deps.get_run)
         diff, verdict = await _self_verify(
-            ticket, pr, settings, deps, dev_backend=dev_backend, log_=bound_log
+            ticket, pr, settings, deps, dev_backend=dev_backend, logger=bound_log
         )
         verified = verdict.passed if (verdict and verdict.checked) else None
 
         gates, review = await _evaluate_pr(
-            detail, diff, work_dir, settings, deps, dev_backend=dev_backend, log_=bound_log
+            detail, diff, work_dir, settings, deps, dev_backend=dev_backend, logger=bound_log
         )
         failed = guardrails.failed_gates(gates)
 
         if failed or (review and review.blocking):
             await _escalate_to_human(
                 key, ticket, detail, pr, result, diff, verdict, failed, review,
-                verified, settings, deps, branch_name=branch_name, log_=bound_log,
+                verified, settings, deps, branch_name=branch_name, logger=bound_log,
             )
             return
 
         await _ship(
             key, ticket, detail, pr, result, diff, verdict, verified,
-            settings, deps, branch_name=branch_name, log_=bound_log,
+            settings, deps, branch_name=branch_name, logger=bound_log,
         )
 
     except Exception as exc:
