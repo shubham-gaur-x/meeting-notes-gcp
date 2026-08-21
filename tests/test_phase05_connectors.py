@@ -866,3 +866,94 @@ async def test_other_4xx_errors_still_surface() -> None:
 
     with pytest.raises(RuntimeError, match="403"):
         await CalendarSource(access_token="at", transport=transport).fetch(since=None)
+
+
+# ─── a thread is one conversation, not N meetings ─────────────────────────────
+
+
+def _thread_fixture():
+    """Three replies on one thread, delivered out of order by the API."""
+    list_body = {"messages": [{"id": "m2"}, {"id": "m1"}, {"id": "m3"}]}
+    def msg(mid, ts, sender, body):
+        return {
+            "id": mid, "threadId": "t-100", "internalDate": ts,
+            "payload": {
+                "headers": [
+                    {"name": "Subject", "value": "Re: Verizon kickoff"},
+                    {"name": "From", "value": sender},
+                    {"name": "To", "value": "team@corp.com"},
+                    {"name": "Date", "value": f"2026-02-0{mid[-1]}T10:00:00Z"},
+                ],
+                "mimeType": "text/plain",
+                "body": {"data": _b64(body)},
+            },
+        }
+    messages = {
+        "m1": msg("m1", "1700000001000", "alice@corp.com", "can we do Thursday"),
+        "m2": msg("m2", "1700000002000", "bob@corp.com", "Thursday works for me"),
+        "m3": msg("m3", "1700000003000", "alice@corp.com", "booked it for Thursday"),
+    }
+    return list_body, messages
+
+
+async def test_a_thread_becomes_one_record_not_one_per_message() -> None:
+    """Three messages in one conversation were three staged records, so the
+    pipeline built three Meeting nodes, extracted overlapping decisions from
+    each, and filed the same commitment as several Jira tickets -- MNV-72 and
+    MNV-82 were the same task from the same thread.
+
+    The connector already captured threadId and nothing ever read it.
+    """
+    list_body, messages = _thread_fixture()
+    source = GmailSource(access_token="at", transport=_gmail_transport(list_body, messages))
+    records = await source.fetch(since=None)
+
+    assert len(records) == 1, f"expected one record per thread, got {len(records)}"
+    assert records[0].source_id == "t-100", "the thread id is the dedup key now"
+
+
+async def test_the_thread_record_keeps_every_message_in_order() -> None:
+    """Order matters: the last word on a thread is usually the decision, and
+    the API does not return them sorted."""
+    list_body, messages = _thread_fixture()
+    source = GmailSource(access_token="at", transport=_gmail_transport(list_body, messages))
+    record = (await source.fetch(since=None))[0]
+
+    bodies = [m["body"] for m in record.payload["messages"]]
+    assert len(bodies) == 3
+    assert "can we do Thursday" in bodies[0]
+    assert "booked it" in bodies[2], f"messages out of order: {bodies}"
+    assert record.payload["messages"][0]["from"] == "alice@corp.com"
+
+
+async def test_the_thread_watermark_is_the_newest_message() -> None:
+    """A thread is re-fetched when any message in it is new, so the watermark
+    has to be the newest -- taking the first would re-fetch it forever."""
+    list_body, messages = _thread_fixture()
+    source = GmailSource(access_token="at", transport=_gmail_transport(list_body, messages))
+    record = (await source.fetch(since=None))[0]
+    assert record.watermark == "1700000003000"
+
+
+async def test_the_email_adapter_renders_the_whole_thread() -> None:
+    """The extractor must see every reply, not just the first message."""
+    from meeting_notes.pipeline import adapter_for
+
+    text = adapter_for("email").text({
+        "subject": "Re: Verizon kickoff",
+        "messages": [
+            {"from": "alice@corp.com", "date": "2026-02-01", "body": "can we do Thursday"},
+            {"from": "bob@corp.com", "date": "2026-02-02", "body": "Thursday works"},
+        ],
+    })
+    assert "can we do Thursday" in text
+    assert "Thursday works" in text
+    assert "alice@corp.com" in text, "attribution matters for who decided what"
+
+
+async def test_a_single_message_payload_still_works() -> None:
+    """Records staged before this change carry `body` and no `messages`."""
+    from meeting_notes.pipeline import adapter_for
+
+    text = adapter_for("email").text({"subject": "Budget sync", "body": "we discussed the budget"})
+    assert "Budget sync" in text and "we discussed the budget" in text

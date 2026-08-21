@@ -87,7 +87,23 @@ class EmailAdapter:
     source_type = "email"
 
     def text(self, payload: dict[str, Any]) -> str:
-        return f"{payload.get('subject', '')}\n\n{payload.get('body', '')}"
+        """The whole conversation, attributed.
+
+        A thread is staged as one record carrying every message. Rendering
+        only the first would hide the reply that actually settled the
+        question, and dropping the sender would leave the extractor guessing
+        who decided what. A pre-thread payload has `body` and no `messages`,
+        and still renders.
+        """
+        subject = payload.get("subject", "")
+        messages = payload.get("messages") or []
+        if messages:
+            thread = "\n\n".join(
+                f"From: {m.get('from', '')} ({m.get('date', '')})\n{m.get('body', '')}"
+                for m in messages
+            )
+            return f"{subject}\n\n{thread}"
+        return f"{subject}\n\n{payload.get('body', '')}"
 
     def classify_metadata(self, payload: dict[str, Any]) -> dict[str, Any]:
         return {"from": payload.get("from", ""), "to": payload.get("to", "")}

@@ -159,6 +159,15 @@ ON CONFLICT (source_type, source_id) DO NOTHING
 RETURNING id
 """
 
+LIST_BY_TYPE_SQL = """
+SELECT id, source_id, source_type, payload, fetched_at, processed
+FROM staged_records
+WHERE source_type = $1
+ORDER BY fetched_at
+"""
+
+DELETE_STAGED_SQL = "DELETE FROM staged_records WHERE source_id = ANY($1::text[])"
+
 _MARK_PROCESSED_SQL = """
 UPDATE staged_records
 SET processed = TRUE, processed_at = now()
@@ -295,6 +304,51 @@ async def claim_batch(limit: int, pool: asyncpg.Pool | None = None) -> list[Stag
         )
         for r in rows
     ]
+
+
+async def list_staged_by_type(
+    source_type: str, pool: asyncpg.Pool | None = None
+) -> list[StagedRecord]:
+    """Every staged row for one source, processed or not.
+
+    Used by the email-thread consolidation, which has to see the whole set to
+    group it -- `claim_batch` deliberately hands out a locked subset and is
+    the wrong tool for a migration.
+    """
+    pool = pool or await get_pool()
+    rows = await pool.fetch(LIST_BY_TYPE_SQL, source_type)
+    return [
+        StagedRecord(
+            id=str(r["id"]),
+            source_id=r["source_id"],
+            source_type=r["source_type"],
+            payload=json.loads(r["payload"]) if isinstance(r["payload"], str) else r["payload"],
+            fetched_at=r["fetched_at"].isoformat(),
+            processed=r["processed"],
+        )
+        for r in rows
+    ]
+
+
+async def replace_staged_records(
+    source_type: str,
+    old_ids: list[str],
+    new_records: list[tuple[str, dict[str, Any]]],
+    pool: asyncpg.Pool | None = None,
+) -> int:
+    """Swap a set of staged rows for a different set, in ONE transaction.
+
+    Deleting first and inserting after without a transaction would, on a
+    failure between the two, lose the source data outright -- there is no
+    other copy of a staged payload once the rows are gone.
+    """
+    pool = pool or await get_pool()
+    async with pool.acquire() as con, con.transaction():
+        if old_ids:
+            await con.execute(DELETE_STAGED_SQL, old_ids)
+        for source_id, payload in new_records:
+            await con.execute(_INSERT_SQL, source_id, source_type, json.dumps(payload))
+    return len(new_records)
 
 
 async def mark_processed(record_id: str, pool: asyncpg.Pool | None = None) -> None:

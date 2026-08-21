@@ -120,31 +120,79 @@ class GmailSource:
 
         listing = await self._get(f"{GMAIL_API}?maxResults={self._max_results}{query}")
 
-        records: list[FetchedRecord] = []
+        # Collected per thread: a conversation is ONE meeting. Staging a record
+        # per message made the pipeline build a Meeting per reply, extract
+        # overlapping decisions from each, and file the same commitment as
+        # several Jira tickets. threadId was already being captured and never
+        # read.
+        threads: dict[str, list[dict[str, Any]]] = {}
         for stub in listing.get("messages") or []:
             message = await self._get(f"{GMAIL_API}/{stub['id']}?format=full")
             payload = message.get("payload") or {}
             headers = payload.get("headers") or []
-
-            records.append(
-                FetchedRecord(
-                    source_id=message["id"],
-                    source_type=self.source_type,
-                    payload={
-                        "subject": header(headers, "Subject"),
-                        "from": header(headers, "From"),
-                        "to": header(headers, "To"),
-                        "cc": header(headers, "Cc"),
-                        "date": header(headers, "Date"),
-                        "thread_id": message.get("threadId", ""),
-                        "body": extract_body(payload),
-                    },
-                    watermark=str(message.get("internalDate", "")) or None,
-                )
+            thread_id = message.get("threadId") or message["id"]
+            threads.setdefault(thread_id, []).append(
+                {
+                    "id": message["id"],
+                    "subject": header(headers, "Subject"),
+                    "from": header(headers, "From"),
+                    "to": header(headers, "To"),
+                    "cc": header(headers, "Cc"),
+                    "date": header(headers, "Date"),
+                    "body": extract_body(payload),
+                    "internal_date": str(message.get("internalDate", "")),
+                }
             )
 
-        log.info("gmail.fetched", source_event="list", count=len(records))
+        records = [
+            _thread_record(thread_id, messages, self.source_type)
+            for thread_id, messages in threads.items()
+        ]
+        log.info(
+            "gmail.fetched", source_event="list",
+            count=len(records), messages=sum(len(m) for m in threads.values()),
+        )
         return records
+
+
+def _thread_record(
+    thread_id: str, messages: list[dict[str, Any]], source_type: str
+) -> FetchedRecord:
+    """One conversation as one staged record.
+
+    Messages are sorted oldest-first by `internalDate`: the API does not
+    return them in order, and on a thread the last word is usually the
+    decision. The watermark is the NEWEST message, so a thread is re-fetched
+    when any reply is new rather than forever.
+
+    `body` is kept as the concatenated thread so a consumer that predates
+    `messages` still sees the whole conversation instead of one reply.
+    """
+    ordered = sorted(messages, key=lambda m: m.get("internal_date") or "")
+    first = ordered[0]
+    rendered = "\n\n".join(
+        f"From: {m.get('from', '')} ({m.get('date', '')})\n{m.get('body', '')}"
+        for m in ordered
+    )
+    return FetchedRecord(
+        source_id=thread_id,
+        source_type=source_type,
+        payload={
+            "subject": first.get("subject", ""),
+            "from": first.get("from", ""),
+            "to": first.get("to", ""),
+            "cc": first.get("cc", ""),
+            "date": first.get("date", ""),
+            "thread_id": thread_id,
+            "message_count": len(ordered),
+            "messages": [
+                {k: m.get(k, "") for k in ("id", "from", "to", "date", "body")}
+                for m in ordered
+            ],
+            "body": rendered,
+        },
+        watermark=max((m.get("internal_date") or "") for m in ordered) or None,
+    )
 
 
 async def _default_transport(url: str, headers: dict[str, str]) -> dict[str, Any]:

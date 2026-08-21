@@ -495,3 +495,14 @@ async def test_a_meeting_with_no_blockers_writes_none() -> None:
         _meeting(), "src-2", driver=FakeDriver(tx), known_people=[]
     )
     assert "Blocker" not in tx.cypher()
+
+
+async def test_db_exposes_reading_and_replacing_staged_records() -> None:
+    """Consolidating per-message email rows into per-thread rows needs to read
+    a source's staged rows and swap them for a smaller set. Both are SQL, so
+    both live in db.py -- a migration script writing its own would be the
+    second SQL-owning module CLAUDE.md forbids."""
+    from meeting_notes import db
+
+    assert hasattr(db, "list_staged_by_type")
+    assert hasattr(db, "replace_staged_records")
