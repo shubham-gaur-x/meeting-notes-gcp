@@ -243,6 +243,16 @@ def _openai_shaped_text(body: str) -> str:
     return text
 
 
+def _vertex_host(location: str) -> str:
+    """Vertex's regional host, or the unprefixed one for the `global` location.
+
+    `global` is not a region: there is no `global-aiplatform.googleapis.com`
+    and using one 404s. This matters because the Gemini 3.x models are served
+    ONLY from `global` (ADR-021).
+    """
+    return "aiplatform.googleapis.com" if location == "global" else f"{location}-aiplatform.googleapis.com"
+
+
 def _vertex_chat_request(
     system: str, user: str, temperature: float, settings: Settings
 ) -> tuple[str, dict[str, Any], dict[str, str]]:
@@ -252,7 +262,7 @@ def _vertex_chat_request(
     location = settings.vertex_location
     project = settings.gcp_project_id
     url = (
-        f"https://{location}-aiplatform.googleapis.com/v1/projects/{project}"
+        f"https://{_vertex_host(location)}/v1/projects/{project}"
         f"/locations/{location}/publishers/google/models/{model}:generateContent"
     )
     payload = {
@@ -404,7 +414,7 @@ async def embed(
         model = settings.vertex_embedding_model
         location, project = settings.vertex_location, settings.gcp_project_id
         url = (
-            f"https://{location}-aiplatform.googleapis.com/v1/projects/{project}"
+            f"https://{_vertex_host(location)}/v1/projects/{project}"
             f"/locations/{location}/publishers/google/models/{model}:predict"
         )
         payload = {"instances": [{"content": text}]}

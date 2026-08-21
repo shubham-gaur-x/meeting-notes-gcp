@@ -69,7 +69,7 @@ async def verify_pr(
 ) -> VerifyVerdict:
     """Score one PR diff against its ticket. Never raises — degrades to unchecked."""
     if run_oneshot is None:
-        from meeting_notes.dev_agent.claude_runner import run_oneshot as default_runner
+        from meeting_notes.dev_agent.gemini_runner import run_oneshot as default_runner
 
         run_oneshot = default_runner
 

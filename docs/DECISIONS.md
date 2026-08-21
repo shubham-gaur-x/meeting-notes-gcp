@@ -702,6 +702,84 @@ assumed; it is called out explicitly in the Phase 11 plan rather than claimed.
 
 ---
 
+## ADR-021 — `dev_agent` runs Gemini CLI on Vertex, not Claude Code
+
+**Date:** 2026-08-20 · **Status:** Accepted · **Amends:** ADR-020
+
+**Context.** ADR-020 chose Claude Code on Vertex AI as `dev_agent`'s coding backend, reasoning
+that `CLAUDE_CODE_USE_VERTEX=1` plus Application Default Credentials resolved v5's actual
+blocker (every backend it tried was free-tier-limited or needed a card it didn't have). That
+reasoning was correct about the auth path and wrong about the billing path. Enabling Claude on
+Vertex was attempted for real on `meeting-notes-gcp-personal` and blocked twice:
+
+1. **Every Claude model id returns "not found."** Not an auth error — the models are simply not
+   enabled for the project. Enabling them requires an access-request form whose data Google
+   forwards to Anthropic for approval, plus acceptance of Cloud Marketplace terms.
+2. **The GCP free-trial credit does not cover it.** The Marketplace agreement page states it
+   directly: "Most Google Cloud promotional credits don't apply to Google Cloud Marketplace
+   purchases." Anthropic models on Vertex are a third-party "model as a service" purchase, so
+   the $300 credit cannot pay for them regardless of which Claude model is chosen. Agreeing
+   would bill a real payment method.
+
+The project is explicitly cost-sensitive and, per standing instruction, must run on GCP-hosted
+inference without local models. That rules out all three of ADR-020's backends: `vertex` (not
+credit-covered), `claude` (direct Anthropic API — not GCP), and `local` (LM Studio — out of
+scope).
+
+**Decision.** `dev_agent`'s coding backend is **Gemini CLI** (`gemini`, Google's open-source
+agentic coding tool) run headlessly against Vertex AI. Gemini is a first-party Google model, so
+its usage is ordinary Vertex billing and *is* covered by the trial credit. `backend.py` now has
+exactly one backend, `gemini`; `claude_runner.py` is replaced by `gemini_runner.py`, and
+`ClaudeRunResult` becomes `AgentRunResult`.
+
+Model selection, probed live against the project on 2026-08-20 rather than taken from docs:
+
+| Use | Model | Location |
+|---|---|---|
+| `dev_agent` coding | `gemini-3-pro-preview` | `global` |
+| extraction pipeline | `gemini-3.7-flash` | `global` |
+| embeddings | `text-embedding-005` (768-dim) | `global` |
+
+**Consequences.**
+
+- The whole system now runs inside the $300 credit, with no third-party Marketplace purchase
+  and no second vendor relationship.
+- **Everything moves to location `global`.** `us-central1` serves nothing newer than Gemini 2.5;
+  3.x is `global`-only. This surfaced a latent bug in `llm_client.py`, which built
+  `{location}-aiplatform.googleapis.com` unconditionally — `global` is not a region and
+  `global-aiplatform.googleapis.com` 404s. Fixed in `_vertex_host()`, with regression tests for
+  both the chat and embedding URL builders, because the two build their URLs separately and
+  only one was exercised before.
+- **A run can report an error and still have done the work.** Observed live: the CLI wrote the
+  target file correctly, then emitted `{"error": {"type": "INVALID_STREAM"}}` on exit. This is
+  the same shape as v5's SCRUM-50 failure mode, and the existing rule already covers it — the
+  orchestrator gates the outcome on whether a PR exists, never on `result.success`.
+- **The CLI's auth selection has to be taken away from it.** `~/.gemini/settings.json`'s
+  `selectedType` wins over the environment: a fully Vertex-configured run still routed to Code
+  Assist and failed with a licence error. `backend.ensure_cli_home()` writes a config directory
+  the agent owns and points `GEMINI_CLI_HOME` at it, so a developer's personal auth choice can
+  never redirect an agent run's billing.
+- **`gemini` has no `--max-turns`.** A run is bounded by `timeout_seconds` alone.
+  `run_agent(max_turns=...)` is kept for interface parity but does nothing; the guardrail gates
+  and the timeout are the real bounds.
+- ADR-020's Vertex-auth reasoning is superseded, but everything else in it stands unchanged —
+  the lifecycle fix, the `SHIPPED`-is-terminal rule, the `should_attempt()` second check, the
+  no-in-process-scheduler rule and the one-SQL-owning-module rule are all backend-agnostic.
+
+**Rejected:**
+
+- *Convert the billing account and buy Claude on Vertex.* Defensible later, but it abandons the
+  credit for the one component that has a covered alternative, and the enablement is gated on a
+  third-party approval with no committed turnaround.
+- *Use the user's existing Anthropic API credits.* Would work and would need no rearchitecture,
+  but it puts a core component outside GCP and outside the credit — contrary to the project's
+  GCP-native premise.
+- *Keep both backends behind a flag.* A second, untested coding path that nothing in the
+  project can currently exercise. `VALID_BACKENDS` is a one-element tuple on purpose, and a
+  retired name now raises rather than silently selecting a backend that is no longer wired up.
+
+---
+
 ## Template
 
 ```

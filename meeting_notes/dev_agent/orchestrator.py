@@ -19,13 +19,13 @@ import structlog
 from meeting_notes.config import Settings, get_settings
 from meeting_notes.dev_agent import backend, git_ops, session_memory
 from meeting_notes.dev_agent import lifecycle as lc
-from meeting_notes.dev_agent.models import ClaudeRunResult
+from meeting_notes.dev_agent.models import AgentRunResult
 
 log = structlog.get_logger()
 
 
 def build_prompt(ticket: dict[str, Any], resume_context: str | None = None) -> str:
-    """The instructions given to headless Claude Code.
+    """The instructions given to the headless coding agent.
 
     The agent never merges its own PR — that instruction has zero tolerance
     (CLAUDE.md), and `CLOSED` is written only by a real human merge via
@@ -138,7 +138,7 @@ async def process_ticket(
     get_issue_detail: Any = None,
     create_worktree: Any = None,
     remove_worktree: Any = None,
-    run_claude_code: Any = None,
+    run_agent: Any = None,
     find_open_pr: Any = None,
     get_pr_diff: Any = None,
     verify_pr: Any = None,
@@ -168,8 +168,8 @@ async def process_ticket(
         create_worktree = git_ops.create_worktree
     if remove_worktree is None:
         remove_worktree = git_ops.remove_worktree
-    if run_claude_code is None:
-        from meeting_notes.dev_agent.claude_runner import run_claude_code
+    if run_agent is None:
+        from meeting_notes.dev_agent.gemini_runner import run_agent
     if find_open_pr is None:
         from meeting_notes.dev_agent.github_client import find_open_pr
     if get_pr_diff is None:
@@ -205,7 +205,7 @@ async def process_ticket(
         prompt = build_prompt(detail, resume_context=resume_context)
 
         await _advance_state(key, lc.IMPLEMENTING, set_state, get_run)
-        result: ClaudeRunResult = await run_claude_code(
+        result: AgentRunResult = await run_agent(
             work_dir, prompt,
             timeout_seconds=settings.dev_agent_timeout_seconds,
             max_turns=settings.dev_agent_max_turns,
@@ -232,7 +232,7 @@ async def process_ticket(
                     settings=settings,
                 )
             else:
-                bound_log.error("orchestrator.claude_failed", error=result.result_text[:200])
+                bound_log.error("orchestrator.agent_failed", error=result.result_text[:200])
                 await finish_run(key, lc.FAILED, error=result.result_text[:2000])
                 await add_comment(
                     key,

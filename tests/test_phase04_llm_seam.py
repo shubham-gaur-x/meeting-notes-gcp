@@ -280,6 +280,60 @@ async def test_vertex_reads_its_model_and_project_from_settings() -> None:
     assert "europe-west4" in seen["url"]
 
 
+async def test_the_global_location_uses_the_unprefixed_vertex_host() -> None:
+    """`global` is not a region: there is no global-aiplatform.googleapis.com
+    and using one 404s. This matters because the Gemini 3.x models are served
+    ONLY from `global` (ADR-021) -- caught live, not by a unit test."""
+    seen: dict = {}
+
+    async def capture(url: str, payload: dict, headers: dict) -> str:
+        seen["url"] = url
+        return json.dumps({"candidates": [{"content": {"parts": [{"text": "{}"}]}}]})
+
+    settings = Settings(
+        _env_file=None, LLM_BACKEND="vertex", GCP_PROJECT_ID="proj-x",
+        VERTEX_CHAT_MODEL="gemini-3.7-flash", VERTEX_LOCATION="global",
+    )
+    await chat_json("s", "u", settings=settings, transport=capture)
+    assert "global-aiplatform.googleapis.com" not in seen["url"]
+    assert seen["url"].startswith("https://aiplatform.googleapis.com/")
+    assert "/locations/global/" in seen["url"]
+
+
+async def test_the_global_location_also_applies_to_embeddings() -> None:
+    """embed() builds its own URL; the regional/global split must hold there
+    too or the vector path 404s while chat works."""
+    seen: dict = {}
+
+    async def capture(url: str, payload: dict, headers: dict) -> str:
+        seen["url"] = url
+        return json.dumps({"predictions": [{"embeddings": {"values": [0.0] * 768}}]})
+
+    settings = Settings(
+        _env_file=None, LLM_BACKEND="vertex", GCP_PROJECT_ID="proj-x",
+        VERTEX_EMBEDDING_MODEL="text-embedding-005", VERTEX_LOCATION="global",
+    )
+    await embed("hello", settings=settings, transport=capture)
+    assert "global-aiplatform.googleapis.com" not in seen["url"]
+    assert seen["url"].startswith("https://aiplatform.googleapis.com/")
+
+
+async def test_a_real_region_still_uses_the_regional_vertex_host() -> None:
+    """The global special-case must not break every ordinary region."""
+    seen: dict = {}
+
+    async def capture(url: str, payload: dict, headers: dict) -> str:
+        seen["url"] = url
+        return json.dumps({"candidates": [{"content": {"parts": [{"text": "{}"}]}}]})
+
+    settings = Settings(
+        _env_file=None, LLM_BACKEND="vertex", GCP_PROJECT_ID="proj-x",
+        VERTEX_CHAT_MODEL="gemini-2.5-flash", VERTEX_LOCATION="us-central1",
+    )
+    await chat_json("s", "u", settings=settings, transport=capture)
+    assert seen["url"].startswith("https://us-central1-aiplatform.googleapis.com/")
+
+
 async def test_the_api_key_is_sent_as_a_header_not_a_query_parameter() -> None:
     """A key in the URL leaks into logs, proxies and error messages."""
     seen: dict = {}

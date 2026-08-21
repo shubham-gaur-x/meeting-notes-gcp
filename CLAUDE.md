@@ -174,7 +174,7 @@ meeting-notes-gcp/
 │       ├── self_verify.py      cheap diff-vs-ticket scoring, never blocks review
 │       ├── session_memory.py   resumable record per ticket, survives across attempts
 │       ├── backend.py          coding-model routing — NOT llm_client, see Scope rules
-│       ├── claude_runner.py    spawns headless `claude` as a subprocess
+│       ├── gemini_runner.py    spawns headless `gemini` as a subprocess
 │       ├── git_ops.py          worktree per ticket
 │       ├── github_client.py    read-only: find the PR the agent opened, fetch its diff
 │       └── orchestrator.py     triage → process_ticket → poll_and_process
@@ -240,9 +240,13 @@ If a job file grows past ~50 lines, the logic belongs in the package.
   event, i.e. a human actually merging.
 - DO NOT let `dev_agent`'s coding-model selection go through `meeting_notes/llm_client.py`.
   That seam's contract (`chat_json`/`embed`, temperature 0, extraction-shaped) is for meeting
-  data; invoking headless Claude Code is a different kind of call entirely — a subprocess with
-  tool access, not a structured completion. `meeting_notes/dev_agent/backend.py` owns that
+  data; invoking a headless coding agent is a different kind of call entirely — a subprocess
+  with tool access, not a structured completion. `meeting_notes/dev_agent/backend.py` owns that
   routing, deliberately separate, exactly as v5 kept it separate.
+- DO NOT add a second `dev_agent` coding backend (ADR-021). `gemini` is the only one:
+  Claude on Vertex is a Cloud Marketplace purchase the GCP free-trial credit does not cover,
+  the direct Anthropic API is not GCP-hosted, and local models are out of scope. A retired
+  backend name must raise, never silently select something else.
 - DO NOT let `meeting_notes/dev_agent/*` open its own Postgres connection or write its own SQL.
   `dev_agent_runs` and its queries live in `meeting_notes/db.py` like everything else — v5's
   `dev_agent/db.py` was a second SQL-owning module, which v6 does not permit.
@@ -387,8 +391,9 @@ GCP_REGION=us-central1
 # LLM
 LLM_BACKEND=vertex               # vertex | gemini | lmstudio | fake
 GEMINI_API_KEY=                  # AI Studio key — tier 1 only, no GCP project needed
-VERTEX_CHAT_MODEL=               # e.g. gemini-2.5-flash — confirm current name at build time
+VERTEX_CHAT_MODEL=gemini-3.7-flash   # confirm current name at build time — they change
 VERTEX_EMBEDDING_MODEL=text-embedding-005
+VERTEX_LOCATION=global           # ADR-021: Gemini 3.x is served ONLY from `global`
 LM_STUDIO_BASE_URL=http://localhost:1234/v1   # local dev only
 LM_STUDIO_MODEL=
 LM_STUDIO_EMBEDDING_MODEL=text-embedding-nomic-embed-text-v1.5
@@ -429,6 +434,15 @@ JIRA_DEDUP_THRESHOLD=0.9
 # Governance
 FACT_MIN_CONFIDENCE=0.5
 PERSON_ROSTER_PATH=
+
+# Dev agent (Phase 11 — ADR-020, ADR-021)
+DEV_AGENT_LLM_BACKEND=gemini     # the only valid value; see ADR-021
+DEV_AGENT_GEMINI_MODEL=gemini-3-pro-preview
+DEV_AGENT_GEMINI_LOCATION=global
+DEV_AGENT_GEMINI_CLI_HOME=       # config dir the agent OWNS — never the developer's ~/.gemini
+GITHUB_OWNER=
+GITHUB_REPO=
+GITHUB_TOKEN=                    # Secret Manager
 
 # Service
 LOG_LEVEL=INFO

@@ -64,7 +64,7 @@ class JiraTicket(BaseModel):
     priority: str | None = None
 
 
-class ClaudeRunResult(BaseModel):
+class AgentRunResult(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     success: bool

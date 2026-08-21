@@ -1,7 +1,7 @@
 """GitHub API client — read-only PR verification.
 
 The dev agent never opens a PR through this module — that happens inside the
-headless Claude Code run itself (`gh pr create`, prompted for in
+headless coding-agent run itself (`gh pr create`, prompted for in
 `orchestrator.build_prompt`). This module only *finds* the PR the agent
 opened, by branch name, and fetches its diff for the guardrail gates and
 self-verify to score.

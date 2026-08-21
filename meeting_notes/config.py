@@ -53,14 +53,16 @@ class Settings(BaseSettings):
     # Coding-model routing. Deliberately separate from llm_backend above --
     # this selects a headless-Claude-Code subprocess backend, not a
     # chat_json/embed call (CLAUDE.md).
-    dev_agent_llm_backend: str = "local"  # local | vertex | claude
-    dev_agent_lm_model: str = ""
-    dev_agent_claude_model: str = ""
-    dev_agent_anthropic_api_key: str = ""
+    dev_agent_llm_backend: str = "gemini"
     # Confirm the current model id at build time -- they change (CLAUDE.md).
-    dev_agent_vertex_model: str = "claude-sonnet-4-5@20250929"
-    dev_agent_min_context: int = 32768
-    lm_studio_anthropic_url: str = "http://localhost:1234"
+    # The 3.x models are served only from location "global"; us-central1 has
+    # nothing newer than 2.5 (probed live, ADR-021).
+    dev_agent_gemini_model: str = "gemini-3-pro-preview"
+    dev_agent_gemini_location: str = "global"
+    # Config dir the agent owns, so the CLI never reads a developer's own
+    # ~/.gemini/settings.json (whose auth selection would win). See
+    # dev_agent/backend.py:ensure_cli_home.
+    dev_agent_gemini_cli_home: str = "/tmp/dev-agent/gemini-home"
     dev_agent_max_turns: int = 40
     dev_agent_timeout_seconds: int = 1800
     dev_agent_max_attempts: int = 1

@@ -12,7 +12,7 @@ import json
 import pytest
 
 from meeting_notes.dev_agent import lifecycle
-from meeting_notes.dev_agent.models import ClaudeRunResult, DevAgentRun
+from meeting_notes.dev_agent.models import AgentRunResult, DevAgentRun
 
 # ─── the bug fix (ADR-020) ─────────────────────────────────────────────────────
 
@@ -492,12 +492,11 @@ def _settings(**over):
 
 
 def test_select_backend_reads_dev_agent_llm_backend() -> None:
-    for name in ("local", "vertex", "claude"):
-        assert dab.select_backend(_settings(DEV_AGENT_LLM_BACKEND=name)) == name
+    assert dab.select_backend(_settings(DEV_AGENT_LLM_BACKEND="gemini")) == "gemini"
 
 
-def test_select_backend_defaults_to_local() -> None:
-    assert dab.select_backend(_settings()) == "local"
+def test_select_backend_defaults_to_gemini() -> None:
+    assert dab.select_backend(_settings()) == "gemini"
 
 
 def test_select_backend_rejects_an_unknown_value() -> None:
@@ -505,101 +504,102 @@ def test_select_backend_rejects_an_unknown_value() -> None:
         dab.select_backend(_settings(DEV_AGENT_LLM_BACKEND="groq"))
 
 
-def test_local_backend_empties_the_anthropic_api_key() -> None:
-    """A real key sitting in the parent environment must never let a local
-    run route to api.anthropic.com."""
-    env = dab.resolve_backend_env("local", _settings())
-    assert env["ANTHROPIC_API_KEY"] == ""
+def test_select_backend_rejects_the_retired_claude_backends(tmp_path) -> None:
+    """ADR-021 removed local/vertex/claude. They must fail loudly rather than
+    silently routing a run at a backend that is no longer wired up."""
+    for retired in ("local", "vertex", "claude"):
+        with pytest.raises(ValueError, match="Invalid"):
+            dab.select_backend(_settings(DEV_AGENT_LLM_BACKEND=retired))
 
 
-def test_local_backend_pins_both_the_main_and_small_fast_model() -> None:
-    """LM Studio's JIT loader evicts the loaded coder model and reloads at a
-    default 8192 context if Claude Code requests an unknown background model
-    id -- v5's original blocker, reproduced live. Pinning both avoids it."""
-    env = dab.resolve_backend_env("local", _settings(DEV_AGENT_LM_MODEL="qwen-coder-7b"))
-    assert env["ANTHROPIC_MODEL"] == "qwen-coder-7b"
-    assert env["ANTHROPIC_SMALL_FAST_MODEL"] == "qwen-coder-7b"
-
-
-def test_vertex_backend_sets_the_use_vertex_flag_and_no_api_key() -> None:
-    """ADR-020's actual fix: authentication is Application Default
-    Credentials, the same path llm_client.py already proved. No key at all."""
+def test_gemini_backend_pins_auth_to_vertex(tmp_path) -> None:
+    """The CLI must not be able to reach the Code Assist (oauth-personal)
+    path, which is what it picks by default and which is not billed to the
+    GCP project."""
     env = dab.resolve_backend_env(
-        "vertex", _settings(GCP_PROJECT_ID="my-proj", VERTEX_LOCATION="us-east4")
+        "gemini",
+        _settings(
+            GCP_PROJECT_ID="my-proj",
+            DEV_AGENT_GEMINI_LOCATION="global",
+            DEV_AGENT_GEMINI_CLI_HOME=str(tmp_path / "home"),
+        ),
     )
-    assert env["CLAUDE_CODE_USE_VERTEX"] == "1"
-    assert env["ANTHROPIC_VERTEX_PROJECT_ID"] == "my-proj"
-    assert env["CLOUD_ML_REGION"] == "us-east4"
-    assert env["ANTHROPIC_API_KEY"] == ""
+    assert env["GOOGLE_GENAI_USE_VERTEXAI"] == "1"
+    assert env["GOOGLE_CLOUD_PROJECT"] == "my-proj"
+    assert env["GOOGLE_CLOUD_LOCATION"] == "global"
 
 
-def test_claude_backend_sets_the_real_key_and_routes_to_anthropic() -> None:
+def test_gemini_backend_empties_the_api_key(tmp_path) -> None:
+    """An AI Studio key in the parent environment would redirect billing away
+    from the GCP project without any visible error."""
     env = dab.resolve_backend_env(
-        "claude", _settings(DEV_AGENT_ANTHROPIC_API_KEY="sk-ant-leakcanary")
+        "gemini", _settings(DEV_AGENT_GEMINI_CLI_HOME=str(tmp_path / "home"))
     )
-    assert env["ANTHROPIC_API_KEY"] == "sk-ant-leakcanary"
-    assert env["ANTHROPIC_BASE_URL"] == "https://api.anthropic.com"
+    assert env["GEMINI_API_KEY"] == ""
 
 
-def test_resolve_backend_env_covers_all_valid_backends() -> None:
+def test_gemini_backend_uses_its_own_cli_home(tmp_path) -> None:
+    """Without an owned GEMINI_CLI_HOME the CLI reads the developer's
+    ~/.gemini/settings.json, whose selectedType wins over the environment --
+    observed live routing a Vertex-configured run to Code Assist instead."""
+    home = tmp_path / "gemini-home"
+    env = dab.resolve_backend_env("gemini", _settings(DEV_AGENT_GEMINI_CLI_HOME=str(home)))
+    assert env["GEMINI_CLI_HOME"] == str(home)
+    written = json.loads((home / "settings.json").read_text())
+    assert written["security"]["auth"]["selectedType"] == "vertex-ai"
+
+
+def test_ensure_cli_home_overwrites_a_stale_auth_selection(tmp_path) -> None:
+    home = tmp_path / "gemini-home"
+    home.mkdir()
+    (home / "settings.json").write_text(
+        json.dumps({"security": {"auth": {"selectedType": "oauth-personal"}}})
+    )
+    dab.ensure_cli_home(_settings(DEV_AGENT_GEMINI_CLI_HOME=str(home)))
+    written = json.loads((home / "settings.json").read_text())
+    assert written["security"]["auth"]["selectedType"] == "vertex-ai"
+
+
+def test_resolve_backend_env_covers_all_valid_backends(tmp_path) -> None:
     """v5 stated this as a discipline explicitly; assert it directly rather
-    than trusting the three tests above happen to cover everything."""
+    than trusting the tests above happen to cover everything."""
     for name in dab.VALID_BACKENDS:
-        env = dab.resolve_backend_env(name, _settings(GCP_PROJECT_ID="p"))
-        assert "ANTHROPIC_API_KEY" in env
+        env = dab.resolve_backend_env(
+            name,
+            _settings(GCP_PROJECT_ID="p", DEV_AGENT_GEMINI_CLI_HOME=str(tmp_path / name)),
+        )
+        assert "GEMINI_API_KEY" in env
 
 
-def test_model_for_run_reads_the_matching_setting_per_backend() -> None:
-    s = _settings(
-        DEV_AGENT_LM_MODEL="local-model", DEV_AGENT_VERTEX_MODEL="claude-vertex-model",
-        DEV_AGENT_CLAUDE_MODEL="claude-direct-model",
-    )
-    assert dab.model_for_run("local", s) == "local-model"
-    assert dab.model_for_run("vertex", s) == "claude-vertex-model"
-    assert dab.model_for_run("claude", s) == "claude-direct-model"
+def test_model_for_run_reads_the_gemini_model_setting() -> None:
+    s = _settings(DEV_AGENT_GEMINI_MODEL="gemini-3-pro-preview")
+    assert dab.model_for_run("gemini", s) == "gemini-3-pro-preview"
 
 
-def test_select_loaded_model_requires_the_minimum_context() -> None:
-    models = [{"state": "loaded", "type": "llm", "id": "m1", "loaded_context_length": 8192}]
-    ok, detail = dab.select_loaded_model(models, min_context=32768)
-    assert ok is False
-    assert "8192" in detail
+def test_model_for_run_returns_none_when_unset() -> None:
+    assert dab.model_for_run("gemini", _settings(DEV_AGENT_GEMINI_MODEL="")) is None
 
 
-def test_select_loaded_model_ignores_embedding_models() -> None:
-    models = [{"state": "loaded", "type": "embeddings", "id": "e1", "loaded_context_length": 99999}]
-    ok, _ = dab.select_loaded_model(models, min_context=1000)
-    assert ok is False
-
-
-def test_select_loaded_model_picks_the_best_of_several() -> None:
-    models = [
-        {"state": "loaded", "type": "llm", "id": "small", "loaded_context_length": 4096},
-        {"state": "loaded", "type": "llm", "id": "big", "loaded_context_length": 32768},
-    ]
-    ok, detail = dab.select_loaded_model(models, min_context=16384)
-    assert ok is True
-    assert "big" in detail
-
-
-async def test_preflight_vertex_fails_without_a_project_id() -> None:
+async def test_preflight_gemini_fails_without_a_project_id() -> None:
     with pytest.raises(dab.PreflightError, match="GCP_PROJECT_ID"):
-        dab.preflight_vertex(_settings(GCP_PROJECT_ID=""))
+        dab.preflight_gemini(_settings(GCP_PROJECT_ID=""))
 
 
-async def test_preflight_vertex_passes_with_a_project_id() -> None:
-    detail = dab.preflight_vertex(_settings(GCP_PROJECT_ID="my-proj"))
+async def test_preflight_gemini_fails_without_a_location() -> None:
+    """The 3.x models are served only from "global"; an empty location would
+    fail at run time with a bare model-not-found."""
+    with pytest.raises(dab.PreflightError, match="DEV_AGENT_GEMINI_LOCATION"):
+        dab.preflight_gemini(_settings(GCP_PROJECT_ID="p", DEV_AGENT_GEMINI_LOCATION=""))
+
+
+async def test_preflight_gemini_passes_with_a_project_id() -> None:
+    detail = dab.preflight_gemini(_settings(GCP_PROJECT_ID="my-proj"))
     assert "my-proj" in detail
-
-
-async def test_preflight_claude_fails_without_a_key() -> None:
-    with pytest.raises(dab.PreflightError, match="DEV_AGENT_ANTHROPIC_API_KEY"):
-        dab.preflight_claude(_settings(DEV_AGENT_ANTHROPIC_API_KEY=""))
 
 
 async def test_preflight_dispatches_to_the_right_backend_check() -> None:
     with pytest.raises(dab.PreflightError, match="GCP_PROJECT_ID"):
-        await dab.preflight("vertex", _settings(GCP_PROJECT_ID=""))
+        await dab.preflight("gemini", _settings(GCP_PROJECT_ID=""))
 
 
 def test_dev_agent_never_imports_llm_client() -> None:
@@ -617,7 +617,7 @@ def test_dev_agent_never_imports_llm_client() -> None:
     assert not importing.search(source)
 
 
-# ─── git_ops.py, github_client.py, claude_runner.py, session_memory.py (Task 7)
+# ─── git_ops.py, github_client.py, gemini_runner.py, session_memory.py (Task 7)
 
 from meeting_notes.dev_agent import git_ops, session_memory  # noqa: E402
 
@@ -741,8 +741,134 @@ async def test_load_resume_context_returns_the_saved_context() -> None:
     assert result == "pick up where you left off"
 
 
-# claude_runner and github_client are exercised via orchestrator tests (Task 8),
-# where they are naturally injected as dependencies of process_ticket.
+# github_client is exercised via orchestrator tests (Task 8), where it is
+# naturally injected as a dependency of process_ticket.
+
+
+# ─── gemini_runner.py (ADR-021): parsing the CLI's JSON result ─────────────
+
+from meeting_notes.dev_agent import gemini_runner  # noqa: E402
+
+
+def test_turns_are_summed_across_models() -> None:
+    stats = {
+        "models": {
+            "gemini-3-pro-preview": {"api": {"totalRequests": 3}},
+            "gemini-3.7-flash": {"api": {"totalRequests": 2}},
+        }
+    }
+    assert gemini_runner._turns_from_stats(stats) == 5
+
+
+def test_turns_tolerate_a_missing_or_malformed_stats_block() -> None:
+    """The CLI's stats shape is not a contract we control."""
+    assert gemini_runner._turns_from_stats(None) is None
+    assert gemini_runner._turns_from_stats({}) is None
+    assert gemini_runner._turns_from_stats({"models": "nope"}) is None
+    assert gemini_runner._turns_from_stats({"models": {"m": {}}}) is None
+
+
+def test_parse_result_rejects_non_object_json() -> None:
+    """A bare JSON array or string is not a result envelope."""
+    assert gemini_runner._parse_result("[1, 2]") is None
+    assert gemini_runner._parse_result("not json at all") is None
+    assert gemini_runner._parse_result('{"response": "hi"}') == {"response": "hi"}
+
+
+class _FakeProc:
+    def __init__(self, stdout: str, stderr: str = "", returncode: int = 0) -> None:
+        self._out = stdout.encode()
+        self._err = stderr.encode()
+        self.returncode = returncode
+
+    async def communicate(self):
+        return self._out, self._err
+
+    def kill(self) -> None: ...
+
+    async def wait(self) -> None: ...
+
+
+def _fake_spawn(monkeypatch, proc):
+    async def spawn(*a, **kw):
+        return proc
+
+    monkeypatch.setattr(gemini_runner.asyncio, "create_subprocess_exec", spawn)
+
+
+def _runner_settings(tmp_path):
+    return _settings(GCP_PROJECT_ID="p", DEV_AGENT_GEMINI_CLI_HOME=str(tmp_path / "home"))
+
+
+async def test_run_agent_reports_failure_when_the_cli_reports_an_error(
+    monkeypatch, tmp_path
+) -> None:
+    """Observed live: the CLI edited the file correctly and STILL emitted
+    {"error": {"type": "INVALID_STREAM"}} on exit. The runner records what the
+    CLI claimed -- it is the ORCHESTRATOR that must gate the outcome on
+    whether a PR exists rather than on this flag (ADR-020)."""
+    payload = json.dumps(
+        {
+            "response": "",
+            "error": {"type": "INVALID_STREAM", "message": "empty response"},
+            "stats": {"models": {"m": {"api": {"totalRequests": 4}}}},
+        }
+    )
+    _fake_spawn(monkeypatch, _FakeProc(payload, returncode=0))
+    result = await gemini_runner.run_agent(
+        str(tmp_path), "do the thing", 60, 10, settings=_runner_settings(tmp_path)
+    )
+    assert result.success is False
+    assert "empty response" in result.result_text
+    assert result.num_turns == 4
+
+
+async def test_run_agent_succeeds_on_a_clean_result(monkeypatch, tmp_path) -> None:
+    payload = json.dumps(
+        {"response": "PR_URL: https://x/1", "stats": {"models": {"m": {"api": {"totalRequests": 7}}}}}
+    )
+    _fake_spawn(monkeypatch, _FakeProc(payload, returncode=0))
+    result = await gemini_runner.run_agent(
+        str(tmp_path), "do the thing", 60, 10, settings=_runner_settings(tmp_path)
+    )
+    assert result.success is True
+    assert result.result_text == "PR_URL: https://x/1"
+    assert result.num_turns == 7
+
+
+async def test_run_agent_prefers_the_json_error_over_stderr_on_nonzero_exit(
+    monkeypatch, tmp_path
+) -> None:
+    """stderr is frequently just terminal warnings; the useful message is in
+    the JSON on stdout even when the process exits nonzero."""
+    payload = json.dumps({"error": {"type": "AUTH", "message": "the real reason"}})
+    _fake_spawn(
+        monkeypatch, _FakeProc(payload, stderr="Warning: 256-color not detected", returncode=1)
+    )
+    result = await gemini_runner.run_agent(
+        str(tmp_path), "x", 60, 10, settings=_runner_settings(tmp_path)
+    )
+    assert result.success is False
+    assert result.returncode == 1
+    assert "the real reason" in result.result_text
+
+
+async def test_run_agent_survives_unparseable_output(monkeypatch, tmp_path) -> None:
+    """A zero exit with non-JSON stdout must not crash the run."""
+    _fake_spawn(monkeypatch, _FakeProc("total gibberish", returncode=0))
+    result = await gemini_runner.run_agent(
+        str(tmp_path), "x", 60, 10, settings=_runner_settings(tmp_path)
+    )
+    assert result.success is True
+    assert "gibberish" in result.result_text
+
+
+async def test_run_oneshot_extracts_the_response_field(monkeypatch, tmp_path) -> None:
+    """The CLI's field is `response`; Claude Code's was `result`. A silent
+    mismatch here would return None and make self-verify abstain forever."""
+    _fake_spawn(monkeypatch, _FakeProc(json.dumps({"response": "0.9"}), returncode=0))
+    got = await gemini_runner.run_oneshot("score it", 30, settings=_runner_settings(tmp_path))
+    assert got == "0.9"
 
 
 # ─── orchestrator.py (Task 8): the fix, end to end ─────────────────────────
@@ -847,8 +973,8 @@ async def test_a_pr_found_gates_the_outcome_not_the_success_flag() -> None:
     async def fake_finish(key, state, pr_url=None, pr_number=None, error=None):
         finishes.append((state, pr_url))
 
-    async def fake_run_claude_code(*a, **kw):
-        return ClaudeRunResult(success=False, returncode=1, result_text="hit turn limit")
+    async def fake_run_agent(*a, **kw):
+        return AgentRunResult(success=False, returncode=1, result_text="hit turn limit")
 
     async def fake_find_open_pr(*a, **kw):
         return {"number": 7, "html_url": "https://github.com/x/y/pull/7"}
@@ -864,7 +990,7 @@ async def test_a_pr_found_gates_the_outcome_not_the_success_flag() -> None:
         get_issue_detail=lambda key, settings=None: _ok({"key": key, "summary": "s"}),
         create_worktree=lambda *a: _ok(None),
         remove_worktree=lambda *a, **kw: _ok(None),
-        run_claude_code=fake_run_claude_code,
+        run_agent=fake_run_agent,
         find_open_pr=fake_find_open_pr,
         get_pr_diff=lambda *a: _ok("diff --git a/x b/x"),
         verify_pr=lambda *a, **kw: _ok(self_verify.VerifyVerdict()),
@@ -886,8 +1012,8 @@ async def test_process_ticket_advances_through_every_lifecycle_state_on_success(
     async def fake_set_state(key, state):
         states.append(state)
 
-    async def fake_run_claude_code(*a, **kw):
-        return ClaudeRunResult(success=True, returncode=0, result_text="PR_URL: https://x/1")
+    async def fake_run_agent(*a, **kw):
+        return AgentRunResult(success=True, returncode=0, result_text="PR_URL: https://x/1")
 
     await orchestrator.process_ticket(
         {"key": "SCRUM-1", "summary": "s"}, _settings(),
@@ -900,7 +1026,7 @@ async def test_process_ticket_advances_through_every_lifecycle_state_on_success(
         get_issue_detail=lambda key, settings=None: _ok({"key": key, "summary": "s"}),
         create_worktree=lambda *a: _ok(None),
         remove_worktree=lambda *a, **kw: _ok(None),
-        run_claude_code=fake_run_claude_code,
+        run_agent=fake_run_agent,
         find_open_pr=lambda *a, **kw: _ok({"number": 1, "html_url": "https://x/1"}),
         get_pr_diff=lambda *a: _ok("diff"),
         verify_pr=lambda *a, **kw: _ok(self_verify.VerifyVerdict()),
@@ -926,8 +1052,8 @@ async def test_a_missing_pr_marks_the_run_failed_and_records_session_memory() ->
         transitions.append(status)
         return True
 
-    async def fake_run_claude_code(*a, **kw):
-        return ClaudeRunResult(success=False, returncode=1, result_text="tests never passed")
+    async def fake_run_agent(*a, **kw):
+        return AgentRunResult(success=False, returncode=1, result_text="tests never passed")
 
     await orchestrator.process_ticket(
         {"key": "SCRUM-2", "summary": "s"}, _settings(),
@@ -940,7 +1066,7 @@ async def test_a_missing_pr_marks_the_run_failed_and_records_session_memory() ->
         get_issue_detail=lambda key, settings=None: _ok({"key": key, "summary": "s"}),
         create_worktree=lambda *a: _ok(None),
         remove_worktree=lambda *a, **kw: _ok(None),
-        run_claude_code=fake_run_claude_code,
+        run_agent=fake_run_agent,
         find_open_pr=lambda *a, **kw: _ok(None),  # no PR
         get_pr_diff=lambda *a: _ok(""),
         verify_pr=lambda *a, **kw: _ok(self_verify.VerifyVerdict()),
@@ -960,7 +1086,7 @@ async def test_the_worktree_is_cleaned_up_even_when_the_run_itself_raises() -> N
     create_worktree is INSIDE the try block (claim_run, ahead of it, is not --
     matching v5's structure, since nothing exists to clean up before a
     worktree is ever created). Raising here is the realistic failure this
-    guarantee exists for: claude_runner or any step after the worktree exists
+    guarantee exists for: the coding runner or any step after the worktree exists
     can blow up, and the worktree must not be leaked.
     """
     removed: list[str] = []
@@ -968,7 +1094,7 @@ async def test_the_worktree_is_cleaned_up_even_when_the_run_itself_raises() -> N
     async def fake_remove_worktree(repo_dir, work_dir, branch, ignore_errors=False):
         removed.append(branch)
 
-    async def exploding_run_claude_code(*a, **kw):
+    async def exploding_run_agent(*a, **kw):
         raise RuntimeError("subprocess crashed")
 
     await orchestrator.process_ticket(
@@ -982,7 +1108,7 @@ async def test_the_worktree_is_cleaned_up_even_when_the_run_itself_raises() -> N
         get_issue_detail=lambda key, settings=None: _ok({"key": key, "summary": "s"}),
         create_worktree=lambda *a: _ok(None),
         remove_worktree=fake_remove_worktree,
-        run_claude_code=exploding_run_claude_code,
+        run_agent=exploding_run_agent,
         find_open_pr=lambda *a, **kw: _ok(None),
         get_pr_diff=lambda *a: _ok(""),
         verify_pr=lambda *a, **kw: _ok(self_verify.VerifyVerdict()),

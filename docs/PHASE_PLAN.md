@@ -702,7 +702,7 @@ resumed. v6's Vertex AI project — verified working this session for real extra
 768-dim embeddings — clears the exact bar v5 couldn't. Full reasoning: ADR-020.
 
 **Port:** v5's `dev_agent/` (12 modules, 1,815 lines) — lifecycle, guardrails, self-verify,
-session memory, git worktrees, the GitHub read client, the headless Claude Code runner, the
+session memory, git worktrees, the GitHub read client, the headless coding runner, the
 orchestrator.
 
 **Fix while porting (ADR-020, confirmed live in v5):** the `SHIPPED`-state resume loop.
@@ -720,10 +720,12 @@ already holds to:**
 - One SQL-owning module. v5's `dev_agent/db.py` opened its own pool. `dev_agent_runs` and its
   queries move into `meeting_notes/db.py`.
 - Coding-model routing stays out of `llm_client.py` on purpose — `meeting_notes/dev_agent/
-  backend.py` owns it, because invoking headless Claude Code is a subprocess with tool access,
-  not a `chat_json`/`embed` call.
-- A Vertex backend is new (v5 only had local/claude/openrouter/gemini/groq): `CLAUDE_CODE_USE_
-  VERTEX=1` over the same Application Default Credentials `llm_client.py` already proved.
+  backend.py` owns it, because invoking a headless coding agent is a subprocess with tool
+  access, not a `chat_json`/`embed` call.
+- **The coding agent is Gemini CLI on Vertex, not Claude Code (ADR-021).** ADR-020 chose
+  Claude-on-Vertex; enabling it for real proved it is a Cloud Marketplace purchase that the
+  GCP free-trial credit explicitly does not cover. Gemini is first-party, so it bills as
+  ordinary Vertex usage. `backend.py` has exactly one backend.
 
 **Unchanged, because it was already sound:** the seven deterministic guardrail gates (tests
 green, lint/type clean, diff budget, protected paths, no new deps without opt-in, secret scan,
@@ -738,9 +740,9 @@ low-confidence diff but never blocks review; the rule that the agent never merge
    IDs (`run_id`, `ticket_node_id`, `pull_request_node_id`) in one place.
 3. `meeting_notes/dev_agent/guardrails.py` + `self_verify.py` — port. These are pure/testable
    with no live services.
-4. `meeting_notes/dev_agent/backend.py` — local (LM Studio, $0) + vertex (new, ADR-020) +
-   claude (direct key, optional). Preflight each with an actionable failure message.
-5. `meeting_notes/dev_agent/git_ops.py`, `github_client.py`, `claude_runner.py`,
+4. `meeting_notes/dev_agent/backend.py` — the single `gemini` backend (ADR-021), pinning the
+   CLI's auth to Vertex via a config dir the agent owns. Preflight with an actionable message.
+5. `meeting_notes/dev_agent/git_ops.py`, `github_client.py`, `gemini_runner.py`,
    `session_memory.py` — port, adjusted for Cloud Run's ephemeral filesystem (no assumed
    long-lived `REPO_DIR`).
 6. `meeting_notes/dev_agent/orchestrator.py` — `triage`, `process_ticket`, `poll_and_process`,

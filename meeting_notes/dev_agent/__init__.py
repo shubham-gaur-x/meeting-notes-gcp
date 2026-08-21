@@ -1,7 +1,7 @@
 """The autonomous dev agent — Phase 11, ADR-020.
 
-Picks up labelled Jira sprint tickets, implements them with headless Claude
-Code in an isolated git worktree, runs seven deterministic guardrail gates
+Picks up labelled Jira sprint tickets, implements them with a headless coding
+agent in an isolated git worktree, runs seven deterministic guardrail gates
 plus an independent LLM review, and opens a PR. **Never merges its own PR** —
 `CLOSED` is written only by `/webhook/github`'s `pull_request.merged` handler,
 i.e. an actual human merge.
@@ -20,7 +20,7 @@ Module ownership, each deliberate:
     backend.py           coding-model routing — NOT meeting_notes.llm_client;
                          this spawns a subprocess with tool access, not a
                          chat_json/embed call
-    claude_runner.py    spawns headless `claude`
+    gemini_runner.py    spawns headless `gemini`
     git_ops.py          one worktree per ticket
     github_client.py    read-only: find the PR the agent opened, fetch its diff
     orchestrator.py     triage -> process_ticket -> poll_and_process
