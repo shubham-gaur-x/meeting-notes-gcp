@@ -264,3 +264,89 @@ async def create_issue(
 
     log.info("jira.issue_created", issue_key=issue_key, priority=priority)
     return issue_key
+
+
+# ─── dev agent (Phase 11, ADR-020) ─────────────────────────────────────────────
+
+
+@with_retry(max_attempts=3, base_delay=2.0)
+async def list_active_sprint_tickets(
+    project_key: str,
+    statuses: list[str],
+    require_labels: list[str],
+    skip_labels: list[str],
+    *,
+    settings: Settings | None = None,
+    transport: Transport | None = None,
+) -> list[dict[str, Any]]:
+    """Tickets eligible for the dev agent: in the active sprint, in one of
+    `statuses`, carrying every label in `require_labels`, carrying none of
+    `skip_labels`.
+
+    A ticket without any linked ActionItem (e.g. human-authored) is still
+    eligible — the confidence gate that filters low-confidence ActionItem
+    tickets lives in orchestrator.find_sprint_candidates, one layer up.
+    """
+    settings = settings or get_settings()
+    status_clause = " OR ".join(f'status = "{s}"' for s in statuses)
+    jql_parts = [f"project = {project_key}", "sprint in openSprints()", f"({status_clause})"]
+    for label in require_labels:
+        jql_parts.append(f'labels = "{label}"')
+    for label in skip_labels:
+        jql_parts.append(f'labels != "{label}"')
+    jql = " AND ".join(jql_parts)
+
+    issues = await search_issues(
+        jql, fields=["summary", "description", "status", "labels", "priority"],
+        settings=settings, transport=transport,
+    )
+    return [
+        {
+            "key": i["key"],
+            "summary": i.get("fields", {}).get("summary", ""),
+            "description": adf_to_text(i.get("fields", {}).get("description")),
+            "status": (i.get("fields", {}).get("status") or {}).get("name", ""),
+            "labels": i.get("fields", {}).get("labels", []),
+        }
+        for i in issues
+    ]
+
+
+async def get_issue_detail(
+    key: str, *, settings: Settings | None = None, transport: Transport | None = None
+) -> dict[str, Any]:
+    """One ticket's key/summary/description, shaped for `orchestrator.build_prompt`."""
+    issue = await get_issue(key, settings=settings, transport=transport)
+    fields = issue.get("fields", {})
+    return {
+        "key": issue.get("key", key),
+        "summary": fields.get("summary", ""),
+        "description": adf_to_text(fields.get("description")),
+    }
+
+
+@with_retry(max_attempts=3, base_delay=2.0)
+async def transition_issue(
+    key: str,
+    status_name: str,
+    *,
+    settings: Settings | None = None,
+    transport: Transport | None = None,
+) -> bool:
+    """Move an issue to the named status. Returns False (not raises) if the
+    transition is not available from the issue's current status — the caller
+    logs and proceeds rather than failing the whole run over a workflow
+    mismatch."""
+    settings = settings or get_settings()
+    transport = transport or _default_transport
+    url = f"{jira_base_url(settings)}/issue/{key}/transitions"
+    _, body = await transport("GET", url, jira_headers(settings), None, None)
+    transitions = (body or {}).get("transitions", [])
+    match = next((t for t in transitions if t.get("name") == status_name), None)
+    if match is None:
+        log.warning("jira.transition_unavailable", issue_key=key, status=status_name)
+        return False
+    status, _ = await transport(
+        "POST", url, jira_headers(settings), None, {"transition": {"id": match["id"]}}
+    )
+    return status < 400

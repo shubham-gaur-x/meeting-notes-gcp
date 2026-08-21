@@ -977,3 +977,111 @@ async def get_recent_decisions(limit: int = 25, driver: Any = None) -> list[dict
             limit=limit,
         )
         return [dict(r) async for r in result]
+
+
+# ─── provenance writers (Phase 11, ADR-020 un-defers this one) ────────────────
+# ADR-008 shipped the provenance SCHEMA in v1 and deferred every writer to v2.
+# ADR-020 moves dev_agent itself to v1, which un-defers exactly this write
+# path — an AgentRun node is what /webhook/github's merge handler (Task 10)
+# needs to find. write_commits_and_files and the general-purpose
+# merge_ticket_resolved_by_pr helper stay deferred; this is scoped to what
+# the dev agent's own flow requires.
+
+
+async def write_run_provenance(
+    ticket_key: str,
+    attempt: int,
+    pr_url: str,
+    pr_number: int | None,
+    branch: str,
+    ticket_summary: str,
+    status: str,
+    verified: bool | None = None,
+    driver: Any = None,
+) -> str:
+    """Record one dev-agent run as an AgentRun node, linked to its Ticket and PullRequest.
+
+    Ids are derived from `dev_agent.lifecycle`'s single source of truth —
+    writer/reader id drift is a known past bug class (CLAUDE.md).
+    """
+    from meeting_notes.dev_agent.lifecycle import (
+        pull_request_node_id,
+        ticket_node_id,
+    )
+    from meeting_notes.dev_agent.lifecycle import (
+        run_id as derive_run_id,
+    )
+
+    driver = driver or get_driver()
+    now = datetime.now(UTC).isoformat()
+    agent_run_id = derive_run_id(ticket_key, attempt)
+
+    async with driver.session() as session:
+        await session.run(
+            """
+            MERGE (t:Ticket {id: $ticket_id})
+            ON CREATE SET t.created_at = $now
+            SET t.key = $ticket_key, t.summary = $ticket_summary, t.updated_at = $now
+
+            MERGE (pr:PullRequest {id: $pr_id})
+            ON CREATE SET pr.created_at = $now
+            SET pr.url = $pr_url, pr.number = $pr_number, pr.updated_at = $now
+
+            MERGE (run:AgentRun {id: $run_id})
+            ON CREATE SET run.created_at = $now
+            SET run.ticket_key = $ticket_key,
+                run.attempt = $attempt,
+                run.branch = $branch,
+                run.status = $status,
+                run.verified = $verified,
+                run.updated_at = $now
+
+            MERGE (run)-[:IMPLEMENTS]->(t)
+            MERGE (run)-[:PRODUCED]->(pr)
+            """,
+            ticket_id=ticket_node_id(ticket_key),
+            ticket_key=ticket_key,
+            ticket_summary=ticket_summary,
+            pr_id=pull_request_node_id(pr_url),
+            pr_url=pr_url,
+            pr_number=pr_number,
+            run_id=agent_run_id,
+            attempt=attempt,
+            branch=branch,
+            status=status,
+            verified=verified,
+            now=now,
+        )
+    return agent_run_id
+
+
+async def close_agent_run_on_merge(
+    pr_url: str, driver: Any = None
+) -> dict[str, Any] | None:
+    """On a real GitHub merge: mark the AgentRun CLOSED and link Ticket-[:RESOLVED_BY]->PR.
+
+    Called only by `/webhook/github`'s `pull_request.merged` handler — the
+    ONE place `dev_agent`'s CLOSED state is ever written, since the agent
+    never merges its own PR. Returns the ticket_key closed, or None if no
+    AgentRun matches this PR (most merged PRs are human work, not the agent's).
+    """
+    from meeting_notes.dev_agent.lifecycle import pull_request_node_id
+
+    driver = driver or get_driver()
+    pr_id = pull_request_node_id(pr_url)
+    now = datetime.now(UTC).isoformat()
+
+    async with driver.session() as session:
+        result = await session.run(
+            """
+            MATCH (run:AgentRun)-[:PRODUCED]->(pr:PullRequest {id: $pr_id})
+            MATCH (run)-[:IMPLEMENTS]->(t:Ticket)
+            SET run.status = 'CLOSED', run.updated_at = $now
+            MERGE (t)-[:RESOLVED_BY]->(pr)
+            RETURN run.ticket_key AS ticket_key
+            """,
+            pr_id=pr_id,
+            now=now,
+        )
+        rows = [dict(r) async for r in result]
+    return rows[0] if rows else None

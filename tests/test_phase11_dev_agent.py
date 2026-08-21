@@ -12,7 +12,7 @@ import json
 import pytest
 
 from meeting_notes.dev_agent import lifecycle
-from meeting_notes.dev_agent.models import DevAgentRun
+from meeting_notes.dev_agent.models import ClaudeRunResult, DevAgentRun
 
 # ─── the bug fix (ADR-020) ─────────────────────────────────────────────────────
 
@@ -743,3 +743,251 @@ async def test_load_resume_context_returns_the_saved_context() -> None:
 
 # claude_runner and github_client are exercised via orchestrator tests (Task 8),
 # where they are naturally injected as dependencies of process_ticket.
+
+
+# ─── orchestrator.py (Task 8): the fix, end to end ─────────────────────────
+
+from meeting_notes.dev_agent import orchestrator  # noqa: E402
+
+
+def test_the_prompt_never_instructs_the_agent_to_merge() -> None:
+    """The one rule with zero tolerance."""
+    prompt = orchestrator.build_prompt({"key": "SCRUM-1", "summary": "x", "description": "y"})
+    assert "do not merge" in prompt.lower() or "not merge" in prompt.lower()
+    assert "gh pr merge" not in prompt
+    assert "PR_URL:" in prompt
+
+
+def test_the_prompt_includes_resume_context_when_given() -> None:
+    prompt = orchestrator.build_prompt(
+        {"key": "SCRUM-1", "summary": "x", "description": "y"},
+        resume_context="finish the auth check you started",
+    )
+    assert "finish the auth check you started" in prompt
+
+
+async def test_poll_never_resumes_a_shipped_run() -> None:
+    """The end-to-end proof, not just the unit-level lifecycle/db tests. A
+    SHIPPED run must not reach process_ticket at all."""
+    processed: list[str] = []
+
+    async def fake_get_active_run():
+        return DevAgentRun(ticket_key="SCRUM-1", state=lifecycle.SHIPPED, attempt_count=1)
+
+    async def fake_should_attempt(key, max_attempts):
+        return False  # SHIPPED must fail this too -- the independent check
+
+    async def fake_process_ticket(ticket, settings=None):
+        processed.append(ticket["key"])
+
+    async def fake_preflight(backend_name, settings):
+        return "ok"
+
+    async def fake_ensure_repo_cloned(*a, **kw):
+        return None
+
+    async def fake_find_sprint_candidates(settings=None):
+        return []
+
+    async def fake_get_issue_detail(key, settings=None):
+        return {"key": key, "summary": "s"}
+
+    await orchestrator.poll_and_process(
+        _settings(),
+        preflight=fake_preflight, ensure_repo_cloned=fake_ensure_repo_cloned,
+        get_active_run=fake_get_active_run, should_attempt=fake_should_attempt,
+        get_issue_detail=fake_get_issue_detail,
+        find_sprint_candidates=fake_find_sprint_candidates, process_ticket=fake_process_ticket,
+    )
+    assert processed == [], "a SHIPPED run must never be resumed"
+
+
+async def test_should_attempt_is_consulted_before_resuming_an_active_run() -> None:
+    """Defence in depth (ADR-020): should_attempt() is an INDEPENDENT check,
+    not merely trusted to agree with the exclusion query."""
+    calls: list[str] = []
+
+    async def fake_get_active_run():
+        return DevAgentRun(ticket_key="SCRUM-1", state=lifecycle.IMPLEMENTING, attempt_count=1)
+
+    async def fake_should_attempt(key, max_attempts):
+        calls.append(key)
+        return False
+
+    async def fake_process_ticket(ticket, settings=None):
+        raise AssertionError("must not run: should_attempt said no")
+
+    await orchestrator.poll_and_process(
+        _settings(),
+        preflight=lambda b, s: _ok("preflight"),
+        ensure_repo_cloned=lambda *a, **kw: _ok(None),
+        get_active_run=fake_get_active_run, should_attempt=fake_should_attempt,
+        get_issue_detail=lambda key, settings=None: _ok({"key": key}),
+        find_sprint_candidates=lambda settings=None: _ok([]),
+        process_ticket=fake_process_ticket,
+    )
+    assert calls == ["SCRUM-1"], "should_attempt must be consulted before resuming"
+
+
+async def _ok(value):
+    return value
+
+
+async def test_a_pr_found_gates_the_outcome_not_the_success_flag() -> None:
+    """v5's real SCRUM-50 failure mode: a run can push a branch, open a PR,
+    and still report success=False (e.g. hits the turn limit on a later
+    step). Dropping that PR and reverting to TO DO would lose good work."""
+    transitions: list[str] = []
+    finishes: list[tuple] = []
+
+    async def fake_transition(key, status, settings=None):
+        transitions.append(status)
+        return True
+
+    async def fake_finish(key, state, pr_url=None, pr_number=None, error=None):
+        finishes.append((state, pr_url))
+
+    async def fake_run_claude_code(*a, **kw):
+        return ClaudeRunResult(success=False, returncode=1, result_text="hit turn limit")
+
+    async def fake_find_open_pr(*a, **kw):
+        return {"number": 7, "html_url": "https://github.com/x/y/pull/7"}
+
+    await orchestrator.process_ticket(
+        {"key": "SCRUM-50", "summary": "s"}, _settings(),
+        claim_run=lambda *a: _ok(None),
+        set_state=lambda *a: _ok(None),
+        get_run=lambda key: _ok(DevAgentRun(ticket_key=key, state=lifecycle.IMPLEMENTING, attempt_count=1)),
+        finish_run=fake_finish,
+        transition_issue=fake_transition,
+        add_comment=lambda *a, **kw: _ok(None),
+        get_issue_detail=lambda key, settings=None: _ok({"key": key, "summary": "s"}),
+        create_worktree=lambda *a: _ok(None),
+        remove_worktree=lambda *a, **kw: _ok(None),
+        run_claude_code=fake_run_claude_code,
+        find_open_pr=fake_find_open_pr,
+        get_pr_diff=lambda *a: _ok("diff --git a/x b/x"),
+        verify_pr=lambda *a, **kw: _ok(self_verify.VerifyVerdict()),
+        write_run_provenance=lambda **kw: _ok("run-id"),
+        load_resume_context=lambda key: _ok(None),
+        record_session_memory=lambda *a, **kw: _ok({}),
+    )
+
+    assert finishes and finishes[0][0] == lifecycle.SHIPPED, (
+        "a PR that exists must ship even though result.success was False"
+    )
+    assert "In Review" in transitions
+    assert "To Do" not in transitions, "good work must not be reverted to TO DO"
+
+
+async def test_process_ticket_advances_through_every_lifecycle_state_on_success() -> None:
+    states: list[str] = []
+
+    async def fake_set_state(key, state):
+        states.append(state)
+
+    async def fake_run_claude_code(*a, **kw):
+        return ClaudeRunResult(success=True, returncode=0, result_text="PR_URL: https://x/1")
+
+    await orchestrator.process_ticket(
+        {"key": "SCRUM-1", "summary": "s"}, _settings(),
+        claim_run=lambda *a: _ok(None),
+        set_state=fake_set_state,
+        get_run=lambda key: _ok(None),
+        finish_run=lambda *a, **kw: _ok(None),
+        transition_issue=lambda *a, **kw: _ok(True),
+        add_comment=lambda *a, **kw: _ok(None),
+        get_issue_detail=lambda key, settings=None: _ok({"key": key, "summary": "s"}),
+        create_worktree=lambda *a: _ok(None),
+        remove_worktree=lambda *a, **kw: _ok(None),
+        run_claude_code=fake_run_claude_code,
+        find_open_pr=lambda *a, **kw: _ok({"number": 1, "html_url": "https://x/1"}),
+        get_pr_diff=lambda *a: _ok("diff"),
+        verify_pr=lambda *a, **kw: _ok(self_verify.VerifyVerdict()),
+        write_run_provenance=lambda **kw: _ok("run-id"),
+        load_resume_context=lambda key: _ok(None),
+        record_session_memory=lambda *a, **kw: _ok({}),
+    )
+
+    assert states == [
+        lifecycle.PLANNED, lifecycle.IMPLEMENTING, lifecycle.DEBUGGING,
+        lifecycle.REVIEWING, lifecycle.SHIPPED,
+    ]
+
+
+async def test_a_missing_pr_marks_the_run_failed_and_records_session_memory() -> None:
+    finishes: list[tuple] = []
+    transitions: list[str] = []
+
+    async def fake_finish(key, state, pr_url=None, pr_number=None, error=None):
+        finishes.append((state, error))
+
+    async def fake_transition(key, status, settings=None):
+        transitions.append(status)
+        return True
+
+    async def fake_run_claude_code(*a, **kw):
+        return ClaudeRunResult(success=False, returncode=1, result_text="tests never passed")
+
+    await orchestrator.process_ticket(
+        {"key": "SCRUM-2", "summary": "s"}, _settings(),
+        claim_run=lambda *a: _ok(None),
+        set_state=lambda *a: _ok(None),
+        get_run=lambda key: _ok(None),
+        finish_run=fake_finish,
+        transition_issue=fake_transition,
+        add_comment=lambda *a, **kw: _ok(None),
+        get_issue_detail=lambda key, settings=None: _ok({"key": key, "summary": "s"}),
+        create_worktree=lambda *a: _ok(None),
+        remove_worktree=lambda *a, **kw: _ok(None),
+        run_claude_code=fake_run_claude_code,
+        find_open_pr=lambda *a, **kw: _ok(None),  # no PR
+        get_pr_diff=lambda *a: _ok(""),
+        verify_pr=lambda *a, **kw: _ok(self_verify.VerifyVerdict()),
+        write_run_provenance=lambda **kw: _ok("run-id"),
+        load_resume_context=lambda key: _ok(None),
+        record_session_memory=lambda *a, **kw: _ok({}),
+    )
+
+    assert finishes[0][0] == lifecycle.FAILED
+    assert "tests never passed" in finishes[0][1]
+    assert "To Do" in transitions, "a genuine failure must return the ticket to the backlog"
+
+
+async def test_the_worktree_is_cleaned_up_even_when_the_run_itself_raises() -> None:
+    """The finally block: cleanup must run regardless of outcome.
+
+    create_worktree is INSIDE the try block (claim_run, ahead of it, is not --
+    matching v5's structure, since nothing exists to clean up before a
+    worktree is ever created). Raising here is the realistic failure this
+    guarantee exists for: claude_runner or any step after the worktree exists
+    can blow up, and the worktree must not be leaked.
+    """
+    removed: list[str] = []
+
+    async def fake_remove_worktree(repo_dir, work_dir, branch, ignore_errors=False):
+        removed.append(branch)
+
+    async def exploding_run_claude_code(*a, **kw):
+        raise RuntimeError("subprocess crashed")
+
+    await orchestrator.process_ticket(
+        {"key": "SCRUM-3", "summary": "s"}, _settings(),
+        claim_run=lambda *a: _ok(None),
+        set_state=lambda *a: _ok(None),
+        get_run=lambda key: _ok(None),
+        finish_run=lambda *a, **kw: _ok(None),
+        transition_issue=lambda *a, **kw: _ok(True),
+        add_comment=lambda *a, **kw: _ok(None),
+        get_issue_detail=lambda key, settings=None: _ok({"key": key, "summary": "s"}),
+        create_worktree=lambda *a: _ok(None),
+        remove_worktree=fake_remove_worktree,
+        run_claude_code=exploding_run_claude_code,
+        find_open_pr=lambda *a, **kw: _ok(None),
+        get_pr_diff=lambda *a: _ok(""),
+        verify_pr=lambda *a, **kw: _ok(self_verify.VerifyVerdict()),
+        write_run_provenance=lambda **kw: _ok("run-id"),
+        load_resume_context=lambda key: _ok(None),
+        record_session_memory=lambda *a, **kw: _ok({}),
+    )
+    assert removed == ["agent/SCRUM-3"], "the worktree must not be leaked when the run crashes"
