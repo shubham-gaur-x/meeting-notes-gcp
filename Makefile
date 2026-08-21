@@ -12,9 +12,11 @@ PYTHON ?= .venv/bin/python
 
 COMPOSE := docker compose -f docker-compose.local.yml
 
-# Which source trees actually exist yet. Phases 2-8 add to this; naming a
-# directory before it exists makes lint/typecheck fail on a clean clone.
-SRC := meeting_notes scripts tests
+# Every tree that ships or is tested. api/ and jobs/ were missing until the
+# Phase 11 cleanup, so nothing linted or type-checked the FastAPI service or
+# the Cloud Run job entrypoints -- an unused import in api/deps.py passed
+# `make lint` cleanly.
+SRC := meeting_notes api jobs scripts tests
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -125,7 +127,7 @@ lint:  ## ruff over the source trees that exist
 	$(PYTHON) -m ruff check $(SRC)
 
 typecheck:  ## mypy over the source trees that exist
-	$(PYTHON) -m mypy meeting_notes scripts
+	$(PYTHON) -m mypy meeting_notes api jobs scripts
 
 logs:  ## Tail Cloud Run logs (SERVICE=api)
 	gcloud run services logs tail $(SERVICE) --region $$GCP_REGION

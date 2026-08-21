@@ -83,6 +83,10 @@ extend-immutable-calls = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
+# Test names shout the negative case on purpose -- `..._does_NOT_override` is
+# the assertion the test exists to make, and pytest prints the name on failure.
+# The emphasis is worth more than the naming rule here.
+"tests/*" = ["N802"]
 # The extraction prompt is carried from v5 byte for byte and contains lines
 # over the limit. Reflowing tuned prompt text to satisfy a linter is not a
 # trade worth making, so E501 is waived for that ONE data-only module rather

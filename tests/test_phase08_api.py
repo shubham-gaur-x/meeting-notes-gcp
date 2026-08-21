@@ -529,18 +529,18 @@ async def test_communities_are_named_not_just_numbered() -> None:
     insight and a number."""
     rows_out = [{"community_id": 1, "size": 63,
                  "top_topics": ["verizon ge enablement", "sow review"]}]
-    _D = _fake_driver_returning(rows_out)
+    driver = _fake_driver_returning(rows_out)
 
-    rows = await _REAL_COMMUNITIES(driver=_D)
+    rows = await _REAL_COMMUNITIES(driver=driver)
     assert rows[0]["name"] == "verizon ge enablement · sow review"
     assert rows[0]["community_id"] == 1, "the id is kept for drill-down"
 
 
 async def test_a_community_with_no_topics_still_gets_a_label() -> None:
     """Never render a blank cell."""
-    _D = _fake_driver_returning([{"community_id": 7, "size": 3, "top_topics": []}])
+    driver = _fake_driver_returning([{"community_id": 7, "size": 3, "top_topics": []}])
 
-    rows = await _REAL_COMMUNITIES(driver=_D)
+    rows = await _REAL_COMMUNITIES(driver=driver)
     assert rows[0]["name"] == "community 7"
 
 
@@ -550,9 +550,9 @@ def test_bookkeeping_nodes_are_excluded_from_insights() -> None:
     junk communities and appearing beside real topics."""
     # Read the module source rather than the live attributes: the autouse
     # fixture replaces those with stubs, so inspecting them checks nothing.
-    from pathlib import Path as _P
+    from pathlib import Path
 
-    source = _P(graph_client.__file__).read_text()
+    source = Path(graph_client.__file__).read_text()
     for name in ("get_all_communities", "get_bridge_nodes", "get_community_members"):
         start = source.index(f"async def {name}(")
         body = source[start : start + 1400]
