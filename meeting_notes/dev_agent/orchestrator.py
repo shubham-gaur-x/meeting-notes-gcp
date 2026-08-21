@@ -17,7 +17,7 @@ from typing import Any
 import structlog
 
 from meeting_notes.config import Settings, get_settings
-from meeting_notes.dev_agent import backend, git_ops, session_memory
+from meeting_notes.dev_agent import backend, git_ops, guardrails, session_memory
 from meeting_notes.dev_agent import lifecycle as lc
 from meeting_notes.dev_agent.models import AgentRunResult
 
@@ -136,6 +136,7 @@ async def process_ticket(
     write_run_provenance: Any = None,
     load_resume_context: Any = None,
     record_session_memory: Any = None,
+    run_gates: Any = None,
 ) -> None:
     """Implement one ticket end to end. Every I/O dependency is injectable so
     the whole flow is testable with no live Jira, git, GitHub, or Memgraph."""
@@ -173,6 +174,8 @@ async def process_ticket(
         load_resume_context = session_memory.load_resume_context
     if record_session_memory is None:
         record_session_memory = session_memory.record
+    if run_gates is None:
+        from meeting_notes.dev_agent.gate_runner import run_gates
 
     key = ticket["key"]
     bound_log = log.bind(ticket_key=key)
@@ -258,6 +261,61 @@ async def process_ticket(
         except Exception:
             bound_log.warning("orchestrator.self_verify_failed", exc_info=True)
         verified = verdict.passed if (verdict and verdict.checked) else None
+
+        # The deterministic half of the safety net (ADR-020). Runs in the
+        # worktree, so it must happen before the `finally` removes it. A gate
+        # that fails means this PR is NOT shippable: the run escalates to
+        # NEEDS_HUMAN, which is terminal, so the poller will not silently
+        # retry it. The PR itself is deliberately left open — the work is
+        # real, it just needs a person.
+        try:
+            gates = await run_gates(work_dir, diff, detail.get("description", ""), settings)
+        except Exception as exc:  # noqa: BLE001 - an unrunnable gate is a human's problem
+            bound_log.error("orchestrator.gates_errored", exc_info=True)
+            gates = [
+                guardrails.GateResult(
+                    name="gates_errored", passed=False,
+                    evidence=f"the gate step itself failed: {exc}",
+                )
+            ]
+        failed = guardrails.failed_gates(gates)
+
+        if failed:
+            detail_text = "\n".join(f"- {g.name}: {g.evidence}" for g in failed)
+            bound_log.warning(
+                "orchestrator.gates_failed", failed=[g.name for g in failed],
+                pr_url=pr["html_url"],
+            )
+            await add_comment(
+                key,
+                "Dev agent opened a PR but it did NOT pass review guardrails, so it has "
+                f"not been marked shipped.\n\nFailed gates:\n{detail_text}\n\n"
+                f"PR: {pr['html_url']}\n\nA human needs to review this before it merges.",
+                settings=settings,
+            )
+            if not await transition_issue(key, "In Review", settings=settings):
+                bound_log.warning("orchestrator.review_transition_failed")
+            await finish_run(
+                key, lc.NEEDS_HUMAN, pr_url=pr["html_url"], pr_number=pr["number"],
+                error="failed gates: " + ", ".join(g.name for g in failed),
+            )
+            await _advance_state(key, lc.NEEDS_HUMAN, set_state, get_run)
+            run_after = await get_run(key)
+            try:
+                await write_run_provenance(
+                    ticket_key=key, attempt=run_after.attempt_count if run_after else 1,
+                    pr_url=pr["html_url"], pr_number=pr.get("number"), branch=branch_name,
+                    ticket_summary=ticket.get("summary", ""), status=lc.NEEDS_HUMAN,
+                    verified=verified,
+                )
+            except Exception:
+                bound_log.warning("orchestrator.provenance_write_failed", exc_info=True)
+            await record_session_memory(
+                detail, outcome="pr_opened", pr=pr,
+                files_changed=session_memory.files_from_diff(diff),
+                verdict=verdict, raw_notes=result.result_text or "",
+            )
+            return
 
         base = (
             "Implemented automatically." if result.success

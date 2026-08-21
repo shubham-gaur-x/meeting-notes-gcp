@@ -21,14 +21,14 @@ log = structlog.get_logger()
 
 
 def files_from_diff(diff: str) -> list[str]:
-    """Changed file paths from a unified diff (the `b/` side of each `diff --git`)."""
-    files: list[str] = []
-    for line in (diff or "").splitlines():
-        if line.startswith("diff --git "):
-            parts = line.split(" b/", 1)
-            if len(parts) == 2 and parts[1].strip():
-                files.append(parts[1].strip())
-    return files
+    """Changed file paths from a unified diff.
+
+    Delegates to `guardrails.parse_diff` so the memory record and the gates
+    can never disagree about what a PR changed.
+    """
+    from meeting_notes.dev_agent.guardrails import parse_diff
+
+    return parse_diff(diff).changed_files
 
 
 def build_memory(

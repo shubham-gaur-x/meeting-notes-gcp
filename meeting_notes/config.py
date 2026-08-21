@@ -69,6 +69,18 @@ class Settings(BaseSettings):
     dev_agent_poll_batch_size: int = 5
     dev_agent_confidence_threshold: float = 0.6
     dev_agent_verify_threshold: float = 0.6
+    # Guardrail gates (ADR-020). These run inside the agent's worktree, so
+    # they see its changes; a failure escalates the run to NEEDS_HUMAN rather
+    # than shipping. Commands are configurable because the gate is about the
+    # project's own definition of green, not a hardcoded one.
+    # Run through `python -m` so they resolve to the interpreter executing the
+    # job -- a bare `ruff`/`mypy` is not on PATH in a fresh worktree.
+    dev_agent_test_command: str = "python -m pytest -q"
+    dev_agent_lint_command: str = "python -m ruff check ."
+    dev_agent_typecheck_command: str = "python -m mypy meeting_notes"
+    dev_agent_gate_timeout_seconds: int = 900
+    dev_agent_max_diff_files: int = 10
+    dev_agent_max_diff_lines: int = 600
     github_owner: str = ""
     github_repo: str = ""
     github_token: str = ""

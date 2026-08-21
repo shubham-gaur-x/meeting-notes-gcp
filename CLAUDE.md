@@ -170,7 +170,8 @@ meeting-notes-gcp/
 │   ├── sources/{base,gmail,calendar,meet,jira}.py
 │   └── dev_agent/              Phase 11, ADR-020 — autonomous ticket implementer
 │       ├── lifecycle.py        state machine; SHIPPED is terminal
-│       ├── guardrails.py       7 deterministic gates + independent LLM reviewer
+│       ├── guardrails.py       7 deterministic gates (pure)
+│       ├── gate_runner.py      runs those gates in the worktree
 │       ├── self_verify.py      cheap diff-vs-ticket scoring, never blocks review
 │       ├── session_memory.py   resumable record per ticket, survives across attempts
 │       ├── backend.py          coding-model routing — NOT llm_client, see Scope rules
@@ -238,6 +239,12 @@ If a job file grows past ~50 lines, the logic belongs in the package.
 - DO NOT auto-merge a pull request. Human review is the checkpoint. `dev_agent` opens PRs and
   never merges them; `CLOSED` is driven only by `/webhook/github`'s `pull_request.merged`
   event, i.e. a human actually merging.
+- DO NOT let a run reach `SHIPPED` without the guardrail gates passing. `gate_runner.run_gates`
+  is called from `process_ticket` **before** the worktree is torn down (the gates run commands
+  inside it); any failed gate escalates to `NEEDS_HUMAN`, which is terminal, and the PR is left
+  open for a person rather than closed. `guardrails.py` stays pure — every gate is a function
+  over data, so a planted violation is a unit test — and all subprocess/file I/O lives in
+  `gate_runner.py`. A gate that cannot run is a FAILURE, never a skip.
 - DO NOT let `dev_agent`'s coding-model selection go through `meeting_notes/llm_client.py`.
   That seam's contract (`chat_json`/`embed`, temperature 0, extraction-shaped) is for meeting
   data; invoking a headless coding agent is a different kind of call entirely — a subprocess

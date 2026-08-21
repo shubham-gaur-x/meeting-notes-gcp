@@ -252,7 +252,98 @@ def _string_and_comment_text(source: str) -> str:
     return "\n".join(chunks)
 
 
+# ─── diff parsing ─────────────────────────────────────────────────────────────
+
+
+class DiffFacts(BaseModel):
+    """What the gates need to know about a unified diff.
+
+    One parser, so the diff budget, the secret scan and the session-memory
+    record can never disagree about what the PR actually changed —
+    `session_memory.files_from_diff` delegates here rather than re-parsing.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    changed_files: list[str] = []
+    added_lines: list[str] = []
+    removed_lines: list[str] = []
+    added_dependency_lines: list[str] = []
+
+    @property
+    def changed_lines(self) -> int:
+        """Additions plus deletions — a pure deletion is still a large change."""
+        return len(self.added_lines) + len(self.removed_lines)
+
+
+def parse_diff(diff: str) -> DiffFacts:
+    """Extract changed files and +/- lines from a unified diff.
+
+    `+++`/`---` are file headers, not content, so they are skipped; counting
+    them would inflate the budget by two lines per file.
+    """
+    files: list[str] = []
+    added: list[str] = []
+    removed: list[str] = []
+    dep_lines: list[str] = []
+    current = ""
+
+    for line in (diff or "").splitlines():
+        if line.startswith("diff --git "):
+            parts = line.split(" b/", 1)
+            if len(parts) == 2 and parts[1].strip():
+                current = parts[1].strip()
+                files.append(current)
+            continue
+        if line.startswith(("+++", "---", "@@", "index ")):
+            continue
+        if line.startswith("+"):
+            body = line[1:]
+            added.append(body)
+            if any(current.replace("\\", "/").endswith(d) for d in _DEP_FILES):
+                dep_lines.append(body)
+        elif line.startswith("-"):
+            removed.append(line[1:])
+
+    return DiffFacts(
+        changed_files=files, added_lines=added,
+        removed_lines=removed, added_dependency_lines=dep_lines,
+    )
+
+
 # ─── aggregate ────────────────────────────────────────────────────────────────
+
+
+CommandResult = tuple[int, str]
+
+
+def evaluate_gates(
+    *,
+    diff: str,
+    ticket_description: str,
+    file_contents: dict[str, str],
+    tests: CommandResult,
+    lint: CommandResult,
+    typecheck: CommandResult,
+    max_files: int = 10,
+    max_lines: int = 600,
+) -> list[GateResult]:
+    """Run all seven gates over one PR.
+
+    Pure: the caller runs the test/lint/typecheck commands and reads the
+    changed files, then hands the results in. That keeps every gate — and this
+    aggregation — unit-testable with a planted violation and no subprocess.
+    """
+    facts = parse_diff(diff)
+    return [
+        gate_tests_green(lambda: tests),
+        gate_lint_type_clean(lambda: lint, lambda: typecheck),
+        gate_diff_budget(facts.changed_files, facts.changed_lines, max_files, max_lines),
+        gate_protected_paths(facts.changed_files),
+        gate_no_new_deps(facts.changed_files, ticket_description, facts.added_dependency_lines),
+        gate_secret_scan(facts.added_lines),
+        gate_module_boundaries(file_contents),
+    ]
 
 
 def all_passed(results: Sequence[GateResult]) -> bool:

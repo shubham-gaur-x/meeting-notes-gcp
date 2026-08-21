@@ -963,6 +963,12 @@ async def _ok(value):
     return value
 
 
+async def _gates_pass(*a, **kw):
+    """Gates green. Tests that are not about the guardrails inject this so the
+    real gate runner does not try to run pytest in a stub worktree."""
+    return [gr.GateResult(name="all", passed=True, evidence="clean")]
+
+
 async def test_a_pr_found_gates_the_outcome_not_the_success_flag() -> None:
     """v5's real SCRUM-50 failure mode: a run can push a branch, open a PR,
     and still report success=False (e.g. hits the turn limit on a later
@@ -1001,6 +1007,7 @@ async def test_a_pr_found_gates_the_outcome_not_the_success_flag() -> None:
         write_run_provenance=lambda **kw: _ok("run-id"),
         load_resume_context=lambda key: _ok(None),
         record_session_memory=lambda *a, **kw: _ok({}),
+        run_gates=_gates_pass,
     )
 
     assert finishes and finishes[0][0] == lifecycle.SHIPPED, (
@@ -1037,6 +1044,7 @@ async def test_process_ticket_advances_through_every_lifecycle_state_on_success(
         write_run_provenance=lambda **kw: _ok("run-id"),
         load_resume_context=lambda key: _ok(None),
         record_session_memory=lambda *a, **kw: _ok({}),
+        run_gates=_gates_pass,
     )
 
     assert states == [
@@ -1121,3 +1129,209 @@ async def test_the_worktree_is_cleaned_up_even_when_the_run_itself_raises() -> N
         record_session_memory=lambda *a, **kw: _ok({}),
     )
     assert removed == ["agent/SCRUM-3"], "the worktree must not be leaked when the run crashes"
+
+
+# ─── guardrails wired into the run (the ADR-020 safety net) ────────────────────
+
+
+_DIFF = """diff --git a/meeting_notes/thing.py b/meeting_notes/thing.py
+index 111..222 100644
+--- a/meeting_notes/thing.py
++++ b/meeting_notes/thing.py
+@@ -1,2 +1,4 @@
+ existing line
++def added():
++    return 1
+-removed line
+diff --git a/requirements.txt b/requirements.txt
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -1 +1,2 @@
++leftpad
+"""
+
+
+def test_parse_diff_extracts_files_added_lines_and_dependency_lines() -> None:
+    facts = gr.parse_diff(_DIFF)
+    assert facts.changed_files == ["meeting_notes/thing.py", "requirements.txt"]
+    assert "def added():" in "\n".join(facts.added_lines)
+    assert "+++ b/" not in "".join(facts.added_lines), "the ++ header is not an added line"
+    assert facts.changed_lines >= 3, "additions and deletions both count toward the budget"
+    assert any("leftpad" in ln for ln in facts.added_dependency_lines)
+
+
+def test_parse_diff_is_the_one_definition_of_changed_files() -> None:
+    """session_memory.files_from_diff and the gates must agree on what changed;
+    two parsers would let the budget gate and the memory record disagree."""
+    from meeting_notes.dev_agent import session_memory as sm
+
+    assert sm.files_from_diff(_DIFF) == gr.parse_diff(_DIFF).changed_files
+
+
+def test_evaluate_gates_returns_every_gate() -> None:
+    results = gr.evaluate_gates(
+        diff=_DIFF, ticket_description="", file_contents={},
+        tests=(0, "ok"), lint=(0, ""), typecheck=(0, ""),
+    )
+    assert {r.name for r in results} == {
+        "tests_green", "lint_type_clean", "diff_budget",
+        "protected_paths", "no_new_deps", "secret_scan", "module_boundaries",
+    }
+
+
+def test_evaluate_gates_fails_when_the_test_command_failed() -> None:
+    results = gr.evaluate_gates(
+        diff="", ticket_description="", file_contents={},
+        tests=(1, "2 failed"), lint=(0, ""), typecheck=(0, ""),
+    )
+    assert gr.all_passed(results) is False
+    assert "tests_green" in {g.name for g in gr.failed_gates(results)}
+
+
+async def _process(ticket, *, diff, run_gates, **over):
+    """process_ticket with every dependency stubbed, overridable per test."""
+    calls = {"finishes": [], "states": [], "comments": [], "transitions": []}
+
+    async def fake_finish(key, state, pr_url=None, pr_number=None, error=None):
+        calls["finishes"].append((state, pr_url, error))
+
+    async def fake_set_state(key, state):
+        calls["states"].append(state)
+
+    async def fake_comment(key, text, settings=None):
+        calls["comments"].append(text)
+
+    async def fake_transition(key, status, settings=None):
+        calls["transitions"].append(status)
+        return True
+
+    kwargs = dict(
+        claim_run=lambda *a: _ok(None),
+        set_state=fake_set_state,
+        get_run=lambda key: _ok(DevAgentRun(ticket_key=key, state=lifecycle.REVIEWING, attempt_count=1)),
+        finish_run=fake_finish,
+        transition_issue=fake_transition,
+        add_comment=fake_comment,
+        get_issue_detail=lambda key, settings=None: _ok({"key": key, "summary": "s"}),
+        create_worktree=lambda *a: _ok(None),
+        remove_worktree=lambda *a, **kw: _ok(None),
+        run_agent=lambda *a, **kw: _ok(AgentRunResult(success=True, returncode=0, result_text="done")),
+        find_open_pr=lambda *a, **kw: _ok({"number": 9, "html_url": "https://gh/x/pull/9"}),
+        get_pr_diff=lambda *a: _ok(diff),
+        verify_pr=lambda *a, **kw: _ok(self_verify.VerifyVerdict()),
+        write_run_provenance=lambda **kw: _ok("run-id"),
+        load_resume_context=lambda key: _ok(None),
+        record_session_memory=lambda *a, **kw: _ok({}),
+        run_gates=run_gates,
+    )
+    kwargs.update(over)
+    await orchestrator.process_ticket(ticket, _settings(), **kwargs)
+    return calls
+
+
+async def test_a_clean_gate_run_still_ships() -> None:
+    async def gates_pass(*a, **kw):
+        return [gr.GateResult(name="secret_scan", passed=True, evidence="clean")]
+
+    calls = await _process({"key": "SCRUM-1", "summary": "s"}, diff=_DIFF, run_gates=gates_pass)
+    assert calls["finishes"][0][0] == lifecycle.SHIPPED
+    assert lifecycle.NEEDS_HUMAN not in calls["states"]
+
+
+async def test_a_failing_gate_blocks_shipping_and_escalates_to_a_human() -> None:
+    """The whole point of the safety net: a PR that trips a deterministic gate
+    must never be recorded as SHIPPED."""
+    async def gates_fail(*a, **kw):
+        return [
+            gr.GateResult(name="secret_scan", passed=False, evidence="1 possible secret(s)"),
+            gr.GateResult(name="tests_green", passed=True, evidence="passed"),
+        ]
+
+    calls = await _process({"key": "SCRUM-2", "summary": "s"}, diff=_DIFF, run_gates=gates_fail)
+
+    assert calls["finishes"], "the run must be finished, not left active"
+    state, pr_url, _ = calls["finishes"][0]
+    assert state == lifecycle.NEEDS_HUMAN, f"expected NEEDS_HUMAN, got {state}"
+    assert lifecycle.SHIPPED not in calls["states"], "a failed gate must not ship"
+    assert pr_url == "https://gh/x/pull/9", "the PR must be recorded, not discarded"
+
+
+async def test_a_failing_gate_names_the_gate_in_the_jira_comment() -> None:
+    async def gates_fail(*a, **kw):
+        return [gr.GateResult(name="protected_paths", passed=False, evidence="touched: .env")]
+
+    calls = await _process({"key": "SCRUM-4", "summary": "s"}, diff=_DIFF, run_gates=gates_fail)
+    blob = "\n".join(calls["comments"])
+    assert "protected_paths" in blob, "a human needs to know WHICH gate failed"
+    assert ".env" in blob, "and the evidence behind it"
+
+
+async def test_a_failing_gate_does_not_revert_the_ticket_to_to_do() -> None:
+    """The PR is real work. It goes to review for a human, not back to the
+    backlog -- the same reasoning the PR-found path already applies."""
+    async def gates_fail(*a, **kw):
+        return [gr.GateResult(name="secret_scan", passed=False, evidence="x")]
+
+    calls = await _process({"key": "SCRUM-5", "summary": "s"}, diff=_DIFF, run_gates=gates_fail)
+    assert "To Do" not in calls["transitions"]
+    assert "In Review" in calls["transitions"]
+
+
+async def test_a_planted_secret_in_the_diff_blocks_the_ship_through_the_real_gates() -> None:
+    """End-to-end through the REAL gate evaluation -- only the shell commands
+    are stubbed. Guards against the gates being wired up but fed nothing."""
+    leaked = (
+        "diff --git a/app/cfg.py b/app/cfg.py\n"
+        "--- a/app/cfg.py\n+++ b/app/cfg.py\n"
+        '@@ -0,0 +1 @@\n+AWS_KEY = "AKIA' + "A" * 16 + '"\n'
+    )
+
+    async def real_gates(work_dir, diff, ticket_description, settings=None):
+        return gr.evaluate_gates(
+            diff=diff, ticket_description=ticket_description, file_contents={},
+            tests=(0, "ok"), lint=(0, ""), typecheck=(0, ""),
+        )
+
+    calls = await _process({"key": "SCRUM-6", "summary": "s"}, diff=leaked, run_gates=real_gates)
+    assert calls["finishes"][0][0] == lifecycle.NEEDS_HUMAN
+    assert "secret_scan" in "\n".join(calls["comments"])
+
+
+async def test_gate_failure_is_not_fatal_to_the_run_bookkeeping() -> None:
+    """If the gate step itself raises, the run must still be finished rather
+    than left active forever -- an unfinished run is what the poller resumes."""
+    async def gates_explode(*a, **kw):
+        raise RuntimeError("ruff not installed in the worktree")
+
+    calls = await _process({"key": "SCRUM-7", "summary": "s"}, diff=_DIFF, run_gates=gates_explode)
+    assert calls["finishes"], "a crashing gate step must not leave the run active"
+    assert calls["finishes"][0][0] in (lifecycle.NEEDS_HUMAN, lifecycle.FAILED)
+
+
+async def test_gate_commands_run_under_the_jobs_own_interpreter() -> None:
+    """`ruff`/`mypy`/`pytest` are not on PATH in a bare worktree -- they live
+    in the venv or image that is running the job. Resolving a leading
+    `python` to sys.executable is what stops every gate returning 127 and
+    escalating every PR for the wrong reason. Found live: `ruff check .`
+    exited 127 with "No such file or directory: 'ruff'".
+    """
+    import sys
+
+    from meeting_notes.dev_agent import gate_runner as grn
+
+    code, out = await grn.run_command("python -c \"import sys; print(sys.executable)\"", ".")
+    assert code == 0, f"the interpreter must resolve, got {code}: {out}"
+    assert out.strip() == sys.executable, (
+        f"expected the running interpreter {sys.executable}, got {out.strip()}"
+    )
+
+
+async def test_gate_command_defaults_go_through_the_interpreter() -> None:
+    """If a default shells out to a bare `ruff`, it breaks the moment the
+    worktree has no venv on PATH -- which is the normal case."""
+    s = _settings()
+    for cmd in (s.dev_agent_test_command, s.dev_agent_lint_command,
+                s.dev_agent_typecheck_command):
+        assert cmd.split()[0] in ("python", "python3"), (
+            f"{cmd!r} must run through the interpreter, not a bare console script"
+        )

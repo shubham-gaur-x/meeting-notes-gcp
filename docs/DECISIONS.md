@@ -780,6 +780,61 @@ Model selection, probed live against the project on 2026-08-20 rather than taken
 
 ---
 
+## ADR-022 — The guardrail gates run in the orchestrator, and a failure escalates to NEEDS_HUMAN
+
+**Date:** 2026-08-21 · **Status:** Accepted · **Amends:** ADR-020
+
+**Context.** ADR-020 described `dev_agent`'s PR safety net as two layers: seven deterministic
+gates plus an independent LLM reviewer. `guardrails.py` was built and fully unit-tested in
+Phase 11 Task 4 — and then never called. An audit for unused code found the module imported
+nowhere outside its own docstring: `process_ticket` ran the agent, found the PR, ran
+`self_verify` (which by design never blocks), and went straight to `SHIPPED`.
+
+So every PR the agent opened was shipped with **no** secret scan on the diff, no protected-paths
+check, no dependency check, no module-boundary check, and no requirement that the test suite
+even passed. The safety net existed as tested code and as documentation, and had no effect on
+a single run.
+
+**Decision.**
+
+1. `gate_runner.run_gates()` is called from `process_ticket` in the `REVIEWING` state, **before**
+   the `finally` block removes the worktree — the test/lint/type commands must run against the
+   agent's changes, which only exist there.
+2. Any failed gate ends the run at `NEEDS_HUMAN`, which is terminal, so the poller will not
+   silently retry it. The PR is deliberately **left open**: the work is real and a human needs
+   to look at it. This mirrors the existing rule that a PR which exists is never reverted to
+   `To Do`.
+3. The Jira comment names each failed gate and its evidence. "Guardrails failed" with no
+   detail would make a human re-derive what the gate already knew.
+4. `guardrails.py` stays **pure** — the caller runs the commands and reads the files, then
+   passes results in. That is what keeps each gate testable with a planted violation and no
+   subprocess. All I/O lives in the new `gate_runner.py`.
+5. A gate that cannot run is a **failure, not a skip**. An unrunnable test suite is exactly the
+   state a human should see; skipping would turn an unknown into an implicit pass.
+
+**Consequences.** Every run now costs a test, lint and type pass inside the worktree (run
+concurrently; bounded by `dev_agent_gate_timeout_seconds`). Runs that would previously have
+been recorded as shipped will now stop at `NEEDS_HUMAN` — that is the point, but it means the
+agent's apparent success rate will drop, and that drop is the safety net working rather than a
+regression.
+
+One deployment detail cost real debugging and is worth recording: the gate commands must run
+as `python -m ruff` / `python -m mypy` / `python -m pytest`, with the leading `python` resolved
+to `sys.executable`. A bare `ruff check .` exits 127 in a fresh worktree because `ruff` lives
+in the venv or image, not on `PATH`. Since an unrunnable gate is a failure, that would have
+escalated *every* PR for a reason that had nothing to do with the code.
+
+**Rejected:**
+
+- *Let a failed gate mark the run `FAILED`.* `FAILED` reverts the ticket to `To Do` and invites
+  a retry of work that is already sitting in an open PR. The problem is not that the agent
+  failed; it is that a person has to decide.
+- *Close the PR when a gate fails.* Throws away a real diff over a fixable lint error.
+- *Make the gates advisory — comment and ship anyway.* That is what `self_verify` already is.
+  A second advisory layer adds noise, not safety.
+
+---
+
 ## Template
 
 ```
