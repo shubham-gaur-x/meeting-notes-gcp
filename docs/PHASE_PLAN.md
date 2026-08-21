@@ -751,16 +751,35 @@ low-confidence diff but never blocks review; the rule that the agent never merge
 9. `/webhook/github`'s `pull_request.merged` handler writes `CLOSED` and the `RESOLVED_BY` edge
    — the provenance write path ADR-008 deferred, now un-deferred by this phase existing.
 
+**Status (2026-08-20): Tasks 1-9 implemented and tested, Task 10 (live verification) blocked.**
+All nine modules above are built, wired into `api/main.py` and `/webhook/github`, and covered
+by ~150 tests in `tests/test_phase11_dev_agent.py` plus the API-route tests in
+`tests/test_phase08_api.py`. Every regression test in this phase — the `SHIPPED` fix at both
+the state-machine and orchestration level, all seven guardrail gates, the webhook merge-close
+path, the trigger route's backgrounding — was proven genuine by planting the corresponding bug
+and watching the specific test fail before restoring.
+
+Live verification has not run. This session's `.env` has Jira credentials and `gh` is
+authenticated, but is missing everything else an end-to-end run needs: `POSTGRES_*` /
+`CLOUD_SQL_CONNECTION_NAME` (no reachable Postgres for `dev_agent_runs`), `MEMGRAPH_*` (no
+reachable graph for provenance writes), and `GITHUB_OWNER` / `GITHUB_REPO` / `GITHUB_TOKEN` /
+`DEV_AGENT_LLM_BACKEND` (all empty — `dev_agent_llm_backend` defaults to `local`, i.e. LM
+Studio, unconfirmed running). Standing these up is infrastructure work; a real run on top of
+them pushes a branch and opens a real PR against a real GitHub repo and transitions a real Jira
+ticket — side effects requiring the user's explicit go-ahead, not something to trigger
+unilaterally.
+
 **Exit criteria**
 - A regression test proves the fix: a `SHIPPED` run is excluded from `get_active_run()`, and
-  `should_attempt()` returns `False` for it independently of that exclusion.
-- All seven guardrail gates have a test with a planted violation that fails it.
-- Every lifecycle transition table entry is tested; every illegal edge raises.
+  `should_attempt()` returns `False` for it independently of that exclusion. **Met.**
+- All seven guardrail gates have a test with a planted violation that fails it. **Met.**
+- Every lifecycle transition table entry is tested; every illegal edge raises. **Met.**
 - **Live verification is explicitly gated on credentials this session may not have** — a real
   `GITHUB_TOKEN` with repo scope, a real Jira sprint ticket labelled for the agent, billing
   headroom on the Vertex project. Do not claim an end-to-end run succeeded without one actually
   producing a real PR against a real ticket — the entire point of ADR-020 was refusing to
-  repeat v5's unverified-checkpoint pattern.
+  repeat v5's unverified-checkpoint pattern. **Not met — blocked, see Status above. Phase 11 is
+  not done until this runs for real.**
 
 ---
 
