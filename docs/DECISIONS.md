@@ -893,6 +893,59 @@ real payload shape as a deliberate feature, not resurrecting v5's table definiti
 
 ---
 
+## ADR-024 — The LLM reviewer ships, and both LLM layers were silently dead
+
+**Date:** 2026-08-21 · **Status:** Accepted · **Completes:** ADR-020, ADR-022
+
+**Context.** ADR-020 specified two layers over every agent PR. ADR-022 wired the
+deterministic one. The second — an independent reviewer given the ticket, diff and
+gate evidence — existed only as `ReviewVerdict`, a Pydantic model with no function
+behind it.
+
+Building it surfaced two live defects that no unit test could have caught, because
+both tests and code shared the same wrong assumption:
+
+1. **`ensure_cli_home` wrote the config to the wrong path.** The CLI reads
+   `<GEMINI_CLI_HOME>/.gemini/settings.json`; we wrote `<GEMINI_CLI_HOME>/settings.json`.
+   `gemini` exited 41 — *"Please set an Auth method in your …/.gemini/settings.json"* —
+   so **every** `run_oneshot` returned `None`. Two existing tests asserted the wrong
+   path and passed.
+2. **A bare `json.loads` on the model's reply.** The CLI returns
+   ```` ```json\n{…}\n``` ````, exactly the fence-wrapping CLAUDE.md documents as a
+   defence that "must be kept". `utils.strip_json_fences` existed; neither
+   `self_verify` nor the new reviewer used it.
+
+Together these meant `self_verify` — in the run path since Phase 11 Task 5 — had
+returned `checked=False` for every real run since it was written. It looked
+configured and did nothing.
+
+**Decision.**
+
+1. `reviewer.review_pr()` ships, going through `dev_agent.backend` like `self_verify`
+   (it scores code, not meeting data).
+2. It **blocks**: a `high` or `medium` finding ends the run at `NEEDS_HUMAN`. `low` is
+   advisory only. ADR-022 rejected adding a second advisory layer, so a reviewer that
+   could not stop anything would not have been worth building.
+3. **Deliberate asymmetry with the gates.** An unrunnable *gate* is a failure; an
+   unreachable *reviewer* is not. A gate's absence hides a cheap, certain fact. A model
+   outage is an availability problem — the seven gates have already run, nothing is ever
+   auto-merged, and a human reviews before merge. `checked` stays separate from
+   `verdict` so an unscored PR is never mistaken for an approved one.
+4. The reviewer is skipped when a gate already failed: the run is stopping either way,
+   and the call would be spent reaching a conclusion already reached.
+5. Both parsers now go through `strip_json_fences`.
+
+**Consequences.** Every shipping run costs one more model call. Verified live against
+Gemini on a diff that removes a transaction and `FOR UPDATE SKIP LOCKED`: the reviewer
+returned `request_changes` with a high-severity finding naming the race condition and
+duplicate processing, and `self_verify` — working for the first time — independently
+scored `addresses=False`.
+
+**Rejected:** *Make the reviewer advisory.* That is `self_verify`'s role, and ADR-022
+already rejected a second advisory layer as noise rather than safety.
+
+---
+
 ## Template
 
 ```

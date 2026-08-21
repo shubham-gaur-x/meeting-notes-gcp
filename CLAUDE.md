@@ -172,6 +172,7 @@ meeting-notes-gcp/
 │       ├── lifecycle.py        state machine; SHIPPED is terminal
 │       ├── guardrails.py       7 deterministic gates (pure)
 │       ├── gate_runner.py      runs those gates in the worktree
+│       ├── reviewer.py        independent LLM reviewer (layer 2)
 │       ├── self_verify.py      cheap diff-vs-ticket scoring, never blocks review
 │       ├── session_memory.py   resumable record per ticket, survives across attempts
 │       ├── backend.py          coding-model routing — NOT llm_client, see Scope rules
@@ -239,6 +240,9 @@ If a job file grows past ~50 lines, the logic belongs in the package.
 - DO NOT auto-merge a pull request. Human review is the checkpoint. `dev_agent` opens PRs and
   never merges them; `CLOSED` is driven only by `/webhook/github`'s `pull_request.merged`
   event, i.e. a human actually merging.
+- DO NOT parse a coding-model reply with a bare `json.loads`. Use
+  `utils.strip_json_fences` first — the CLI really does return
+  ```` ```json …``` ```` and a bare parse silently disables the layer (ADR-024).
 - DO NOT let a run reach `SHIPPED` without the guardrail gates passing. `gate_runner.run_gates`
   is called from `process_ticket` **before** the worktree is torn down (the gates run commands
   inside it); any failed gate escalates to `NEEDS_HUMAN`, which is terminal, and the PR is left

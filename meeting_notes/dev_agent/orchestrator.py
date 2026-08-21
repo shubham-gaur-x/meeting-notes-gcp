@@ -137,6 +137,7 @@ async def process_ticket(
     load_resume_context: Any = None,
     record_session_memory: Any = None,
     run_gates: Any = None,
+    review_pr: Any = None,
 ) -> None:
     """Implement one ticket end to end. Every I/O dependency is injectable so
     the whole flow is testable with no live Jira, git, GitHub, or Memgraph."""
@@ -176,6 +177,8 @@ async def process_ticket(
         record_session_memory = session_memory.record
     if run_gates is None:
         from meeting_notes.dev_agent.gate_runner import run_gates
+    if review_pr is None:
+        from meeting_notes.dev_agent.reviewer import review_pr
 
     key = ticket["key"]
     bound_log = log.bind(ticket_key=key)
@@ -280,16 +283,39 @@ async def process_ticket(
             ]
         failed = guardrails.failed_gates(gates)
 
-        if failed:
-            detail_text = "\n".join(f"- {g.name}: {g.evidence}" for g in failed)
+        # Layer 2 (ADR-020): an independent reviewer, given the gate results so
+        # it judges what they cannot rather than re-deriving them. It is skipped
+        # when a gate already failed -- the run is stopping either way, and the
+        # model call would be spent to reach a conclusion already reached.
+        review = None
+        if not failed:
+            try:
+                review = await review_pr(
+                    detail, diff, gates,
+                    model=backend.model_for_run(dev_backend, settings),
+                )
+            except Exception:  # noqa: BLE001 - an outage must not halt the run
+                bound_log.warning("orchestrator.review_errored", exc_info=True)
+
+        blocked_by_review = bool(review and review.blocking)
+
+        if failed or blocked_by_review:
+            reasons = []
+            if failed:
+                reasons.append(
+                    "Failed gates:\n" + "\n".join(f"- {g.name}: {g.evidence}" for g in failed)
+                )
+            if blocked_by_review and review is not None:
+                reasons.append("Reviewer findings:\n" + review.summary())
+            detail_text = "\n\n".join(reasons)
             bound_log.warning(
-                "orchestrator.gates_failed", failed=[g.name for g in failed],
-                pr_url=pr["html_url"],
+                "orchestrator.review_blocked", failed=[g.name for g in failed],
+                review_blocking=blocked_by_review, pr_url=pr["html_url"],
             )
             await add_comment(
                 key,
-                "Dev agent opened a PR but it did NOT pass review guardrails, so it has "
-                f"not been marked shipped.\n\nFailed gates:\n{detail_text}\n\n"
+                "Dev agent opened a PR but it did NOT pass review, so it has "
+                f"not been marked shipped.\n\n{detail_text}\n\n"
                 f"PR: {pr['html_url']}\n\nA human needs to review this before it merges.",
                 settings=settings,
             )
@@ -297,7 +323,10 @@ async def process_ticket(
                 bound_log.warning("orchestrator.review_transition_failed")
             await finish_run(
                 key, lc.NEEDS_HUMAN, pr_url=pr["html_url"], pr_number=pr["number"],
-                error="failed gates: " + ", ".join(g.name for g in failed),
+                error=(
+                    "failed gates: " + ", ".join(g.name for g in failed) if failed
+                    else "reviewer requested changes"
+                ),
             )
             await _advance_state(key, lc.NEEDS_HUMAN, set_state, get_run)
             run_after = await get_run(key)

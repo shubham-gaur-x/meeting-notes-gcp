@@ -62,13 +62,22 @@ def model_for_run(backend: str, settings: Settings | None = None) -> str | None:
 def ensure_cli_home(settings: Settings) -> str:
     """Create the CLI config dir that pins auth to Vertex, and return its path.
 
+    The file goes in `<home>/.gemini/settings.json`. The CLI treats
+    `GEMINI_CLI_HOME` as the *home directory* and looks for its config in a
+    `.gemini` subdirectory of it, exactly as it would under `~`. Writing it at
+    the root instead leaves the agent unauthenticated: `gemini` exits 41 with
+    "Please set an Auth method in your <home>/.gemini/settings.json", every
+    run_oneshot returns None, and both LLM layers of the safety net go dead
+    while still looking configured.
+
     Written every call rather than only when missing: the file is small, and a
     stale `selectedType` here would route the agent to the wrong backend
     without any error a caller could catch.
     """
     home = Path(settings.dev_agent_gemini_cli_home).expanduser()
-    home.mkdir(parents=True, exist_ok=True)
-    (home / "settings.json").write_text(
+    config_dir = home / ".gemini"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    (config_dir / "settings.json").write_text(
         json.dumps({"security": {"auth": {"selectedType": "vertex-ai"}}}, indent=2)
     )
     return str(home)

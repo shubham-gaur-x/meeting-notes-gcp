@@ -20,6 +20,8 @@ from typing import Any
 import structlog
 from pydantic import BaseModel, ConfigDict
 
+from meeting_notes.utils import strip_json_fences
+
 log = structlog.get_logger()
 
 DEFAULT_THRESHOLD = 0.6
@@ -84,7 +86,7 @@ async def verify_pr(
         raw = await run_oneshot(prompt, timeout_seconds=120, model=model)
         if not raw:
             return VerifyVerdict(threshold=threshold)
-        parsed = json.loads(raw)
+        parsed = json.loads(strip_json_fences(raw).strip())
         return VerifyVerdict(
             checked=True,
             addresses=bool(parsed.get("addresses", False)),

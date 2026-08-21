@@ -549,18 +549,18 @@ def test_gemini_backend_uses_its_own_cli_home(tmp_path) -> None:
     home = tmp_path / "gemini-home"
     env = dab.resolve_backend_env("gemini", _settings(DEV_AGENT_GEMINI_CLI_HOME=str(home)))
     assert env["GEMINI_CLI_HOME"] == str(home)
-    written = json.loads((home / "settings.json").read_text())
+    written = json.loads((home / ".gemini" / "settings.json").read_text())
     assert written["security"]["auth"]["selectedType"] == "vertex-ai"
 
 
 def test_ensure_cli_home_overwrites_a_stale_auth_selection(tmp_path) -> None:
     home = tmp_path / "gemini-home"
-    home.mkdir()
-    (home / "settings.json").write_text(
+    (home / ".gemini").mkdir(parents=True)
+    (home / ".gemini" / "settings.json").write_text(
         json.dumps({"security": {"auth": {"selectedType": "oauth-personal"}}})
     )
     dab.ensure_cli_home(_settings(DEV_AGENT_GEMINI_CLI_HOME=str(home)))
-    written = json.loads((home / "settings.json").read_text())
+    written = json.loads((home / ".gemini" / "settings.json").read_text())
     assert written["security"]["auth"]["selectedType"] == "vertex-ai"
 
 
@@ -1008,6 +1008,7 @@ async def test_a_pr_found_gates_the_outcome_not_the_success_flag() -> None:
         load_resume_context=lambda key: _ok(None),
         record_session_memory=lambda *a, **kw: _ok({}),
         run_gates=_gates_pass,
+        review_pr=lambda *a, **kw: _ok(None),
     )
 
     assert finishes and finishes[0][0] == lifecycle.SHIPPED, (
@@ -1045,6 +1046,7 @@ async def test_process_ticket_advances_through_every_lifecycle_state_on_success(
         load_resume_context=lambda key: _ok(None),
         record_session_memory=lambda *a, **kw: _ok({}),
         run_gates=_gates_pass,
+        review_pr=lambda *a, **kw: _ok(None),
     )
 
     assert states == [
@@ -1085,6 +1087,8 @@ async def test_a_missing_pr_marks_the_run_failed_and_records_session_memory() ->
         write_run_provenance=lambda **kw: _ok("run-id"),
         load_resume_context=lambda key: _ok(None),
         record_session_memory=lambda *a, **kw: _ok({}),
+        run_gates=_gates_pass,
+        review_pr=lambda *a, **kw: _ok(None),
     )
 
     assert finishes[0][0] == lifecycle.FAILED
@@ -1127,6 +1131,8 @@ async def test_the_worktree_is_cleaned_up_even_when_the_run_itself_raises() -> N
         write_run_provenance=lambda **kw: _ok("run-id"),
         load_resume_context=lambda key: _ok(None),
         record_session_memory=lambda *a, **kw: _ok({}),
+        run_gates=_gates_pass,
+        review_pr=lambda *a, **kw: _ok(None),
     )
     assert removed == ["agent/SCRUM-3"], "the worktree must not be leaked when the run crashes"
 
@@ -1223,6 +1229,7 @@ async def _process(ticket, *, diff, run_gates, **over):
         load_resume_context=lambda key: _ok(None),
         record_session_memory=lambda *a, **kw: _ok({}),
         run_gates=run_gates,
+        review_pr=lambda *a, **kw: _ok(None),
     )
     kwargs.update(over)
     await orchestrator.process_ticket(ticket, _settings(), **kwargs)
@@ -1335,3 +1342,184 @@ async def test_gate_command_defaults_go_through_the_interpreter() -> None:
         assert cmd.split()[0] in ("python", "python3"), (
             f"{cmd!r} must run through the interpreter, not a bare console script"
         )
+
+
+# ─── the independent LLM reviewer (ADR-020 layer 2) ───────────────────────────
+
+
+def _verdict_json(verdict="approve", findings=None):
+    return json.dumps({"verdict": verdict, "findings": findings or []})
+
+
+async def test_the_reviewer_parses_an_approval() -> None:
+    from meeting_notes.dev_agent import reviewer
+
+    async def fake_oneshot(prompt, **kw):
+        return _verdict_json("approve")
+
+    v = await reviewer.review_pr(
+        {"key": "SCRUM-1", "summary": "s"}, "diff", [], run_oneshot=fake_oneshot
+    )
+    assert v.checked is True
+    assert v.verdict == "approve"
+    assert v.blocking is False
+
+
+async def test_a_high_severity_finding_blocks() -> None:
+    """The reviewer is the second layer of the safety net, not a second
+    advisory comment -- ADR-022 rejected adding another of those."""
+    from meeting_notes.dev_agent import reviewer
+
+    async def fake_oneshot(prompt, **kw):
+        return _verdict_json("request_changes", [
+            {"severity": "high", "file": "a.py", "issue": "drops the transaction"},
+        ])
+
+    v = await reviewer.review_pr({"key": "K", "summary": "s"}, "d", [], run_oneshot=fake_oneshot)
+    assert v.blocking is True
+    assert "drops the transaction" in v.summary()
+
+
+async def test_only_low_severity_findings_do_not_block() -> None:
+    """A nit must not hold up a PR a human is going to read anyway."""
+    from meeting_notes.dev_agent import reviewer
+
+    async def fake_oneshot(prompt, **kw):
+        return _verdict_json("request_changes", [
+            {"severity": "low", "file": "a.py", "issue": "naming nit"},
+        ])
+
+    v = await reviewer.review_pr({"key": "K", "summary": "s"}, "d", [], run_oneshot=fake_oneshot)
+    assert v.blocking is False, "a low-severity nit must not block"
+    assert v.checked is True
+
+
+async def test_an_unreachable_reviewer_does_not_block() -> None:
+    """Asymmetry with the deterministic gates, and deliberate: an unrunnable
+    GATE is a failure because its absence hides a fact it could have checked
+    cheaply. An unreachable LLM is an availability problem, the seven gates
+    have already run, and a human still reviews before any merge -- so an
+    outage must not halt the pipeline.
+    """
+    from meeting_notes.dev_agent import reviewer
+
+    async def dead_oneshot(prompt, **kw):
+        raise RuntimeError("model unreachable")
+
+    v = await reviewer.review_pr({"key": "K", "summary": "s"}, "d", [], run_oneshot=dead_oneshot)
+    assert v.checked is False
+    assert v.blocking is False
+
+
+async def test_unparseable_reviewer_output_does_not_block() -> None:
+    from meeting_notes.dev_agent import reviewer
+
+    async def junk(prompt, **kw):
+        return "I think this looks fine to me!"
+
+    v = await reviewer.review_pr({"key": "K", "summary": "s"}, "d", [], run_oneshot=junk)
+    assert v.checked is False
+    assert v.blocking is False
+
+
+async def test_the_reviewer_is_shown_the_gate_evidence() -> None:
+    """ADR-020: the reviewer gets ticket, diff AND gate evidence. Without the
+    gate results it re-derives what the deterministic layer already knows."""
+    from meeting_notes.dev_agent import reviewer
+
+    seen = {}
+
+    async def capture(prompt, **kw):
+        seen["prompt"] = prompt
+        return _verdict_json("approve")
+
+    await reviewer.review_pr(
+        {"key": "K", "summary": "s"}, "the diff",
+        [gr.GateResult(name="secret_scan", passed=True, evidence="clean")],
+        run_oneshot=capture,
+    )
+    assert "secret_scan" in seen["prompt"]
+    assert "the diff" in seen["prompt"]
+
+
+async def test_a_blocking_review_escalates_the_run_to_a_human() -> None:
+    """End to end through process_ticket: gates green, reviewer says no."""
+    from meeting_notes.dev_agent import reviewer as rv
+
+    async def blocking_review(*a, **kw):
+        return rv.ReviewOutcome(
+            checked=True, verdict="request_changes",
+            findings=[rv.ReviewFinding(severity="high", file="x.py", issue="unsafe")],
+        )
+
+    calls = await _process(
+        {"key": "SCRUM-8", "summary": "s"}, diff=_DIFF,
+        run_gates=_gates_pass, review_pr=blocking_review,
+    )
+    assert calls["finishes"][0][0] == lifecycle.NEEDS_HUMAN
+    assert lifecycle.SHIPPED not in calls["states"]
+    assert "unsafe" in "\n".join(calls["comments"])
+
+
+async def test_an_approving_review_ships() -> None:
+    from meeting_notes.dev_agent import reviewer as rv
+
+    async def approving(*a, **kw):
+        return rv.ReviewOutcome(checked=True, verdict="approve")
+
+    calls = await _process(
+        {"key": "SCRUM-9", "summary": "s"}, diff=_DIFF,
+        run_gates=_gates_pass, review_pr=approving,
+    )
+    assert calls["finishes"][0][0] == lifecycle.SHIPPED
+
+
+def test_the_cli_home_settings_land_where_the_cli_actually_reads_them(tmp_path) -> None:
+    """The CLI reads `<GEMINI_CLI_HOME>/.gemini/settings.json`, not
+    `<GEMINI_CLI_HOME>/settings.json`.
+
+    Found live: writing it at the root left the agent unauthenticated and
+    `gemini` exited 41 with "Please set an Auth method in your
+    /tmp/dev-agent/gemini-home/.gemini/settings.json". Every reviewer and
+    self-verify call silently returned None, so both LLM layers of the safety
+    net were dead while looking configured.
+    """
+    import json as _json
+
+    home = tmp_path / "cli-home"
+    dab.ensure_cli_home(_settings(DEV_AGENT_GEMINI_CLI_HOME=str(home)))
+
+    target = home / ".gemini" / "settings.json"
+    assert target.exists(), f"settings.json must be at {target}, the path the CLI reads"
+    assert (
+        _json.loads(target.read_text())["security"]["auth"]["selectedType"] == "vertex-ai"
+    )
+
+
+_FENCED = '```json\n{"verdict": "approve", "findings": []}\n```'
+
+
+async def test_the_reviewer_survives_markdown_fences() -> None:
+    """CLAUDE.md: models wrap JSON in ```json fences despite being told not to,
+    and the defence must be kept. Confirmed live -- the real CLI returned
+    exactly `'```json\\n{...}\\n```'`, so a bare json.loads left every real
+    review unparsed and the layer silently dead."""
+    from meeting_notes.dev_agent import reviewer
+
+    async def fenced(prompt, **kw):
+        return _FENCED
+
+    v = await reviewer.review_pr({"key": "K", "summary": "s"}, "d", [], run_oneshot=fenced)
+    assert v.checked is True, "a fenced reply must still parse"
+    assert v.verdict == "approve"
+
+
+async def test_self_verify_survives_markdown_fences() -> None:
+    """Same defect, same cause: self_verify has been in the run path since
+    Task 5 doing a bare json.loads, so every live verdict was `checked=False`."""
+    async def fenced(prompt, **kw):
+        return '```json\n{"addresses": true, "confidence": 0.9, "reason": "ok"}\n```'
+
+    v = await self_verify.verify_pr({"key": "K"}, "d", run_oneshot=fenced)
+    assert v.checked is True, "a fenced reply must still parse"
+    assert v.passed is True
