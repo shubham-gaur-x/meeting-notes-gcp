@@ -7,6 +7,8 @@ credentials and is run by hand per the plan, not simulated here.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from meeting_notes.dev_agent import lifecycle
@@ -398,3 +400,81 @@ def test_failed_gates_returns_only_the_failures() -> None:
              gr.GateResult(name="b", passed=False, evidence="boom")]
     failed = gr.failed_gates(mixed)
     assert len(failed) == 1 and failed[0].name == "b"
+
+
+# ─── self_verify.py (Task 5) ────────────────────────────────────────────────
+
+from meeting_notes.dev_agent import self_verify  # noqa: E402
+
+
+def test_passed_requires_all_three_conditions_independently() -> None:
+    """Each of checked/addresses/confidence must independently gate .passed --
+    a verdict that satisfies any two of three must still be False."""
+    base = dict(checked=True, addresses=True, confidence=0.9, threshold=0.6)
+
+    assert self_verify.VerifyVerdict(**base).passed is True
+    assert self_verify.VerifyVerdict(**{**base, "checked": False}).passed is False
+    assert self_verify.VerifyVerdict(**{**base, "addresses": False}).passed is False
+    assert self_verify.VerifyVerdict(**{**base, "confidence": 0.1}).passed is False
+
+
+def test_default_verdict_is_unpassed() -> None:
+    assert self_verify.VerifyVerdict().passed is False
+
+
+async def test_verify_pr_parses_a_good_response() -> None:
+    async def fake_oneshot(prompt, timeout_seconds, model=None):
+        return json.dumps({"addresses": True, "confidence": 0.85, "reason": "matches"})
+
+    verdict = await self_verify.verify_pr(
+        {"key": "SCRUM-1", "summary": "x"}, "diff --git a/x", run_oneshot=fake_oneshot
+    )
+    assert verdict.checked is True
+    assert verdict.passed is True
+
+
+async def test_verify_pr_degrades_to_unchecked_on_a_malformed_response() -> None:
+    """Must never raise -- verification is best-effort and must not block the
+    review transition."""
+    async def garbage_oneshot(prompt, timeout_seconds, model=None):
+        return "not json at all"
+
+    verdict = await self_verify.verify_pr(
+        {"key": "SCRUM-1", "summary": "x"}, "diff", run_oneshot=garbage_oneshot
+    )
+    assert verdict.checked is False
+    assert verdict.passed is False
+
+
+async def test_verify_pr_degrades_to_unchecked_when_the_runner_raises() -> None:
+    async def exploding_oneshot(prompt, timeout_seconds, model=None):
+        raise RuntimeError("backend unreachable")
+
+    verdict = await self_verify.verify_pr(
+        {"key": "SCRUM-1", "summary": "x"}, "diff", run_oneshot=exploding_oneshot
+    )
+    assert verdict.checked is False
+
+
+async def test_verify_pr_degrades_to_unchecked_on_empty_output() -> None:
+    async def empty_oneshot(prompt, timeout_seconds, model=None):
+        return None
+
+    verdict = await self_verify.verify_pr(
+        {"key": "SCRUM-1", "summary": "x"}, "diff", run_oneshot=empty_oneshot
+    )
+    assert verdict.checked is False
+
+
+async def test_verify_pr_respects_a_custom_threshold() -> None:
+    async def fake_oneshot(prompt, timeout_seconds, model=None):
+        return json.dumps({"addresses": True, "confidence": 0.7, "reason": "ok"})
+
+    low_bar = await self_verify.verify_pr(
+        {"key": "SCRUM-1", "summary": "x"}, "diff", threshold=0.5, run_oneshot=fake_oneshot
+    )
+    high_bar = await self_verify.verify_pr(
+        {"key": "SCRUM-1", "summary": "x"}, "diff", threshold=0.9, run_oneshot=fake_oneshot
+    )
+    assert low_bar.passed is True
+    assert high_bar.passed is False
