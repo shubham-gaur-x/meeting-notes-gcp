@@ -17,7 +17,7 @@ import structlog
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from api.routers import graph, insights, memory, review, webhooks
+from api.routers import dev_agent, graph, insights, memory, review, webhooks
 from meeting_notes.config import get_settings
 from meeting_notes.utils import configure_logging
 
@@ -47,7 +47,10 @@ def create_app() -> FastAPI:
         version="0.1.0",
         lifespan=lifespan,
     )
-    for router in (graph.router, review.router, insights.router, memory.router, webhooks.router):
+    for router in (
+        graph.router, review.router, insights.router, memory.router, webhooks.router,
+        dev_agent.router,
+    ):
         app.include_router(router)
 
     @app.get("/health")

@@ -651,3 +651,80 @@ def test_the_dashboard_offers_example_questions() -> None:
 
     html = (Path(api.__file__).parent / "static" / "dashboard.html").read_text()
     assert "EXAMPLES" in html and "Try one" in html
+
+
+# ─── dev agent ─────────────────────────────────────────────────────────────
+
+
+async def test_dev_agent_preflight_reports_ok(app: Any, monkeypatch: Any) -> None:
+    import api.routers.dev_agent as da
+
+    async def ok_preflight(backend: str, settings: Any = None) -> str:
+        return "reachable"
+
+    monkeypatch.setattr(da.backend, "select_backend", lambda settings: "local")
+    monkeypatch.setattr(da.backend, "preflight", ok_preflight)
+
+    response = await _get(app, "/dev-agent/preflight")
+    assert response.status_code == 200
+    body = response.json()
+    assert body == {"backend": "local", "ok": True, "detail": "reachable"}
+
+
+async def test_dev_agent_preflight_reports_failure_without_raising(app: Any, monkeypatch: Any) -> None:
+    """A down backend is data for the dashboard, not a 500."""
+    import api.routers.dev_agent as da
+
+    async def bad_preflight(backend: str, settings: Any = None) -> str:
+        raise da.backend.PreflightError("LM Studio unreachable at localhost:1234")
+
+    monkeypatch.setattr(da.backend, "select_backend", lambda settings: "local")
+    monkeypatch.setattr(da.backend, "preflight", bad_preflight)
+
+    response = await _get(app, "/dev-agent/preflight")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is False
+    assert "unreachable" in body["detail"]
+
+
+async def test_dev_agent_runs_lists_recent_runs(app: Any, monkeypatch: Any) -> None:
+    import api.routers.dev_agent as da
+    from meeting_notes.dev_agent.models import DevAgentRun
+
+    async def fake_list(limit: int = 50, pool: Any = None) -> list[DevAgentRun]:
+        return [DevAgentRun(ticket_key="SCRUM-1", state="SHIPPED", attempt_count=1)]
+
+    monkeypatch.setattr(da.db, "list_recent_dev_agent_runs", fake_list)
+
+    response = await _get(app, "/dev-agent/runs")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["count"] == 1
+    assert body["runs"][0]["ticket_key"] == "SCRUM-1"
+    assert body["runs"][0]["state"] == "SHIPPED"
+
+
+async def test_dev_agent_trigger_kicks_off_a_poll_cycle(app: Any, monkeypatch: Any) -> None:
+    """As a BackgroundTasks entry, not an awaited call -- a coding run can take
+    far longer than an HTTP request should wait on a real deployed server."""
+    import inspect
+
+    import api.routers.dev_agent as da
+
+    called = []
+
+    async def fake_poll(*a: Any, **k: Any) -> dict[str, Any]:
+        called.append(1)
+        return {"attempted": 0}
+
+    monkeypatch.setattr(da, "poll_and_process", fake_poll)
+
+    response = await _post(app, "/dev-agent/trigger")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "accepted"}
+    assert called == [1]
+
+    source = inspect.getsource(da.trigger)
+    assert "background_tasks.add_task" in source, "must not await poll_and_process inline"
