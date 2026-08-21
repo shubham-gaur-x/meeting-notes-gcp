@@ -140,9 +140,48 @@ class CalendarAdapter:
         return {"date": self._date(payload), "platform": "google_calendar"}
 
     def extract_overrides(self, payload: dict[str, Any]) -> dict[str, Any]:
-        """`start` is ground truth for a calendar event."""
+        """`start` and the invitee list are ground truth for a calendar event.
+
+        The Calendar API states exactly who was invited, with addresses. The
+        model only ever sees the title and description, so it infers attendees
+        from prose -- names with no email, which `person_resolver` can do
+        nothing with except queue for review. Rebuilding the corpus made the
+        cost visible: 71 of 95 review entries were "no-email-no-match" while
+        the addresses sat unused in the payload.
+        """
+        overrides: dict[str, Any] = {}
         date = self._date(payload)
-        return {"date": date} if date else {}
+        if date:
+            overrides["date"] = date
+        attendees = self._attendees(payload)
+        if attendees:
+            overrides["attendees"] = attendees
+        return overrides
+
+    @staticmethod
+    def _attendees(payload: dict[str, Any]) -> list[dict[str, str]]:
+        """Invitees carrying a real address.
+
+        An entry without one (a room, a resource) is dropped rather than
+        turned into a Person with a fabricated email.
+        """
+        out: list[dict[str, str]] = []
+        for entry in payload.get("attendees") or []:
+            email = (entry.get("email") or "").strip().lower()
+            if not email:
+                continue
+            name = (entry.get("name") or "").strip()
+            if not name:
+                # Calendar often returns an address with no display name.
+                # A readable placeholder keeps the node legible; the email
+                # remains the identity the resolver actually keys on.
+                name = email.split("@")[0].replace(".", " ").replace("_", " ").title()
+            out.append({
+                "name": name,
+                "email": email,
+                "role": "organizer" if entry.get("organizer") else "attendee",
+            })
+        return out
 
     @staticmethod
     def _date(payload: dict[str, Any]) -> str | None:

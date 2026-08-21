@@ -765,3 +765,65 @@ async def test_process_actually_applies_the_override_to_the_written_meeting() ->
     assert written["date"] == "2026-02-17", (
         "the calendar event's own start must win over the model's inferred date"
     )
+
+
+# ─── calendar attendees are ground truth, not something to infer ──────────────
+
+
+def test_calendar_attendee_emails_override_the_models_guess() -> None:
+    """The Calendar API tells us exactly who was invited, with addresses.
+
+    Found by rebuilding the graph from scratch: the adapter passed only the
+    title, the date and an attendee *count*, so the extractor inferred
+    attendees from prose like "Matteo <> Shubham: Daily CBS Standup" -- names
+    with no emails, which person_resolver can only send to the review queue.
+    That one meeting produced people=0, unresolved=2 while both addresses sat
+    unused in the payload. Across the corpus it was 71 "no-email-no-match"
+    reviews and 20 ATTENDED edges where the source knew better.
+    """
+    from meeting_notes.pipeline import adapter_for
+
+    payload = {
+        "summary": "Matteo <> Shubham: Daily CBS Standup",
+        "description": "",
+        "start": "2026-02-26T11:30:00-08:00",
+        "end": "2026-02-26T11:45:00-08:00",
+        "attendees": [
+            {"name": "", "email": "matteo.vaiente@onixnet.com", "organizer": True},
+            {"name": "Shubham Gaur", "email": "shubham.gaur@onixnet.com", "organizer": False},
+        ],
+    }
+    overrides = adapter_for("calendar").extract_overrides(payload)
+
+    assert "attendees" in overrides, "the invitee list must override the model's guess"
+    by_email = {a["email"]: a for a in overrides["attendees"]}
+    assert set(by_email) == {"matteo.vaiente@onixnet.com", "shubham.gaur@onixnet.com"}
+    # A blank name in the payload still has to produce something resolvable.
+    assert by_email["matteo.vaiente@onixnet.com"]["name"].strip()
+    assert by_email["shubham.gaur@onixnet.com"]["name"] == "Shubham Gaur"
+    assert by_email["matteo.vaiente@onixnet.com"]["role"] == "organizer"
+    # The date override must survive alongside it.
+    assert overrides["date"] == "2026-02-26"
+
+
+def test_a_calendar_event_with_no_attendees_overrides_nothing() -> None:
+    """A payload without an invitee list must not blank out what the model found."""
+    from meeting_notes.pipeline import adapter_for
+
+    overrides = adapter_for("calendar").extract_overrides(
+        {"summary": "Focus time", "start": "2026-02-26T11:30:00-08:00", "attendees": []}
+    )
+    assert "attendees" not in overrides
+
+
+def test_an_attendee_without_an_email_is_not_invented() -> None:
+    """A resource row (a room, a mailing list with no address) must not become
+    a Person with a fabricated email."""
+    from meeting_notes.pipeline import adapter_for
+
+    overrides = adapter_for("calendar").extract_overrides(
+        {"summary": "s", "start": "2026-02-26T11:30:00-08:00",
+         "attendees": [{"name": "Conf Room A", "email": ""},
+                       {"name": "Real Person", "email": "real@onixnet.com"}]}
+    )
+    assert [a["email"] for a in overrides["attendees"]] == ["real@onixnet.com"]

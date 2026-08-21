@@ -233,9 +233,10 @@ def test_every_adapter_handles_the_real_staged_payload_shape() -> None:
     # The date override is the part most easily broken by a shape change:
     # `start` arrives already normalised to an ISO string by the connector,
     # and slicing a dict here would silently yield no date at all.
-    assert adapter_for("calendar").extract_overrides(real["calendar"]) == {
-        "date": "2026-05-13"
-    }
+    calendar_overrides = adapter_for("calendar").extract_overrides(real["calendar"])
+    assert calendar_overrides["date"] == "2026-05-13"
+    # The invitee list is authoritative too, so it rides along with the date.
+    assert [a["email"] for a in calendar_overrides["attendees"]] == ["n@o.com"]
     assert adapter_for("meet").extract_overrides(real["meet"]) == {"date": "2026-05-13"}
 
 
