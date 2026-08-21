@@ -74,7 +74,7 @@ def test_reviewing_can_loop_back_to_implementing() -> None:
 def test_the_happy_path_is_fully_connected() -> None:
     path = [lifecycle.TRIAGED, lifecycle.PLANNED, lifecycle.IMPLEMENTING,
             lifecycle.DEBUGGING, lifecycle.REVIEWING, lifecycle.SHIPPED, lifecycle.CLOSED]
-    for a, b in zip(path, path[1:]):
+    for a, b in zip(path, path[1:], strict=False):
         assert lifecycle.can_transition(a, b), f"{a} -> {b} should be legal"
 
 
