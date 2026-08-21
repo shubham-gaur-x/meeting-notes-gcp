@@ -187,10 +187,10 @@ async def test_a_failed_extraction_is_marked_processed_not_retried() -> None:
     marked = RecordingMarker()
 
     async def garbage_transport(url, payload, headers):
-        return json.dumps({"choices": [{"message": {"content": "not json at all"}}]})
+        return json.dumps({"candidates": [{"content": {"parts": [{"text": "not json at all"}]}}]})
 
-    settings = Settings(_env_file=None, LLM_BACKEND="lmstudio", LM_STUDIO_MODEL="m",
-                        LM_STUDIO_BASE_URL="http://localhost:1234/v1")
+    settings = Settings(_env_file=None, LLM_BACKEND="vertex", GCP_PROJECT_ID="proj-x",
+                        VERTEX_CHAT_MODEL="gemini-3.7-flash", VERTEX_LOCATION="global")
     result = await process(
         record, EmailAdapter(), settings=settings,
         upsert=RecordingGraph(), push_jira=RecordingPusher(),

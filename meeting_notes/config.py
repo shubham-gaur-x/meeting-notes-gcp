@@ -16,7 +16,7 @@ from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-LLMBackend = Literal["fake", "gemini", "lmstudio", "vertex"]
+LLMBackend = Literal["fake", "gemini", "vertex"]
 
 
 class Settings(BaseSettings):
@@ -41,17 +41,14 @@ class Settings(BaseSettings):
     vertex_chat_model: str = ""
     vertex_embedding_model: str = "text-embedding-005"
     vertex_location: str = "us-central1"
-    lm_studio_base_url: str = "http://localhost:1234/v1"
-    lm_studio_model: str = ""
-    lm_studio_embedding_model: str = "text-embedding-nomic-embed-text-v1.5"
     gemini_embedding_model: str = "text-embedding-004"
     # Where the `fake` backend reads recorded fixtures from. Blank = the
     # committed sample_data/llm_fixtures/. Tests point it at a tmp_path.
     llm_fixture_dir: str = ""
 
-    # ─── Dev agent (Phase 11, ADR-020) ─────────────────────────────────────
+    # ─── Dev agent (Phase 11, ADR-020/ADR-021) ─────────────────────────────
     # Coding-model routing. Deliberately separate from llm_backend above --
-    # this selects a headless-Claude-Code subprocess backend, not a
+    # this selects a headless `gemini` CLI subprocess backend, not a
     # chat_json/embed call (CLAUDE.md).
     dev_agent_llm_backend: str = "gemini"
     # Confirm the current model id at build time -- they change (CLAUDE.md).
@@ -63,7 +60,8 @@ class Settings(BaseSettings):
     # ~/.gemini/settings.json (whose auth selection would win). See
     # dev_agent/backend.py:ensure_cli_home.
     dev_agent_gemini_cli_home: str = "/tmp/dev-agent/gemini-home"
-    dev_agent_max_turns: int = 40
+    # No turn cap: the `gemini` CLI exposes none (ADR-021). A run is bounded
+    # by dev_agent_timeout_seconds and the guardrail gates.
     dev_agent_timeout_seconds: int = 1800
     dev_agent_max_attempts: int = 1
     dev_agent_repo_dir: str = "/tmp/dev-agent/repo"

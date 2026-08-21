@@ -21,9 +21,6 @@ from typing import Any
 MEMBER = "member"   # own team only
 LEAD = "lead"       # own team + org-level rollups (aggregates), not other teams' detail
 ADMIN = "admin"     # everything, including cross-team detail
-ROLE_ORDER = {MEMBER: 0, LEAD: 1, ADMIN: 2}
-
-
 class AccessDenied(RuntimeError):
     """Raised when a principal requests a scope its policy does not allow."""
 
@@ -158,16 +155,3 @@ def scope_predicate(scope: Scope) -> dict[str, str | None]:
     if scope.kind == "project":
         return {"scope_project": scope.value}
     return {}
-
-
-def visible_scopes(name: str, policy: dict[str, Principal] | None = None) -> list[str]:
-    """Enumerate the scope tokens a principal may access (for menus / the demo)."""
-    principal = resolve_principal(name, policy)
-    if principal.role == ADMIN:
-        return ["all", "org"]
-    out: list[str] = list(principal.allowed_scopes)
-    if principal.role == LEAD:
-        out.append("org")
-    if principal.team:
-        out.append(f"team:{principal.team}")
-    return sorted(set(out))

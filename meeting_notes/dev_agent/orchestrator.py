@@ -208,7 +208,6 @@ async def process_ticket(
         result: AgentRunResult = await run_agent(
             work_dir, prompt,
             timeout_seconds=settings.dev_agent_timeout_seconds,
-            max_turns=settings.dev_agent_max_turns,
             model=backend.model_for_run(dev_backend, settings),
             settings=settings,
         )

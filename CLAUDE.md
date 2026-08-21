@@ -33,8 +33,8 @@ system with 363 passing tests. **Read from it freely. Never write to it.**
 1. **GCP-native.** The deployment target is Google Cloud, not a MacBook.
 2. **Airbyte is removed.** Ingestion is our own connectors as Cloud Run Jobs. This is the single
    biggest scope change from v5.
-3. **Managed inference.** Vertex AI Gemini replaces LM Studio as the default, behind a swappable
-   seam that keeps LM Studio working for local development.
+3. **Managed inference.** Vertex AI Gemini replaces LM Studio entirely, behind a swappable
+   seam. Local models are out of scope (ADR-021); `fake` covers offline work.
 4. **Keep the open-source core.** Memgraph + MAGE, FastAPI, the extraction prompts, the Cypher,
    and the test suite are the assets worth carrying across. They are not rewritten without cause.
 
@@ -153,7 +153,7 @@ meeting-notes-gcp/
 │   ├── utils.py               uuid5_id, with_retry, logging, json salvage
 │   ├── db.py                  Cloud SQL — the ONLY file with SQL
 │   ├── graph_client.py        Memgraph — the ONLY file with generic Cypher
-│   ├── llm_client.py          vertex | lmstudio seam
+│   ├── llm_client.py          vertex | gemini | fake seam
 │   ├── classifier.py
 │   ├── meeting_type_router.py
 │   ├── person_resolver.py
@@ -281,14 +281,13 @@ Default is **Vertex AI Gemini** in production. Three other backends exist for lo
 development and testing (ADR-014).
 
 ```
-LLM_BACKEND=vertex          # vertex | gemini | lmstudio | fake
+LLM_BACKEND=vertex          # vertex | gemini | fake
 ```
 
 | Backend | Purpose |
 |---|---|
 | `vertex` | Production. GCP project with billing. |
 | `gemini` | Direct AI Studio API key — no GCP project, no billing. Tier 1 of `docs/SETUP.md`. |
-| `lmstudio` | Local models, unchanged from v5. |
 | `fake` | Replays recorded fixtures from `sample_data/llm_fixtures/`. No credentials, no network, deterministic. The tier-0 default and the test suite's mock. |
 
 A `fake` fixture miss **raises**. It never falls through to `None` or a default —
@@ -304,11 +303,10 @@ async def embed(text: str) -> list[float] | None
 Rules:
 - Temperature is **0.0** for extraction. Always.
 - Every module that needs inference imports `llm_client`. No module constructs its own client.
-- Embeddings are **768-dimensional** in both backends, because the Memgraph vector indexes are
-  configured for 768. Vertex `text-embedding-005` outputs 768 by default; LM Studio uses
-  `text-embedding-nomic-embed-text-v1.5`. Do not change the dimension without also migrating
-  both vector indexes.
-- Local LLMs wrap JSON in ```` ```json ```` fences despite instructions not to, and Gemma
+- Embeddings are **768-dimensional** in every backend, because the Memgraph vector indexes are
+  configured for 768. Vertex `text-embedding-005` outputs 768 by default. Do not change the
+  dimension without also migrating both vector indexes.
+- Models wrap JSON in ```` ```json ```` fences despite instructions not to, and some
   sometimes emits the literal string `"null"` instead of a JSON null. Both defences (fence
   stripping, `_is_null_like`) are ported from v5 and must be kept — they were found by live
   testing, not by unit tests.
@@ -389,14 +387,11 @@ GCP_PROJECT_ID=                  # never hardcoded in source
 GCP_REGION=us-central1
 
 # LLM
-LLM_BACKEND=vertex               # vertex | gemini | lmstudio | fake
+LLM_BACKEND=vertex               # vertex | gemini | fake
 GEMINI_API_KEY=                  # AI Studio key — tier 1 only, no GCP project needed
 VERTEX_CHAT_MODEL=gemini-3.7-flash   # confirm current name at build time — they change
 VERTEX_EMBEDDING_MODEL=text-embedding-005
 VERTEX_LOCATION=global           # ADR-021: Gemini 3.x is served ONLY from `global`
-LM_STUDIO_BASE_URL=http://localhost:1234/v1   # local dev only
-LM_STUDIO_MODEL=
-LM_STUDIO_EMBEDDING_MODEL=text-embedding-nomic-embed-text-v1.5
 
 # Cloud SQL
 POSTGRES_HOST=

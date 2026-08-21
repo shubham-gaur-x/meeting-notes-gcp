@@ -660,15 +660,19 @@ async def test_dev_agent_preflight_reports_ok(app: Any, monkeypatch: Any) -> Non
     import api.routers.dev_agent as da
 
     async def ok_preflight(backend: str, settings: Any = None) -> str:
-        return "reachable"
+        return "gemini project=p location=global model=gemini-3-pro-preview"
 
-    monkeypatch.setattr(da.backend, "select_backend", lambda settings: "local")
+    monkeypatch.setattr(da.backend, "select_backend", lambda settings: "gemini")
     monkeypatch.setattr(da.backend, "preflight", ok_preflight)
 
     response = await _get(app, "/dev-agent/preflight")
     assert response.status_code == 200
     body = response.json()
-    assert body == {"backend": "local", "ok": True, "detail": "reachable"}
+    assert body == {
+        "backend": "gemini",
+        "ok": True,
+        "detail": "gemini project=p location=global model=gemini-3-pro-preview",
+    }
 
 
 async def test_dev_agent_preflight_reports_failure_without_raising(app: Any, monkeypatch: Any) -> None:
@@ -676,16 +680,16 @@ async def test_dev_agent_preflight_reports_failure_without_raising(app: Any, mon
     import api.routers.dev_agent as da
 
     async def bad_preflight(backend: str, settings: Any = None) -> str:
-        raise da.backend.PreflightError("LM Studio unreachable at localhost:1234")
+        raise da.backend.PreflightError("GCP_PROJECT_ID is not set")
 
-    monkeypatch.setattr(da.backend, "select_backend", lambda settings: "local")
+    monkeypatch.setattr(da.backend, "select_backend", lambda settings: "gemini")
     monkeypatch.setattr(da.backend, "preflight", bad_preflight)
 
     response = await _get(app, "/dev-agent/preflight")
     assert response.status_code == 200
     body = response.json()
     assert body["ok"] is False
-    assert "unreachable" in body["detail"]
+    assert "GCP_PROJECT_ID" in body["detail"]
 
 
 async def test_dev_agent_runs_lists_recent_runs(app: Any, monkeypatch: Any) -> None:

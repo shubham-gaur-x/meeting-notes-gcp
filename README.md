@@ -90,7 +90,7 @@ tells you if it is outstanding.
 | Ingestion | Cloud Run Jobs, our own connectors |
 | Scheduling | Cloud Scheduler |
 | Staging | Cloud SQL PostgreSQL 15 |
-| LLM (chat + embeddings) | Vertex AI Gemini · LM Studio for local dev |
+| LLM (chat + embeddings) | Vertex AI Gemini |
 | Graph | Memgraph + MAGE on GCE, GKE later |
 | Graph MCP | Memgraph MCP server |
 | Ticketing | Jira, bidirectional |

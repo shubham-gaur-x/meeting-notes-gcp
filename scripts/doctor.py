@@ -53,7 +53,7 @@ REQUIRED_PORTS: dict[int, str] = {
     8080: "API",
 }
 
-VALID_LLM_BACKENDS = ("fake", "gemini", "lmstudio", "vertex")
+VALID_LLM_BACKENDS = ("fake", "gemini", "vertex")
 
 INSTALL_HINTS: dict[str, str] = {
     "docker": "Install Docker Desktop: https://docs.docker.com/get-docker/",
@@ -176,11 +176,6 @@ def check_llm_backend(env: Mapping[str, str]) -> CheckResult:
             Status.FAIL,
             "gemini selected but GEMINI_API_KEY is unset",
             "Get a free key at https://aistudio.google.com/apikey and put it in .env",
-        )
-
-    if backend == "lmstudio":
-        return CheckResult(
-            name, Status.PASS, "lmstudio — ensure the local server is running with both models"
         )
 
     return CheckResult(name, Status.PASS, "vertex — requires GCP credentials (tier 2)")

@@ -74,7 +74,3 @@ async def remove_worktree(
         else:
             raise
 
-
-async def has_changes(work_dir: str) -> bool:
-    output = await _run_git(["status", "--porcelain"], cwd=work_dir)
-    return bool(output.strip())

@@ -12,9 +12,9 @@ Two things here are load-bearing and easy to get wrong:
   before the schema exists is lost forever — so `Ticket`, `PullRequest`,
   `AgentRun`, `Commit`, `FileChange` and `Blocker` are constrained now.
 * **Both vector indexes are built for `embedding_dimension`**, 768 by
-  default, matching what Vertex `text-embedding-005` and LM Studio's
-  nomic-embed both return. Changing the dimension means migrating both
-  indexes; it is not a knob to turn casually (CLAUDE.md).
+  default, matching what Vertex `text-embedding-005` returns. Changing the
+  dimension means migrating both indexes; it is not a knob to turn casually
+  (CLAUDE.md).
 """
 
 from __future__ import annotations

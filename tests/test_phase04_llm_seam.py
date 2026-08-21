@@ -1,4 +1,4 @@
-"""Phase 4 — the LLM seam. Runs with no network, no API key, no LM Studio.
+"""Phase 4 — the LLM seam. Runs with no network and no API key.
 
 Every backend is exercised through an injected transport, and `fake` replays
 recorded fixtures from a tmp_path, so nothing here touches a real model.
@@ -132,7 +132,7 @@ async def test_fake_embeddings_are_normalised(tmp_path: Path) -> None:
 
 
 def test_backend_selection_is_env_driven() -> None:
-    for name in ("fake", "gemini", "lmstudio", "vertex"):
+    for name in ("fake", "gemini", "vertex"):
         assert select_backend(Settings(_env_file=None, LLM_BACKEND=name)) == name
 
 
@@ -179,10 +179,10 @@ def test_nested_braces_survive_the_salvage() -> None:
 # ─── retry semantics (explicit exit criterion) ────────────────────────────────
 
 
-def _lmstudio_settings(**over: object) -> Settings:
+def _vertex_settings(**over: object) -> Settings:
     base = dict(
-        _env_file=None, LLM_BACKEND="lmstudio", LM_STUDIO_MODEL="m",
-        LM_STUDIO_BASE_URL="http://localhost:1234/v1",
+        _env_file=None, LLM_BACKEND="vertex", GCP_PROJECT_ID="proj-x",
+        VERTEX_CHAT_MODEL="gemini-3.7-flash", VERTEX_LOCATION="global",
     )
     base.update(over)
     return Settings(**base)  # type: ignore[arg-type]
@@ -197,7 +197,7 @@ async def test_transport_errors_retry() -> None:
         raise TimeoutError("connection reset")
 
     with pytest.raises(TimeoutError):
-        await chat_json("s", "u", settings=_lmstudio_settings(), transport=flaky)
+        await chat_json("s", "u", settings=_vertex_settings(), transport=flaky)
 
     assert len(calls) == 3, "with_retry(max_attempts=3) should have tried three times"
 
@@ -209,9 +209,9 @@ async def test_a_transport_error_that_recovers_returns_the_result() -> None:
         calls.append(url)
         if len(calls) < 2:
             raise TimeoutError("first attempt fails")
-        return json.dumps({"choices": [{"message": {"content": '{"ok": true}'}}]})
+        return json.dumps({"candidates": [{"content": {"parts": [{"text": '{"ok": true}'}]}}]})
 
-    result = await chat_json("s", "u", settings=_lmstudio_settings(), transport=recovers)
+    result = await chat_json("s", "u", settings=_vertex_settings(), transport=recovers)
     assert result == {"ok": True}
     assert len(calls) == 2
 
@@ -224,9 +224,9 @@ async def test_parse_failures_do_NOT_retry() -> None:
 
     async def garbage(url: str, payload: dict, headers: dict) -> str:
         calls.append(url)
-        return json.dumps({"choices": [{"message": {"content": "not json at all"}}]})
+        return json.dumps({"candidates": [{"content": {"parts": [{"text": "not json at all"}]}}]})
 
-    result = await chat_json("s", "u", settings=_lmstudio_settings(), transport=garbage)
+    result = await chat_json("s", "u", settings=_vertex_settings(), transport=garbage)
 
     assert result is None
     assert len(calls) == 1, "a parse failure must not be retried"
@@ -241,10 +241,10 @@ async def test_extraction_is_always_temperature_zero() -> None:
 
     async def capture(url: str, payload: dict, headers: dict) -> str:
         seen.update(payload)
-        return json.dumps({"choices": [{"message": {"content": "{}"}}]})
+        return json.dumps({"candidates": [{"content": {"parts": [{"text": "{}"}]}}]})
 
-    await chat_json("s", "u", settings=_lmstudio_settings(), transport=capture)
-    assert seen["temperature"] == 0.0
+    await chat_json("s", "u", settings=_vertex_settings(), transport=capture)
+    assert seen["generationConfig"]["temperature"] == 0.0
 
 
 async def test_gemini_reads_its_model_from_settings_not_a_literal() -> None:
@@ -353,17 +353,17 @@ async def test_a_wrong_length_embedding_raises_rather_than_being_stored() -> Non
     """A short vector would fail at Memgraph insert time, far from the call
     that produced it. Fail here, where the message can be useful."""
     async def short(url: str, payload: dict, headers: dict) -> str:
-        return json.dumps({"data": [{"embedding": [0.1, 0.2, 0.3]}]})
+        return json.dumps({"predictions": [{"embeddings": {"values": [0.1, 0.2, 0.3]}}]})
 
     with pytest.raises(ValueError, match="768"):
-        await embed("text", settings=_lmstudio_settings(), transport=short)
+        await embed("text", settings=_vertex_settings(), transport=short)
 
 
 async def test_a_correct_length_embedding_passes_through() -> None:
     async def right(url: str, payload: dict, headers: dict) -> str:
-        return json.dumps({"data": [{"embedding": [0.01] * 768}]})
+        return json.dumps({"predictions": [{"embeddings": {"values": [0.01] * 768}}]})
 
-    vector = await embed("text", settings=_lmstudio_settings(), transport=right)
+    vector = await embed("text", settings=_vertex_settings(), transport=right)
     assert vector is not None and len(vector) == 768
 
 
@@ -498,9 +498,9 @@ async def test_a_parse_failure_returns_none_rather_than_raising() -> None:
     """The pipeline marks the record processed and moves on; it must not crash
     the whole drain because one model reply was malformed."""
     async def garbage(url: str, payload: dict, headers: dict) -> str:
-        return json.dumps({"choices": [{"message": {"content": "not json"}}]})
+        return json.dumps({"candidates": [{"content": {"parts": [{"text": "not json"}]}}]})
 
-    result = await extract_meeting("text", "email", settings=_lmstudio_settings(),
+    result = await extract_meeting("text", "email", settings=_vertex_settings(),
                                    transport=garbage)
     assert result is None
 
@@ -509,9 +509,9 @@ async def test_validation_failure_returns_none_rather_than_raising() -> None:
     """Unrepairable output is still not a crash."""
     async def wrong_shape(url: str, payload: dict, headers: dict) -> str:
         inner = json.dumps({"title": None, "kind": {"nested": "garbage"}})
-        return json.dumps({"choices": [{"message": {"content": inner}}]})
+        return json.dumps({"candidates": [{"content": {"parts": [{"text": inner}]}}]})
 
-    result = await extract_meeting("text", "email", settings=_lmstudio_settings(),
+    result = await extract_meeting("text", "email", settings=_vertex_settings(),
                                    transport=wrong_shape)
     assert result is None
 
@@ -631,7 +631,7 @@ async def test_chat_list_reaches_the_backend_and_parses() -> None:
     from meeting_notes.llm_client import chat_list
 
     async def transport(url: str, payload: dict, headers: dict) -> str:
-        return json.dumps({"choices": [{"message": {"content": '["fact one", "fact two"]'}}]})
+        return json.dumps({"candidates": [{"content": {"parts": [{"text": '["fact one", "fact two"]'}]}}]})
 
-    result = await chat_list("s", "u", settings=_lmstudio_settings(), transport=transport)
+    result = await chat_list("s", "u", settings=_vertex_settings(), transport=transport)
     assert result == ["fact one", "fact two"]

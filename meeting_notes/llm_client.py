@@ -7,12 +7,11 @@ what lets the entire test suite run with no network (CLAUDE.md).
     async def chat_json(system, user, *, temperature=0.0) -> dict | None
     async def embed(text) -> list[float] | None
 
-Four backends behind one protocol (ADR-014):
+Three backends behind one protocol (ADR-014, ADR-021):
 
 * ``fake``     replays recorded fixtures. No credentials, no network,
                deterministic. The tier-0 default and the suite's mock.
 * ``gemini``   direct AI Studio API key. No GCP project, no billing. Tier 1.
-* ``lmstudio`` local models via LM Studio's OpenAI-compatible API.
 * ``vertex``   production, on a GCP project with billing.
 
 **A fixture miss raises.** It never falls through to ``None``, a default, or an
@@ -222,27 +221,6 @@ def _gemini_text(body: str) -> str:
     return text
 
 
-def _lmstudio_chat_request(
-    system: str, user: str, temperature: float, settings: Settings
-) -> tuple[str, dict[str, Any], dict[str, str]]:
-    url = f"{settings.lm_studio_base_url.rstrip('/')}/chat/completions"
-    payload = {
-        "model": settings.lm_studio_model,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-        "temperature": temperature,
-        "max_tokens": 2000,
-    }
-    return url, payload, {"Authorization": "Bearer lm-studio"}
-
-
-def _openai_shaped_text(body: str) -> str:
-    text: str = json.loads(body)["choices"][0]["message"]["content"]
-    return text
-
-
 def _vertex_host(location: str) -> str:
     """Vertex's regional host, or the unprefixed one for the `global` location.
 
@@ -325,10 +303,6 @@ async def _raw_completion(
         url, payload, headers = _gemini_chat_request(system, user, temperature, settings)
         body = await _post(url, payload, headers, transport)
         return _gemini_text(body)
-    if backend == "lmstudio":
-        url, payload, headers = _lmstudio_chat_request(system, user, temperature, settings)
-        body = await _post(url, payload, headers, transport)
-        return _openai_shaped_text(body)
     if backend == "vertex":
         url, payload, headers = _vertex_chat_request(system, user, temperature, settings)
         if transport is _default_transport:
@@ -364,10 +338,6 @@ async def chat_json(
         url, payload, headers = _gemini_chat_request(system, user, temperature, settings)
         body = await _post(url, payload, headers, transport)
         raw = _gemini_text(body)
-    elif backend == "lmstudio":
-        url, payload, headers = _lmstudio_chat_request(system, user, temperature, settings)
-        body = await _post(url, payload, headers, transport)
-        raw = _openai_shaped_text(body)
     elif backend == "vertex":
         url, payload, headers = _vertex_chat_request(system, user, temperature, settings)
         if transport is _default_transport:
@@ -399,15 +369,10 @@ async def embed(
 
     transport = transport or _default_transport
 
-    if backend == "lmstudio":
-        url = f"{settings.lm_studio_base_url.rstrip('/')}/embeddings"
-        payload: dict[str, Any] = {"model": settings.lm_studio_embedding_model, "input": text}
-        body = await _post(url, payload, {"Authorization": "Bearer lm-studio"}, transport)
-        vector = json.loads(body)["data"][0]["embedding"]
-    elif backend == "gemini":
+    if backend == "gemini":
         model = settings.gemini_embedding_model
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:embedContent"
-        payload = {"content": {"parts": [{"text": text}]}}
+        payload: dict[str, Any] = {"content": {"parts": [{"text": text}]}}
         body = await _post(url, payload, {"x-goog-api-key": settings.gemini_api_key}, transport)
         vector = json.loads(body)["embedding"]["values"]
     elif backend == "vertex":

@@ -44,6 +44,11 @@ PATTERNS = {
     "GCP SA key":       r"\"type\"\s*:\s*\"service_account\"",
 }
 
+# A deliberate fixture -- e.g. the tests that prove guardrails.gate_secret_scan
+# catches a key -- carries this marker. Without it a secret scanner flags the
+# tests for a secret scanner, which trains people to pass --no-verify.
+ALLOWLIST = "pragma: allowlist secret"
+
 hits = 0
 for name in sys.stdin.read().split("\0"):
     if not name:
@@ -55,10 +60,13 @@ for name in sys.stdin.read().split("\0"):
         text = p.read_text(encoding="utf-8", errors="replace")
     except OSError:
         continue
+    lines = text.splitlines()
     for label, pattern in PATTERNS.items():
         for m in re.finditer(pattern, text):
-            line = text.count("\n", 0, m.start()) + 1
-            print(f"  {name}:{line}  {label}  {m.group(0)[:14]}...")
+            n = text.count("\n", 0, m.start())
+            if n < len(lines) and ALLOWLIST in lines[n]:
+                continue
+            print(f"  {name}:{n + 1}  {label}  {m.group(0)[:14]}...")
             hits += 1
 
 sys.exit(1 if hits else 0)

@@ -334,11 +334,15 @@ def test_secret_scan_catches_an_anthropic_style_key() -> None:
 
 
 def test_secret_scan_catches_a_github_token() -> None:
-    assert gr.gate_secret_scan(["token = ghp_abcdefghijklmnopqrstuvwxyz1234"]).passed is False
+    assert gr.gate_secret_scan(
+        ["token = ghp_abcdefghijklmnopqrstuvwxyz1234"]  # pragma: allowlist secret
+    ).passed is False
 
 
 def test_secret_scan_catches_a_private_key_header() -> None:
-    assert gr.gate_secret_scan(["-----BEGIN RSA PRIVATE KEY-----"]).passed is False
+    assert gr.gate_secret_scan(
+        ["-----BEGIN RSA PRIVATE KEY-----"]  # pragma: allowlist secret
+    ).passed is False
 
 
 def test_module_boundaries_passes_for_sql_inside_db_py() -> None:
@@ -816,7 +820,7 @@ async def test_run_agent_reports_failure_when_the_cli_reports_an_error(
     )
     _fake_spawn(monkeypatch, _FakeProc(payload, returncode=0))
     result = await gemini_runner.run_agent(
-        str(tmp_path), "do the thing", 60, 10, settings=_runner_settings(tmp_path)
+        str(tmp_path), "do the thing", 60, settings=_runner_settings(tmp_path)
     )
     assert result.success is False
     assert "empty response" in result.result_text
@@ -829,7 +833,7 @@ async def test_run_agent_succeeds_on_a_clean_result(monkeypatch, tmp_path) -> No
     )
     _fake_spawn(monkeypatch, _FakeProc(payload, returncode=0))
     result = await gemini_runner.run_agent(
-        str(tmp_path), "do the thing", 60, 10, settings=_runner_settings(tmp_path)
+        str(tmp_path), "do the thing", 60, settings=_runner_settings(tmp_path)
     )
     assert result.success is True
     assert result.result_text == "PR_URL: https://x/1"
@@ -846,7 +850,7 @@ async def test_run_agent_prefers_the_json_error_over_stderr_on_nonzero_exit(
         monkeypatch, _FakeProc(payload, stderr="Warning: 256-color not detected", returncode=1)
     )
     result = await gemini_runner.run_agent(
-        str(tmp_path), "x", 60, 10, settings=_runner_settings(tmp_path)
+        str(tmp_path), "x", 60, settings=_runner_settings(tmp_path)
     )
     assert result.success is False
     assert result.returncode == 1
@@ -857,7 +861,7 @@ async def test_run_agent_survives_unparseable_output(monkeypatch, tmp_path) -> N
     """A zero exit with non-JSON stdout must not crash the run."""
     _fake_spawn(monkeypatch, _FakeProc("total gibberish", returncode=0))
     result = await gemini_runner.run_agent(
-        str(tmp_path), "x", 60, 10, settings=_runner_settings(tmp_path)
+        str(tmp_path), "x", 60, settings=_runner_settings(tmp_path)
     )
     assert result.success is True
     assert "gibberish" in result.result_text

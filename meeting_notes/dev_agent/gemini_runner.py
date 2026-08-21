@@ -108,7 +108,6 @@ async def run_agent(
     work_dir: str,
     prompt: str,
     timeout_seconds: int,
-    max_turns: int,
     model: str | None = None,
     settings: Settings | None = None,
 ) -> AgentRunResult:
@@ -118,8 +117,8 @@ async def run_agent(
     (via shell) commit/push/open a PR. The prompt is the only thing telling it
     not to merge — see `orchestrator.build_prompt`.
 
-    ``max_turns`` is accepted for interface parity with the orchestrator but
-    the CLI exposes no turn cap; `timeout_seconds` is the real bound.
+    There is no turn cap: the CLI exposes none. `timeout_seconds` and the
+    guardrail gates are the bounds.
     """
     settings = settings or get_settings()
     backend = select_backend(settings)
