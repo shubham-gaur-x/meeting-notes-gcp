@@ -732,3 +732,20 @@ async def test_dev_agent_trigger_kicks_off_a_poll_cycle(app: Any, monkeypatch: A
 
     source = inspect.getsource(da.trigger)
     assert "background_tasks.add_task" in source, "must not await poll_and_process inline"
+
+
+async def test_quality_ranked_endpoint_returns_scored_meetings(app: Any, monkeypatch: Any) -> None:
+    """The nightly step writes `quality_score`; without a read path the scores
+    are computed and invisible -- the same shape as decisions being extracted
+    with nowhere to see them."""
+    import api.routers.graph as g
+
+    async def fake_ranked(limit=20, driver=None):
+        return [{"id": "m1", "title": "Kickoff", "date": "2026-05-13", "quality_score": 0.75}]
+
+    monkeypatch.setattr(g.graph_client, "get_meetings_quality_ranked", fake_ranked)
+    response = await _get(app, "/graph/meetings/quality")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["count"] == 1
+    assert body["meetings"][0]["quality_score"] == 0.75

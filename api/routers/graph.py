@@ -21,6 +21,15 @@ async def meetings_recent(
     return {"meetings": meetings, "count": len(meetings)}
 
 
+@router.get("/meetings/quality")
+async def meetings_quality(
+    limit: int = Query(20, ge=1, le=100), _: Principal = Depends(principal)
+) -> dict[str, Any]:
+    """Meetings ranked by the nightly quality score."""
+    meetings = await graph_client.get_meetings_quality_ranked(limit=limit)
+    return {"meetings": meetings, "count": len(meetings)}
+
+
 @router.get("/timeline")
 async def timeline(
     limit: int = Query(30, ge=1, le=200), _: Principal = Depends(principal)

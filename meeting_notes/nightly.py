@@ -20,10 +20,65 @@ log = structlog.get_logger()
 
 STEPS: tuple[str, ...] = (
     "reresolve", "algorithms", "consolidate", "preferences", "decay", "procedures",
+    "quality",
 )
 
 
-async def run_step(name: str) -> Any:
+async def _score_quality(get_inputs: Any = None, set_quality: Any = None) -> dict[str, int]:
+    """Score every meeting and write the result back.
+
+    Runs last: `action_completion` reads `ActionItem.done`, which the Jira sync
+    updates, so scoring before the rest of the night would grade yesterday's
+    state.
+
+    The population rates are computed across the whole corpus first because the
+    yield components are percentile ranks — a meeting's decision rate only means
+    something relative to the others.
+    """
+    from meeting_notes import graph_client, meeting_quality
+
+    get_inputs = get_inputs or graph_client.get_meetings_quality_inputs
+    set_quality = set_quality or graph_client.set_meeting_quality
+
+    rows = await get_inputs()
+    decision_rates = [
+        r["decision_count"] / (r["duration_minutes"] / 60)
+        for r in rows
+        if r.get("duration_minutes")
+    ]
+    action_rates = [
+        r["action_count"] / (r["duration_minutes"] / 60)
+        for r in rows
+        if r.get("duration_minutes")
+    ]
+    population = {"decision": decision_rates, "action": action_rates}
+
+    scored = failed = 0
+    for row in rows:
+        try:
+            result = meeting_quality.compute_quality(
+                {
+                    "attended": row.get("attendee_count"),
+                    "invited": row.get("attendee_count"),
+                    "n_decisions": row.get("decision_count", 0),
+                    "n_actions": row.get("action_count", 0),
+                    "n_actions_done": row.get("actions_done", 0),
+                    "duration_minutes": row.get("duration_minutes"),
+                    "agenda_text": row.get("summary", ""),
+                    "recurrence_scores": [],
+                },
+                population,
+            )
+            await set_quality(row["id"], result["quality_score"], result["components"])
+            scored += 1
+        except Exception as exc:  # noqa: BLE001 - one bad meeting must not sink the pass
+            failed += 1
+            log.warning("nightly.quality_failed", meeting_id=row.get("id"), error=str(exc))
+
+    return {"scored": scored, "failed": failed}
+
+
+async def run_step(name: str, **kwargs: Any) -> Any:
     """Run one named step. Imports are local so a single step does not drag in
     every memory module."""
     from meeting_notes import graph_algorithms, person_resolver
@@ -50,6 +105,8 @@ async def run_step(name: str) -> Any:
         return await episodic.decay_relevance()
     if name == "procedures":
         return await procedural.discover_procedures()
+    if name == "quality":
+        return await _score_quality(**kwargs)
     raise ValueError(f"unknown step {name!r}")
 
 

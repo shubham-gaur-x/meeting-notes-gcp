@@ -780,7 +780,7 @@ async def get_meetings_quality_inputs(driver: Any = None) -> list[dict[str, Any]
                    count(DISTINCT p) AS attendee_count,
                    count(DISTINCT a) AS action_count,
                    count(DISTINCT d) AS decision_count,
-                   size([x IN collect(DISTINCT a.done) WHERE x = true]) AS actions_done
+                   count(DISTINCT CASE WHEN a.done THEN a END) AS actions_done
             """
         )
         return [dict(r) async for r in result]

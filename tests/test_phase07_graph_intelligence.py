@@ -962,3 +962,62 @@ async def test_preference_consolidation_skips_people_with_no_history() -> None:
 
     await semantic.consolidate_preferences(driver=FakeDriver(_Empty()), chat=fake_chat)
     assert called == [], "no history means nothing to infer from"
+
+
+# ─── meeting quality (built in Phase 2, never wired) ──────────────────────────
+
+
+def test_quality_is_a_nightly_step() -> None:
+    """`meeting_quality` was fully built and tested in Phase 2 and PHASE_PLAN
+    deferred its orchestration to "the nightly quality job" -- which never
+    landed, leaving compute_quality, get_meetings_quality_inputs and
+    set_meeting_quality with no caller between them."""
+    from meeting_notes import nightly
+
+    assert "quality" in nightly.STEPS
+
+
+async def test_the_quality_step_scores_and_writes_every_meeting() -> None:
+    from meeting_notes import nightly
+
+    rows = [
+        {"id": "m1", "duration_minutes": 60, "summary": "agenda: ship it",
+         "attendee_count": 4, "action_count": 2, "decision_count": 1, "actions_done": 1},
+        {"id": "m2", "duration_minutes": 30, "summary": "",
+         "attendee_count": 2, "action_count": 0, "decision_count": 0, "actions_done": 0},
+    ]
+    written: list[tuple[str, float]] = []
+
+    async def fake_inputs():
+        return rows
+
+    async def fake_set(meeting_id, score, components):
+        written.append((meeting_id, score))
+
+    out = await nightly.run_step(
+        "quality", get_inputs=fake_inputs, set_quality=fake_set
+    )
+
+    assert out["scored"] == 2
+    assert {m for m, _ in written} == {"m1", "m2"}
+    assert all(0.0 <= s <= 1.0 for _, s in written), "a composite must be a 0-1 score"
+
+
+async def test_the_quality_step_survives_a_meeting_it_cannot_score() -> None:
+    """One unscoreable meeting must not cost the whole nightly pass."""
+    from meeting_notes import nightly
+
+    async def fake_inputs():
+        return [{"id": "bad"}, {"id": "ok", "duration_minutes": 30, "attendee_count": 2,
+                                "action_count": 1, "decision_count": 1, "actions_done": 0}]
+
+    written = []
+
+    async def fake_set(meeting_id, score, components):
+        if meeting_id == "bad":
+            raise RuntimeError("write failed")
+        written.append(meeting_id)
+
+    out = await nightly.run_step("quality", get_inputs=fake_inputs, set_quality=fake_set)
+    assert written == ["ok"]
+    assert out["failed"] == 1

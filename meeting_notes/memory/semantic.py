@@ -209,64 +209,6 @@ async def strengthen_relationships(
     )
 
 
-async def infer_preferences(
-    meeting: ExtractedMeeting,
-    meeting_id: str,
-    *,
-    driver: Any = None,
-    settings: Settings | None = None,
-    chat: Any = None,
-) -> int:
-    """Infer 1-2 working preferences per attendee, gated by FACT_MIN_CONFIDENCE."""
-    settings = settings or get_settings()
-    emails = [a.email for a in meeting.attendees if a.email]
-    if not emails:
-        return 0
-
-    driver = driver or _driver()
-    now = datetime.now(UTC).isoformat()
-    written = 0
-
-    for email in emails:
-        context = f"Person: {email}\nMeeting: {meeting.title}\nSummary: {meeting.summary}"
-        try:
-            prefs = _parse_list(await _chat(PREF_SYSTEM, context, settings, chat))
-        except Exception as exc:  # noqa: BLE001 - best-effort
-            log.warning("semantic.infer_preferences_failed", email=email, error=str(exc))
-            continue
-
-        async with driver.session() as session:
-            for pref in prefs:
-                if not isinstance(pref, dict):
-                    continue
-                category, value = pref.get("category"), pref.get("value")
-                if not category or not value:
-                    continue
-                try:
-                    await session.run(
-                        """
-                        MATCH (p:Person {email: $email})
-                        MERGE (pref:Preference {id: $pref_id})
-                        ON CREATE SET pref.category = $category,
-                                      pref.value = $value,
-                                      pref.created_at = $now
-                        ON MATCH SET  pref.value = $value, pref.updated_at = $now
-                        MERGE (p)-[:PREFERS]->(pref)
-                        """,
-                        email=email,
-                        pref_id=uuid5_id("preference", f"{email}:{category}"),
-                        category=category,
-                        value=value,
-                        now=now,
-                    )
-                    written += 1
-                except Exception as exc:  # noqa: BLE001
-                    log.warning("semantic.preference_write_failed", error=str(exc))
-
-    log.info("semantic.preferences_inferred", meeting_id=meeting_id, count=written)
-    return written
-
-
 async def consolidate(driver: Any = None) -> dict[str, int]:
     """Nightly: raise confidence on well-corroborated facts."""
     driver = driver or _driver()
@@ -299,7 +241,7 @@ async def consolidate_preferences(
 ) -> dict[str, int]:
     """Nightly: infer working preferences once per person, from their history.
 
-    `infer_preferences` works per meeting, which is the wrong granularity — it
+    A per-meeting version was removed: it was the wrong granularity — it
     would spend one LLM call per attendee per meeting to re-derive the same
     stable traits, and "how this person likes to work" is not a per-meeting
     property anyway. This runs once per person over their recent meetings.

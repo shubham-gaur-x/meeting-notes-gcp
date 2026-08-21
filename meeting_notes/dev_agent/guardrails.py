@@ -4,9 +4,9 @@ Two layers protect every PR the agent opens:
 
 1. Seven DETERMINISTIC gates (this module). Each is a pure function returning
    a `GateResult`, so it is trivially unit-testable with a planted violation.
-2. An independent LLM reviewer (the reviewer prompt + `ReviewVerdict`) that
-   gets the ticket, spec, diff, and gate evidence and returns a strict JSON
-   verdict.
+2. An independent LLM reviewer — `reviewer.py`, which owns the prompt and
+   `ReviewOutcome`. It is given the ticket, the diff and these gate results,
+   so it judges what the gates cannot rather than re-deriving them.
 
 **The agent never merges its own PR and never bypasses a gate.** Merging
 stays human — `CLOSED` is written only by `/webhook/github`'s
@@ -39,13 +39,6 @@ class ReviewFinding(BaseModel):
     file: str = ""
     issue: str
     suggested_fix: str = ""
-
-
-class ReviewVerdict(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    verdict: str  # "approve" | "request_changes"
-    findings: list[ReviewFinding] = []
 
 
 # ─── Gate 1/2 — tests + lint/type ──────────────────────────────────────────────
