@@ -134,6 +134,9 @@ class Settings(BaseSettings):
     classifier_score_threshold: float = 0.40
     pipeline_batch_size: int = 50
     graph_write_concurrency: int = 3
+    # Embeddings are independent calls at ~12s each; issuing them one at a
+    # time made a 16-action meeting spend >3 minutes embedding alone.
+    embedding_concurrency: int = 8
 
     # ─── Service ──────────────────────────────────────────────────────────
     log_level: str = "INFO"

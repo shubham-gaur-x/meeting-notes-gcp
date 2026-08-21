@@ -15,6 +15,7 @@ directly; Phase 4's seam replaces that, so `fake` works offline here too.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from typing import Any
 
@@ -105,16 +106,26 @@ async def _embed_pending(
         result = await session.run(fetch_cypher, meeting_id=meeting_id)
         pending = [dict(r) async for r in result]
 
+    if not pending:
+        return 0
+
     now = datetime.now(UTC).isoformat()
-    count = 0
-    for row in pending:
-        vector = await embed_text(row[text_field], settings=settings, embed=embed)
+    limit = (settings or get_settings()).embedding_concurrency
+    semaphore = asyncio.Semaphore(max(1, limit))
+
+    async def embed_one(row: dict[str, Any]) -> int:
+        # The model call is what the semaphore bounds; the write is cheap and
+        # already serialised by the driver's own pool.
+        async with semaphore:
+            vector = await embed_text(row[text_field], settings=settings, embed=embed)
         if vector is None:
-            continue
+            return 0
         async with driver.session() as session:
             await session.run(write_cypher, id=row["id"], embedding=vector, now=now)
-        count += 1
-    return count
+        return 1
+
+    written = await asyncio.gather(*(embed_one(row) for row in pending))
+    return sum(written)
 
 
 async def embed_action_items_for_meeting(

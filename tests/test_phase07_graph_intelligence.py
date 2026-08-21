@@ -1021,3 +1021,65 @@ async def test_the_quality_step_survives_a_meeting_it_cannot_score() -> None:
     out = await nightly.run_step("quality", get_inputs=fake_inputs, set_quality=fake_set)
     assert written == ["ok"]
     assert out["failed"] == 1
+
+
+async def test_pending_rows_are_embedded_concurrently() -> None:
+    """Embeddings are independent network calls, so issuing them one at a time
+    makes a meeting's cost linear in its action-item count.
+
+    Measured live: a single Vertex embed is ~11.7s, so one meeting with 16
+    action items spent 3m11s in this loop alone -- the dominant cost of the
+    whole drain, and enough to blow a Cloud Run Job timeout.
+    """
+    import asyncio
+
+    from meeting_notes.memory import vector
+
+    in_flight = 0
+    peak = 0
+
+    async def slow_embed(text, settings=None):
+        nonlocal in_flight, peak
+        in_flight += 1
+        peak = max(peak, in_flight)
+        await asyncio.sleep(0.05)
+        in_flight -= 1
+        return [0.1] * 768
+
+    rows = [{"id": f"a{i}", "task": f"task {i}"} for i in range(8)]
+
+    class _Result:
+        def __aiter__(self):
+            self._it = iter(rows)
+            return self
+
+        async def __anext__(self):
+            try:
+                return next(self._it)
+            except StopIteration:
+                raise StopAsyncIteration from None
+
+    class _Session:
+        async def run(self, cypher, **kw):
+            return _Result() if "RETURN" in cypher else None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+    class _Driver:
+        def session(self):
+            return _Session()
+
+    count = await vector._embed_pending(
+        "MATCH ... RETURN a.id AS id, a.task AS task", "MATCH ... SET a.embedding = $embedding",
+        "m1", "task", driver=_Driver(), settings=None, embed=slow_embed,
+    )
+
+    assert count == 8, "every row must still be embedded"
+    assert peak > 1, (
+        f"embeddings ran one at a time (peak in-flight={peak}); they are "
+        "independent calls and must overlap"
+    )
