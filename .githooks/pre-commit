@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+# Project-local pre-commit hook for meeting-notes-gcp.
+#
+# This repo deliberately opts out of the global ~/.git-hooks chain (Gemwise),
+# via a repo-local core.hooksPath. Two of the global checks misfire here:
+#
+#   * a 1MB large-file gate, which blocks graphify-out/graph.json and
+#     graph.html -- artifacts CLAUDE.md explicitly requires committing after
+#     every phase, and which have exceeded 1MB for several rebuilds;
+#   * a JSON "syntax" check that counts raw { } characters across the whole
+#     file, including inside string literals. graph.json legitimately carries
+#     unbalanced braces inside node labels (test docstrings quoting JSON), so
+#     a valid file is reported as corrupt.
+#
+# What is kept is what actually protects the repo. The secret scan is new --
+# the global chain never had one (its pre-commit.local was commented-out
+# examples), and CLAUDE.md is emphatic that no secret, token, or key is ever
+# committed.
+#
+# To restore the global hooks for this repo:  git config --unset core.hooksPath
+
+set -uo pipefail
+
+RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; BLUE=$'\033[0;34m'; NC=$'\033[0m'
+failed=0
+
+staged=$(git diff --staged --name-only --diff-filter=ACM)
+[[ -z "$staged" ]] && exit 0
+
+# ─── secrets ────────────────────────────────────────────────────────────────
+echo "${BLUE}🔑 Scanning staged files for secrets...${NC}"
+if ! git diff --staged --name-only --diff-filter=ACM -z | python3 -c '
+import re, sys, pathlib
+
+PATTERNS = {
+    "GitHub token":     r"gh[pousr]_[A-Za-z0-9]{20,}",
+    "Anthropic key":    r"sk-ant-[A-Za-z0-9\-_]{20,}",
+    "OpenAI key":       r"sk-[A-Za-z0-9]{32,}",
+    "Google API key":   r"AIza[0-9A-Za-z\-_]{35}",
+    "AWS access key":   r"AKIA[0-9A-Z]{16}",
+    "Jira/Atlassian":   r"ATATT[A-Za-z0-9]{20,}",
+    "Slack token":      r"xox[baprs]-[A-Za-z0-9-]{10,}",
+    "private key":      r"-----BEGIN [A-Z ]*PRIVATE KEY-----",
+    "GCP SA key":       r"\"type\"\s*:\s*\"service_account\"",
+}
+
+hits = 0
+for name in sys.stdin.read().split("\0"):
+    if not name:
+        continue
+    p = pathlib.Path(name)
+    if not p.is_file():
+        continue
+    try:
+        text = p.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        continue
+    for label, pattern in PATTERNS.items():
+        for m in re.finditer(pattern, text):
+            line = text.count("\n", 0, m.start()) + 1
+            print(f"  {name}:{line}  {label}  {m.group(0)[:14]}...")
+            hits += 1
+
+sys.exit(1 if hits else 0)
+'; then
+    echo "${RED}❌ Potential secret(s) staged -- commit blocked.${NC}"
+    echo "   Move the value to Secret Manager and reference it via config.py."
+    failed=1
+else
+    echo "${GREEN}✅ No secrets detected${NC}"
+fi
+
+# ─── committed env / key files ──────────────────────────────────────────────
+if echo "$staged" | grep -qE '(^|/)\.env$|(^|/)\.env\.[^e]|\.tfvars$|-key\.json$|credentials\.json$|token\.json$'; then
+    echo "${RED}❌ A .env / .tfvars / key file is staged -- commit blocked.${NC}"
+    echo "$staged" | grep -E '(^|/)\.env$|(^|/)\.env\.[^e]|\.tfvars$|-key\.json$|credentials\.json$|token\.json$' | sed 's/^/   /'
+    failed=1
+fi
+
+# ─── merge conflict markers ─────────────────────────────────────────────────
+echo "${BLUE}🔍 Checking for merge conflict markers...${NC}"
+if git diff --staged --check 2>&1 | grep -q "conflict marker"; then
+    echo "${RED}❌ Merge conflict markers found${NC}"
+    git diff --staged --check | grep "conflict marker" | sed 's/^/   /'
+    failed=1
+else
+    echo "${GREEN}✅ No merge conflict markers${NC}"
+fi
+
+# ─── JSON: a real parse, not a brace count ──────────────────────────────────
+json_files=$(echo "$staged" | grep -E '\.json$' || true)
+if [[ -n "$json_files" ]]; then
+    echo "${BLUE}📋 Validating JSON...${NC}"
+    while IFS= read -r f; do
+        [[ -f "$f" ]] || continue
+        if ! python3 -c "import json,sys; json.load(open(sys.argv[1], encoding='utf-8'))" "$f" 2>/dev/null; then
+            echo "${RED}❌ Invalid JSON: $f${NC}"
+            failed=1
+        fi
+    done <<< "$json_files"
+    [[ $failed -eq 0 ]] && echo "${GREEN}✅ JSON parses${NC}"
+fi
+
+if [[ $failed -ne 0 ]]; then
+    echo "${RED}❌ Pre-commit checks failed.${NC}"
+    exit 1
+fi
+echo "${GREEN}✅ Pre-commit checks passed${NC}"
+exit 0
