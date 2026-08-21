@@ -1,4 +1,4 @@
-"""Dev agent orchestrator — triage, implement one ticket, poll.
+"""Dev agent orchestrator — find candidates, implement one ticket, poll.
 
 **No in-process scheduler.** v5 ran an `AsyncIOScheduler` inside its own
 FastAPI service — a direct violation of the rule the rest of v6 already
@@ -96,15 +96,6 @@ async def find_sprint_candidates(settings: Settings | None = None) -> list[dict[
             continue
         eligible.append(ticket)
     return eligible
-
-
-async def triage(settings: Settings | None = None) -> dict[str, Any]:
-    """Report the eligible sprint candidates. No state change — polling claims them."""
-    candidates = await find_sprint_candidates(settings)
-    log.info(
-        "orchestrator.triage.done", eligible=len(candidates), keys=[c["key"] for c in candidates]
-    )
-    return {"eligible": len(candidates), "keys": [c["key"] for c in candidates]}
 
 
 async def _advance_state(key: str, new_state: str, set_state: Any, get_run: Any) -> None:

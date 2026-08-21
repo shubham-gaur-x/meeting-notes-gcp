@@ -23,7 +23,7 @@ Module ownership, each deliberate:
     gemini_runner.py    spawns headless `gemini`
     git_ops.py          one worktree per ticket
     github_client.py    read-only: find the PR the agent opened, fetch its diff
-    orchestrator.py     triage -> process_ticket -> poll_and_process
+    orchestrator.py     find_sprint_candidates -> process_ticket -> poll
 
 All Postgres access goes through `meeting_notes.db` — this package owns no
 SQL of its own (CLAUDE.md: one SQL-owning module).

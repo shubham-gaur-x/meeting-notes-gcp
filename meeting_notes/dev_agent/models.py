@@ -53,17 +53,6 @@ class DevAgentRun(BaseModel):
         return v
 
 
-class JiraTicket(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    key: str
-    summary: str
-    description: str = ""
-    status: str = ""
-    labels: list[str] = []
-    priority: str | None = None
-
-
 class AgentRunResult(BaseModel):
     model_config = ConfigDict(extra="ignore")
 

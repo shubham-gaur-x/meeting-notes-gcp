@@ -136,6 +136,3 @@ async def get_access_token(
     log.info("google_auth.access_token_refreshed", expires_in=payload.get("expires_in"))
     return token
 
-
-def auth_headers(access_token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {access_token}"}
