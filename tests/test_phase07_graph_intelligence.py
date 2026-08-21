@@ -1083,3 +1083,61 @@ async def test_pending_rows_are_embedded_concurrently() -> None:
         f"embeddings ran one at a time (peak in-flight={peak}); they are "
         "independent calls and must overlap"
     )
+
+
+# ─── the tracked gate applies to every per-person surface ─────────────────────
+
+
+def _person_gating_source(fn_name: str) -> str:
+    from pathlib import Path
+    source = Path("meeting_notes/graph_client.py").read_text()
+    start = source.index(f"async def {fn_name}(")
+    return source[start : start + 1600]
+
+
+def test_bridge_nodes_gate_untracked_people() -> None:
+    """CLAUDE.md names centrality explicitly: "Per-person analytics -- PageRank,
+    centrality, any leaderboard -- must filter on tracked = true".
+
+    get_bridge_nodes ranks by betweenness centrality and was naming untracked
+    individuals on the dashboard: with 0 of 33 people opted in, it still
+    returned three of them by name.
+    """
+    assert "tracked" in _person_gating_source("get_bridge_nodes"), (
+        "betweenness centrality names individuals and must honour Person.tracked"
+    )
+
+
+def test_community_members_gate_untracked_people() -> None:
+    """The workstream drill-down lists a cluster's members by name. That is
+    still naming individuals, so it takes the same gate."""
+    assert "tracked" in _person_gating_source("get_community_members"), (
+        "community membership names individuals and must honour Person.tracked"
+    )
+
+
+async def test_an_untracked_person_is_absent_from_bridges_and_communities() -> None:
+    """The behaviour, not just the source: an untracked Person must not appear."""
+    from meeting_notes import graph_client
+
+    captured: list[str] = []
+
+    class _Result:
+        def __aiter__(self): return self
+        async def __anext__(self): raise StopAsyncIteration
+
+    class _Session:
+        async def run(self, cypher, **kw):
+            captured.append(cypher)
+            return _Result()
+        async def __aenter__(self): return self
+        async def __aexit__(self, *e): return False
+
+    class _Driver:
+        def session(self): return _Session()
+
+    await graph_client.get_bridge_nodes(driver=_Driver())
+    await graph_client.get_community_members(1, driver=_Driver())
+
+    for cypher in captured:
+        assert "tracked" in cypher, f"no tracked gate in:\n{cypher}"

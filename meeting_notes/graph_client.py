@@ -674,6 +674,17 @@ async def get_influential_nodes(
 # appearing in a community tells a reader nothing about the work.
 BOOKKEEPING_LABELS = ("PersonReview", "MemorySession")
 
+# Naming an individual is opt-in (CLAUDE.md): per-person analytics -- PageRank,
+# centrality, any leaderboard -- filter on `Person.tracked`. Written once and
+# reused, because three surfaces spelling the same rule separately is how one
+# of them ends up not spelling it at all: `get_influential_nodes` had the gate
+# while `get_bridge_nodes` (betweenness -- named in the rule) and
+# `get_community_members` shipped without it, naming untracked people on the
+# dashboard.
+_UNTRACKED_PERSON_EXCLUDED = (
+    "NOT ('Person' IN labels(n) AND coalesce(n.tracked, false) <> true)"
+)
+
 
 async def get_all_communities(driver: Any = None) -> list[dict[str, Any]]:
     """Communities, each NAMED by the topics inside it.
@@ -713,9 +724,10 @@ async def get_community_members(community_id: int, driver: Any = None) -> list[d
     driver = driver or get_driver()
     async with driver.session() as session:
         result = await session.run(
-            """
+            f"""
             MATCH (n) WHERE n.community_id = $community_id
               AND NOT any(l IN labels(n) WHERE l IN $bookkeeping)
+              AND {_UNTRACKED_PERSON_EXCLUDED}
             RETURN n.id AS id,
                    COALESCE(n.name, n.title, n.task, n.text, n.summary, n.email) AS name,
                    labels(n) AS labels, n.pagerank_score AS pagerank_score
@@ -728,13 +740,18 @@ async def get_community_members(community_id: int, driver: Any = None) -> list[d
 
 
 async def get_bridge_nodes(limit: int = 10, driver: Any = None) -> list[dict[str, Any]]:
-    """Nodes connecting otherwise separate clusters, by betweenness."""
+    """Nodes connecting otherwise separate clusters, by betweenness.
+
+    Untracked people are excluded: betweenness is centrality, which CLAUDE.md
+    names directly as a per-person analytic that `Person.tracked` gates.
+    """
     driver = driver or get_driver()
     async with driver.session() as session:
         result = await session.run(
-            """
+            f"""
             MATCH (n) WHERE n.betweenness_centrality IS NOT NULL
               AND NOT any(l IN labels(n) WHERE l IN $bookkeeping)
+              AND {_UNTRACKED_PERSON_EXCLUDED}
             RETURN n.id AS id,
                    COALESCE(n.name, n.title, n.task, n.text, n.summary, n.email) AS name,
                    labels(n) AS labels,
