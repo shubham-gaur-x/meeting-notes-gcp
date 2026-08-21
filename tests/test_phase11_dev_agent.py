@@ -219,3 +219,182 @@ async def test_should_attempt_refuses_a_run_already_in_flight() -> None:
     finally:
         db.get_dev_agent_run = original  # type: ignore[assignment]
 
+
+
+# ─── guardrails.py (Task 4): one pair per gate ─────────────────────────────
+
+from meeting_notes.dev_agent import guardrails as gr  # noqa: E402
+
+
+def test_tests_green_passes_on_exit_zero() -> None:
+    assert gr.gate_tests_green(lambda: (0, "12 passed")).passed is True
+
+
+def test_tests_green_fails_on_nonzero_exit() -> None:
+    result = gr.gate_tests_green(lambda: (1, "FAILED test_x"))
+    assert result.passed is False
+    assert "FAILED" in result.evidence
+
+
+def test_lint_type_clean_passes_when_both_are_clean() -> None:
+    result = gr.gate_lint_type_clean(lambda: (0, ""), lambda: (0, ""))
+    assert result.passed is True
+
+
+def test_lint_type_clean_fails_when_ruff_is_dirty() -> None:
+    result = gr.gate_lint_type_clean(lambda: (1, "E501 line too long"), lambda: (0, ""))
+    assert result.passed is False
+    assert "ruff" in result.evidence
+
+
+def test_lint_type_clean_fails_when_mypy_is_dirty() -> None:
+    result = gr.gate_lint_type_clean(lambda: (0, ""), lambda: (1, "error: Incompatible types"))
+    assert result.passed is False
+    assert "mypy" in result.evidence
+
+
+def test_diff_budget_passes_within_limits() -> None:
+    result = gr.gate_diff_budget(["a.py", "b.py"], changed_lines=50)
+    assert result.passed is True
+
+
+def test_diff_budget_fails_over_the_file_limit() -> None:
+    files = [f"f{i}.py" for i in range(11)]
+    result = gr.gate_diff_budget(files, changed_lines=10, max_files=10)
+    assert result.passed is False
+
+
+def test_diff_budget_fails_over_the_line_limit() -> None:
+    result = gr.gate_diff_budget(["a.py"], changed_lines=601, max_lines=600)
+    assert result.passed is False
+
+
+def test_protected_paths_passes_when_clean() -> None:
+    assert gr.gate_protected_paths(["meeting_notes/db.py", "tests/test_db.py"]).passed is True
+
+
+def test_protected_paths_fails_when_touching_env() -> None:
+    result = gr.gate_protected_paths([".env"])
+    assert result.passed is False
+    assert ".env" in result.evidence
+
+
+def test_protected_paths_allows_env_example() -> None:
+    """.env.example holds no secrets -- it is the committed template."""
+    assert gr.gate_protected_paths([".env.example"]).passed is True
+
+
+def test_protected_paths_fails_on_ci_config() -> None:
+    assert gr.gate_protected_paths([".github/workflows/ci.yml"]).passed is False
+
+
+def test_protected_paths_fails_on_key_material() -> None:
+    assert gr.gate_protected_paths(["deploy/id_rsa"]).passed is False
+
+
+def test_protected_paths_fails_on_paths_escaping_the_repo() -> None:
+    assert gr.gate_protected_paths(["../../etc/passwd"]).passed is False
+    assert gr.gate_protected_paths(["/etc/passwd"]).passed is False
+
+
+def test_no_new_deps_passes_when_untouched() -> None:
+    assert gr.gate_no_new_deps(["meeting_notes/db.py"], "").passed is True
+
+
+def test_no_new_deps_fails_without_the_opt_in_token() -> None:
+    result = gr.gate_no_new_deps(["pyproject.toml"], "just implement the feature")
+    assert result.passed is False
+
+
+def test_no_new_deps_passes_with_opt_in_and_pinned_version() -> None:
+    result = gr.gate_no_new_deps(
+        ["pyproject.toml"], "allow-new-dependency: add httpx-caching==1.0.0",
+        added_dep_lines=["httpx-caching==1.0.0"],
+    )
+    assert result.passed is True
+
+
+def test_no_new_deps_fails_with_opt_in_but_unpinned() -> None:
+    result = gr.gate_no_new_deps(
+        ["pyproject.toml"], "allow-new-dependency: add httpx-caching",
+        added_dep_lines=["httpx-caching"],
+    )
+    assert result.passed is False
+
+
+def test_secret_scan_passes_on_clean_lines() -> None:
+    assert gr.gate_secret_scan(["x = 1", "def foo(): pass"]).passed is True
+
+
+def test_secret_scan_catches_an_anthropic_style_key() -> None:
+    result = gr.gate_secret_scan(["API_KEY = 'sk-ant-abc123def456ghi789'"])
+    assert result.passed is False
+
+
+def test_secret_scan_catches_a_github_token() -> None:
+    assert gr.gate_secret_scan(["token = ghp_abcdefghijklmnopqrstuvwxyz1234"]).passed is False
+
+
+def test_secret_scan_catches_a_private_key_header() -> None:
+    assert gr.gate_secret_scan(["-----BEGIN RSA PRIVATE KEY-----"]).passed is False
+
+
+def test_module_boundaries_passes_for_sql_inside_db_py() -> None:
+    result = gr.gate_module_boundaries({"meeting_notes/db.py": 'x = "SELECT * FROM t"'})
+    assert result.passed is True
+
+
+def test_module_boundaries_fails_for_sql_outside_db_py() -> None:
+    """CLAUDE.md: DO NOT put SQL outside meeting_notes/db.py."""
+    result = gr.gate_module_boundaries(
+        {"meeting_notes/pipeline.py": 'x = "SELECT * FROM staged_records"'}
+    )
+    assert result.passed is False
+    assert "sql" in result.evidence
+
+
+def test_module_boundaries_fails_for_cypher_outside_graph_client() -> None:
+    """CLAUDE.md: generic Cypher lives only in graph_client.py."""
+    result = gr.gate_module_boundaries(
+        {"meeting_notes/dev_agent/orchestrator.py": 'q = "MERGE (t:Ticket {id: $id})"'}
+    )
+    assert result.passed is False
+    assert "cypher" in result.evidence
+
+
+def test_module_boundaries_fails_for_a_mage_call_outside_graph_algorithms() -> None:
+    """CLAUDE.md: MAGE CALL procedures live only in graph_algorithms.py."""
+    result = gr.gate_module_boundaries(
+        {"meeting_notes/memory/vector.py": 'q = "CALL vector_search.search(1)"'}
+    )
+    assert result.passed is False
+    assert "mage-call" in result.evidence
+
+
+def test_module_boundaries_ignores_ordinary_identifiers() -> None:
+    """A variable literally named `merge` must not trip the Cypher check."""
+    result = gr.gate_module_boundaries({"meeting_notes/utils.py": "def merge(a, b): return a"})
+    assert result.passed is True
+
+
+def test_module_boundaries_falls_back_to_raw_source_on_a_syntax_error() -> None:
+    """A partial agent edit may not parse. Over-flagging is the safe direction."""
+    result = gr.gate_module_boundaries(
+        {"meeting_notes/pipeline.py": "def broken(:\n    SELECT * FROM t"}
+    )
+    assert result.passed is False
+
+
+def test_all_passed_requires_every_gate() -> None:
+    ok = [gr.GateResult(name="a", passed=True, evidence="")]
+    mixed = [gr.GateResult(name="a", passed=True, evidence=""),
+             gr.GateResult(name="b", passed=False, evidence="")]
+    assert gr.all_passed(ok) is True
+    assert gr.all_passed(mixed) is False
+
+
+def test_failed_gates_returns_only_the_failures() -> None:
+    mixed = [gr.GateResult(name="a", passed=True, evidence=""),
+             gr.GateResult(name="b", passed=False, evidence="boom")]
+    failed = gr.failed_gates(mixed)
+    assert len(failed) == 1 and failed[0].name == "b"
