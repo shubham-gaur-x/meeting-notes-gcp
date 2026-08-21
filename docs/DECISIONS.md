@@ -835,6 +835,64 @@ escalated *every* PR for a reason that had nothing to do with the code.
 
 ---
 
+## ADR-023 — Blockers are extracted, and the `Raw*` models are removed
+
+**Date:** 2026-08-21 · **Status:** Accepted
+
+**Context.** Two findings from the same audit, both the same shape: a contract
+documented and half-built, with nothing behind it.
+
+*Blockers.* `Blocker` and `RAISES_BLOCKER` were in the schema. `get_open_blockers`
+read them. The dashboard had a panel for them. `graph_client.merge_blocker` could
+write one. But `ExtractedMeeting` had no `blockers` field and no prompt ever asked
+for one, so nothing could produce a blocker — confirmed live: **0 Blocker nodes
+against 95 meetings**. The review queue's blockers panel could only ever be empty.
+
+*The `Raw*` models.* `models.py` stated that "each per-source adapter parses a
+`StagedRecord.payload` into the matching model below". No adapter did, and none
+could: those models describe the columns of the per-source **tables ADR-018
+removed** (`id`, `source_id`, `processed`), not a payload. Checked against live
+data, `RawEmail.model_validate` rejects a real email payload for five missing
+required fields. The one test covering them fed a hand-written v5 *table row*
+and passed, which is why the claim survived.
+
+**Decision.**
+
+1. `ExtractedMeeting.blockers: list[Blocker]`, requested in the extraction prompt,
+   with the same bare-string leniency `decisions` already needs.
+2. Blockers are written **inside `upsert_meeting_graph`'s existing transaction**,
+   beside decisions. `merge_blocker` is deleted: it opened its own session, which
+   would have made the blocker a sequential separate driver call (forbidden by
+   CLAUDE.md), and keeping a second writer invites exactly the id-derivation drift
+   CLAUDE.md warns about.
+3. The four `Raw*` models are deleted along with the false claim. The adapters read
+   the payload directly and tolerate a missing field, which is the same
+   degrade-don't-fail rule the enrichment layers follow. The vacuous test is
+   replaced by one that runs every adapter over **real staged payload shapes**.
+
+**Consequences.** The extraction prompt changed, so every recorded `fake` fixture
+was re-keyed — that is ADR-014 working as designed, and `make record-fixtures`
+regenerated all three. The prompt-drift guard was loosened from "byte-identical to
+v5" to "every v5 line survives verbatim, and additions must be declared", so a
+reword still fails while a deliberate schema extension does not.
+
+The 95 meetings already in the graph have no blockers and will not until they are
+re-extracted — a full LLM pass over the corpus, deliberately **not** run as part of
+this change.
+
+There is now no validation of a staged payload anywhere. That is the honest state:
+there never was, despite the docstring. Adding it means writing models against the
+real payload shape as a deliberate feature, not resurrecting v5's table definitions.
+
+**Rejected:**
+
+- *Wire the `Raw*` models as they are.* They reject every real payload; this would
+  have failed 100% of records.
+- *Keep `merge_blocker` for ad-hoc use.* An uncalled second writer of the same node
+  is how writer/reader id drift starts.
+
+---
+
 ## Template
 
 ```

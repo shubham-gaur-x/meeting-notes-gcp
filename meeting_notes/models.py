@@ -54,6 +54,21 @@ class Decision(BaseModel):
     confidence: float = 1.0
 
 
+class Blocker(BaseModel):
+    """Something stopping progress, raised in a meeting.
+
+    Stored as `Blocker` + `Meeting-[:RAISES_BLOCKER]->Blocker` and surfaced in
+    the review queue. `status` lives on the node (default `open`), not here —
+    the extraction only reports that a blocker was raised, never that it was
+    resolved.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    text: str
+    raised_by: str | None = None
+
+
 class ExtractedMeeting(BaseModel):
     """What the LLM returns for one meeting.
 
@@ -77,6 +92,7 @@ class ExtractedMeeting(BaseModel):
     summary: str
     topics: list[str] = []
     decisions: list[Decision] = []
+    blockers: list[Blocker] = []
     action_items: list[ActionItem] = []
     key_quotes: list[str] = []
     links: list[str] = []
@@ -96,77 +112,27 @@ class ExtractedMeeting(BaseModel):
             return v
         return [{"text": item, "confidence": 1.0} if isinstance(item, str) else item for item in v]
 
-
-# ─── adapter parse targets ────────────────────────────────────────────────────
-# These are no longer tables (ADR-018). Each per-source adapter parses a
-# StagedRecord.payload into the matching model below, so validation stays
-# exactly as strict as v5's while staging keeps a single table.
-
-
-class RawEmail(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    id: str
-    source_id: str
-    subject: str
-    from_email: str
-    to_emails: list[str]
-    body: str
-    received_at: str
-    processed: bool = False
-
-
-class RawCalendarEvent(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    id: str
-    source_id: str
-    title: str
-    description: str | None = None
-    start_time: str
-    end_time: str
-    attendees_json: str | None = None
-    processed: bool = False
-
-
-class RawMeetTranscript(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    id: str
-    source_id: str
-    title: str = ""
-    transcript_text: str = ""
-    conference_record: str | None = None
-    start_time: str | None = None
-    attendees_json: str | None = None
-    calendar_description: str | None = None  # fallback context only
-    processed: bool = False
-
-
-class RawJiraIssue(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    id: str
-    source_id: str
-    key: str
-    summary: str
-    status: str
-    assignee: str | None = None
-    priority: str | None = None
-    jira_created_at: str | None = None
-    jira_updated_at: str | None = None
-    processed: bool = False
-
-
-# ─── staging (ADR-018) ────────────────────────────────────────────────────────
+    @field_validator("blockers", mode="before")
+    @classmethod
+    def _coerce_blockers(cls, v: Any) -> Any:
+        """Same leniency `decisions` needs: a bare string becomes {"text": ...}."""
+        if not isinstance(v, list):
+            return v
+        return [{"text": item} if isinstance(item, str) else item for item in v]
 
 
 class StagedRecord(BaseModel):
     """One staged row from any source.
 
-    `payload` is opaque here on purpose: a per-source adapter parses it into
-    the matching typed model above, so validation stays as strict as v5's
-    while staging keeps a single table, a single SKIP LOCKED claiming query
+    `payload` is deliberately an opaque dict, and there is deliberately no
+    typed model per source. v5's `RawEmail`/`RawCalendarEvent`/… described the
+    columns of the per-source *tables* ADR-018 removed (`id`, `source_id`,
+    `processed`); they never matched a payload and could not validate one.
+    The per-source adapters in `pipeline.py` read the payload directly and
+    tolerate a missing field rather than rejecting the record — the same
+    degrade-don't-fail rule the enrichment layers follow.
+
+    Staging keeps a single table, a single SKIP LOCKED claiming query
     (ADR-006), and a single drain path (ADR-010).
     """
 

@@ -1,0 +1,77 @@
+{
+  "action_items": [
+    {
+      "confidence": 0.95,
+      "done": false,
+      "due": "2026-09-05",
+      "is_engineering_task": false,
+      "owner": "Tom Beckett",
+      "priority": "high",
+      "task": "Create and deliver written migration plan"
+    },
+    {
+      "confidence": 0.95,
+      "done": false,
+      "due": "2026-08-29",
+      "is_engineering_task": false,
+      "owner": "Priya Raman",
+      "priority": "high",
+      "task": "Spec the dual-write rollback approach"
+    }
+  ],
+  "attendees": [
+    {
+      "email": "sofia.alvarez@northwind.example",
+      "name": "Sofia Alvarez",
+      "role": "organizer"
+    },
+    {
+      "email": "tom.beckett@northwind.example",
+      "name": "Tom Beckett",
+      "role": "attendee"
+    },
+    {
+      "email": "priya.raman@northwind.example",
+      "name": "Priya Raman",
+      "role": "attendee"
+    }
+  ],
+  "blockers": [],
+  "confidence": 0.95,
+  "date": "2026-08-19",
+  "decisions": [
+    {
+      "confidence": 0.95,
+      "text": "Target Q4 for the migration with a Q1 buffer."
+    },
+    {
+      "confidence": 0.95,
+      "text": "Use a dual-write period rather than a hard cutover for the rollback approach."
+    },
+    {
+      "confidence": 0.95,
+      "text": "Do not hire a contractor for the migration project."
+    }
+  ],
+  "duration_minutes": 60,
+  "end_time": null,
+  "follow_up_needed": true,
+  "key_quotes": [
+    "Then we're deciding to target Q4 with a Q1 buffer. I want that written down.",
+    "Decision: we do a dual-write period rather than a hard cutover.",
+    "We are not hiring a contractor for this. We tried that last year and onboarding ate the savings."
+  ],
+  "kind": "meeting",
+  "links": [],
+  "location": null,
+  "platform": "Zoom",
+  "sentiment": "neutral",
+  "start_time": null,
+  "summary": "The team aligned on the timeline and strategy for the upcoming migration during Q4 planning. They agreed to target a Q4 release with a Q1 buffer and utilize a dual-write period instead of a hard cutover. Additionally, the team decided against hiring external contractors for the project.",
+  "title": "Q4 Planning",
+  "topics": [
+    "Migration timeline and estimates",
+    "Rollback strategy",
+    "Staffing and contractor hiring"
+  ]
+}

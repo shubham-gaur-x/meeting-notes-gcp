@@ -41,7 +41,6 @@ from meeting_notes.models import (
     Attendee,
     Decision,
     ExtractedMeeting,
-    RawEmail,
     StagedRecord,
 )
 from meeting_notes.person_resolver import (
@@ -193,27 +192,51 @@ def test_staged_record_rejects_an_unknown_source_type() -> None:
         )
 
 
-def test_raw_models_survive_as_adapter_parse_targets() -> None:
-    """ADR-018 is a storage change, not a loss of typing. The typed models
-    still validate a payload as strictly as v5 did."""
-    email = RawEmail.model_validate(
-        {
-            "id": "1",
-            "source_id": "abc",
-            "subject": "s",
-            "from_email": "a@b.c",
-            "to_emails": ["d@e.f"],
-            "body": "b",
-            "received_at": "2026-08-20T00:00:00Z",
-        }
-    )
-    assert email.subject == "s"
+def test_every_adapter_handles_the_real_staged_payload_shape() -> None:
+    """The shapes below are copied from live `staged_records.payload` rows.
 
+    Replaces a pair of tests that validated hand-written v5 *table row* dicts
+    against `RawEmail`/`RawCalendarEvent` and claimed that proved payload
+    typing. It did not: those models required `id`/`source_id`/`from_email`/
+    `to_emails`/`received_at`, none of which a real payload carries, so a real
+    payload was rejected outright while the synthetic one passed. ADR-018
+    removed the per-source tables those models described.
+    """
+    from meeting_notes.pipeline import adapter_for
 
-def test_raw_models_no_longer_carry_source_table() -> None:
-    """StagedRecord.source_type is the discriminator now. A lingering
-    source_table field would be a second source of truth."""
-    assert "source_table" not in RawEmail.model_fields
+    real = {
+        "email": {
+            "subject": "Re: kickoff", "body": "let us meet", "from": "a@b.c",
+            "to": ["d@e.f"], "cc": [], "date": "2026-05-13T12:30:00-07:00",
+            "thread_id": "t1",
+        },
+        "calendar": {
+            "summary": "Kickoff", "description": "agenda",
+            "start": "2026-05-13T12:30:00-07:00", "end": "2026-05-13T13:00:00-07:00",
+            "attendees": [{"name": "N", "email": "n@o.com", "organizer": False}],
+            "organizer": "n@o.com", "location": "", "hangout_link": "",
+        },
+        "meet": {
+            "title": "Kickoff", "text": "we discussed the plan",
+            "start_time": "2026-05-13T12:30:00-07:00",
+        },
+    }
+
+    for source_type, payload in real.items():
+        adapter = adapter_for(source_type)
+        assert adapter.text(payload).strip(), f"{source_type}: no text extracted"
+        adapter.classify_metadata(payload)
+        adapter.router_hint(payload)
+        context = adapter.extract_context(payload)
+        assert context["platform"], f"{source_type}: no platform"
+
+    # The date override is the part most easily broken by a shape change:
+    # `start` arrives already normalised to an ISO string by the connector,
+    # and slicing a dict here would silently yield no date at all.
+    assert adapter_for("calendar").extract_overrides(real["calendar"]) == {
+        "date": "2026-05-13"
+    }
+    assert adapter_for("meet").extract_overrides(real["meet"]) == {"date": "2026-05-13"}
 
 
 def test_airbyte_webhook_payload_is_gone() -> None:
@@ -795,3 +818,37 @@ def test_an_email_still_beats_a_first_name_match() -> None:
         Attendee(name="Matteo", email="someone.else@corp.com"), Roster([]), known_people=_known()
     )
     assert result.email == "someone.else@corp.com"
+
+
+# ─── blockers (the writer had no source of data) ───────────────────────────────
+
+
+def test_extracted_meeting_carries_blockers() -> None:
+    """`Blocker` + `RAISES_BLOCKER` are in the schema, `get_open_blockers`
+    reads them and the dashboard has a panel for them -- but nothing ever
+    produced one. Confirmed live: 0 Blocker nodes against 95 meetings, so the
+    panel could only ever be empty."""
+    from meeting_notes.models import ExtractedMeeting
+
+    assert "blockers" in ExtractedMeeting.model_fields
+
+
+def test_blockers_accept_a_bare_string_like_decisions_do() -> None:
+    """Same load-bearing leniency decisions already need: real extractions
+    return a plain string where the schema asks for an object."""
+    from meeting_notes.models import ExtractedMeeting
+
+    meeting = ExtractedMeeting.model_validate({
+        "title": "t", "kind": "meeting", "platform": "p", "date": "2026-05-13",
+        "summary": "s", "blockers": ["waiting on the SOW", {"text": "no access", "raised_by": "a@b.c"}],
+    })
+    assert [b.text for b in meeting.blockers] == ["waiting on the SOW", "no access"]
+    assert meeting.blockers[1].raised_by == "a@b.c"
+
+
+def test_the_extraction_prompt_asks_for_blockers() -> None:
+    """A field on the model that the prompt never requests stays empty
+    forever -- which is exactly how the graph ended up with zero of them."""
+    from meeting_notes.prompts import EXTRACTION_SYSTEM_PROMPT
+
+    assert '"blockers"' in EXTRACTION_SYSTEM_PROMPT

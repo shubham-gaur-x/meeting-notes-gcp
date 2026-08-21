@@ -29,6 +29,7 @@ You MUST output ONLY valid JSON matching exactly this schema — no markdown, no
   "summary": "string — 2-3 sentence summary",
   "topics": ["list of topic strings discussed"],
   "decisions": [{"text": "decision made", "confidence": 0.0 to 1.0}],
+  "blockers": [{"text": "what is blocking progress", "raised_by": "person name or email, or null"}],
   "action_items": [
     {
       "owner": "person name or email",
@@ -46,6 +47,8 @@ You MUST output ONLY valid JSON matching exactly this schema — no markdown, no
   "follow_up_needed": true|false,
   "confidence": 0.0 to 1.0
 }
+
+A blocker is something explicitly stated as stopping or delaying work — a missing approval, an unavailable person, a dependency that is not ready. Do not record a general risk, concern, or open question as a blocker.
 
 is_engineering_task is true only if completing this requires writing or changing code — not for scheduling, communication, or non-technical follow-ups.
 

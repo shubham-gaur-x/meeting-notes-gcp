@@ -380,11 +380,21 @@ from meeting_notes.extractor import (  # noqa: E402
 V5_EXTRACTOR = Path.home() / "Desktop/airbyte-lm-studio-memgraph/transform_service/extractor.py"
 
 
-def test_the_system_prompt_is_v5s_verbatim() -> None:
+# Deliberate, documented additions to v5's tuned prompt. Anything else
+# appearing here is drift and fails the test below.
+_ALLOWED_PROMPT_ADDITIONS = (
+    '"blockers"',       # the Blocker field v5 never extracted -- see ADR-023
+    "A blocker is something explicitly stated",
+)
+
+
+def test_every_line_of_v5s_tuned_prompt_survives_verbatim() -> None:
     """It is tuned. Diffing it against v5's file is the entire point.
 
-    A well-meaning reword should fail here rather than quietly degrade every
-    extraction in a way nobody notices until the graph looks wrong.
+    A well-meaning reword must fail here rather than quietly degrade every
+    extraction in a way nobody notices until the graph looks wrong. Additions
+    are allowed but must be declared in `_ALLOWED_PROMPT_ADDITIONS`, so
+    extending the schema stays a deliberate act and rewording does not.
     """
     if not V5_EXTRACTOR.exists():
         pytest.skip("v5 reference repo not present on this machine")
@@ -393,7 +403,17 @@ def test_the_system_prompt_is_v5s_verbatim() -> None:
 
     match = re.search(r'_SYSTEM_PROMPT = """(.*?)"""', V5_EXTRACTOR.read_text(), re.S)
     assert match, "could not locate v5's _SYSTEM_PROMPT"
-    assert _SYSTEM_PROMPT == match.group(1), "the prompt has drifted from v5's"
+
+    ours = _SYSTEM_PROMPT.splitlines()
+    dropped = [line for line in match.group(1).splitlines() if line not in ours]
+    assert not dropped, f"v5 prompt lines were reworded or lost: {dropped}"
+
+    added = [line for line in ours if line not in match.group(1).splitlines()]
+    undeclared = [
+        line for line in added
+        if not any(token in line for token in _ALLOWED_PROMPT_ADDITIONS)
+    ]
+    assert not undeclared, f"undeclared prompt additions: {undeclared}"
 
 
 def test_prompt_still_states_the_is_engineering_task_rule() -> None:

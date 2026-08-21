@@ -1,0 +1,71 @@
+{
+  "action_items": [
+    {
+      "confidence": 0.95,
+      "done": false,
+      "due": null,
+      "is_engineering_task": false,
+      "owner": "Sofia Alvarez",
+      "priority": "high",
+      "task": "Inform the executive team that the launch date is at risk"
+    },
+    {
+      "confidence": 0.95,
+      "done": false,
+      "due": null,
+      "is_engineering_task": false,
+      "owner": "Anita Desai",
+      "priority": "medium",
+      "task": "Share vendor redlines with the team once received"
+    }
+  ],
+  "attendees": [
+    {
+      "email": "anita.desai@northwind.example",
+      "name": "Anita Desai",
+      "role": "organizer"
+    },
+    {
+      "email": "sofia.alvarez@northwind.example",
+      "name": "Sofia Alvarez",
+      "role": "attendee"
+    },
+    {
+      "email": "legal@northwind.example",
+      "name": "Legal",
+      "role": "attendee"
+    }
+  ],
+  "blockers": [
+    {
+      "raised_by": "Anita Desai",
+      "text": "Pending vendor redlines on DPA regarding sub-processor notification window and data residency clause"
+    }
+  ],
+  "confidence": 0.95,
+  "date": "2026-08-17",
+  "decisions": [],
+  "duration_minutes": null,
+  "end_time": null,
+  "follow_up_needed": true,
+  "key_quotes": [
+    "Legal flagged two items in the DPA: sub-processor notification is 14 days and we asked for 30, and there's no explicit data residency clause.",
+    "If not, I'd rather delay a week than launch on an unreviewed DPA.",
+    "Can you let the exec team know the date is at risk?"
+  ],
+  "kind": "email_thread",
+  "links": [],
+  "location": null,
+  "platform": "Email",
+  "sentiment": "mixed",
+  "start_time": null,
+  "summary": "Anita addressed concerns regarding whether the vendor security review will delay the upcoming launch. Legal identified two DPA issues regarding sub-processor notification timelines and data residency clauses. Anita requested vendor redlines and asked Sofia to inform the executive team that the launch date is at risk.",
+  "title": "Vendor security review \u2014 blocking launch?",
+  "topics": [
+    "Vendor security review",
+    "DPA redlines",
+    "Launch timeline risk",
+    "Data residency clause",
+    "Sub-processor notification window"
+  ]
+}

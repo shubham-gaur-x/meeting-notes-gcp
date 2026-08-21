@@ -459,3 +459,39 @@ def test_statements_are_individually_runnable() -> None:
 
     for s in statements(embedding_dimension=768):
         assert ";" not in s, f"statement contains a semicolon: {s[:60]}"
+
+
+async def test_blockers_are_written_inside_the_same_transaction() -> None:
+    """The Blocker writer that existed (`merge_blocker`) opened its OWN session,
+    which would have made the blocker a sequential separate driver call —
+    exactly what CLAUDE.md forbids — and nothing called it anyway. Blockers
+    belong in the meeting's one transaction, beside decisions."""
+    from meeting_notes import graph_client
+
+    tx = FakeTx()
+    await graph_client.upsert_meeting_graph(
+        _meeting(blockers=[{"text": "waiting on the SOW", "raised_by": "a@b.c"}]),
+        "src-1",
+        driver=FakeDriver(tx),
+        known_people=[],
+    )
+
+    cypher = tx.cypher()
+    assert "Blocker" in cypher, "no Blocker node written"
+    assert "RAISES_BLOCKER" in cypher, "the blocker is not linked to the meeting"
+    assert "MERGE (b:Blocker" in cypher, "unique nodes are MERGEd, never CREATEd"
+    assert tx.committed
+
+    written = [p for c, p in tx.calls if "Blocker" in c]
+    assert written and written[0]["text"] == "waiting on the SOW"
+    assert written[0]["raised_by"] == "a@b.c"
+
+
+async def test_a_meeting_with_no_blockers_writes_none() -> None:
+    from meeting_notes import graph_client
+
+    tx = FakeTx()
+    await graph_client.upsert_meeting_graph(
+        _meeting(), "src-2", driver=FakeDriver(tx), known_people=[]
+    )
+    assert "Blocker" not in tx.cypher()

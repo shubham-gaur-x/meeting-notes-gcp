@@ -236,13 +236,13 @@ async def process_ticket(
             await record_session_memory(
                 detail, outcome="failed", error=reason, raw_notes=result.result_text or ""
             )
-            # No graph Blocker write here: graph_client.merge_blocker is scoped
-            # to a Meeting (CLAUDE.md's schema: Meeting-[:RAISES_BLOCKER]->Blocker),
-            # and a dev-agent failure has no meeting behind it. The failure reason
-            # is already captured in the Jira comment above and in session_memory,
-            # which is what a retry actually reads from -- inventing a fake
-            # meeting_id to force-fit the existing writer would misrepresent
-            # the data rather than add a real capability.
+            # No graph Blocker write here: a Blocker hangs off a Meeting
+            # (CLAUDE.md's schema: Meeting-[:RAISES_BLOCKER]->Blocker) and is
+            # written inside that meeting's transaction from the extraction. A
+            # dev-agent failure has no meeting behind it. The failure reason is
+            # already in the Jira comment above and in session_memory, which is
+            # what a retry actually reads from -- inventing a meeting_id to
+            # force-fit the schema would misrepresent the data.
             await _advance_state(key, lc.FAILED, set_state, get_run)
             await transition_issue(key, "To Do", settings=settings)
             return

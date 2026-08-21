@@ -257,6 +257,24 @@ async def upsert_meeting_graph(
                     now=now,
                 )
 
+            for i, blocker in enumerate(meeting.blockers):
+                await tx.run(
+                    """
+                    MERGE (b:Blocker {id: $id})
+                    ON CREATE SET b.created_at = $now, b.status = 'open'
+                    SET b.text = $text, b.raised_by = $raised_by, b.updated_at = $now
+
+                    WITH b
+                    MATCH (m:Meeting {id: $meeting_id})
+                    MERGE (m)-[:RAISES_BLOCKER]->(b)
+                    """,
+                    id=uuid5_id("blocker", f"{source_id}:{i}"),
+                    text=blocker.text,
+                    raised_by=blocker.raised_by,
+                    meeting_id=meeting_id,
+                    now=now,
+                )
+
             for i, action in enumerate(meeting.action_items):
                 await tx.run(
                     """
@@ -415,32 +433,6 @@ async def update_action_jira_status(
         )
         summary = await result.consume()
         return bool(summary.counters.properties_set)
-
-
-async def merge_blocker(
-    meeting_id: str, text: str, raised_by: str | None = None, driver: Any | None = None
-) -> str:
-    """A blocker raised in a meeting. Deterministic id so re-processing MERGEs."""
-    driver = driver or get_driver()
-    blocker_id = uuid5_id("blocker", f"{meeting_id}:{text}")
-    now = datetime.now(UTC).isoformat()
-    async with driver.session() as session:
-        await session.run(
-            """
-            MERGE (b:Blocker {id: $id})
-            ON CREATE SET b.created_at = $now, b.status = 'open'
-            SET b.text = $text, b.raised_by = $raised_by, b.updated_at = $now
-            WITH b
-            MATCH (m:Meeting {id: $meeting_id})
-            MERGE (m)-[:RAISES_BLOCKER]->(b)
-            """,
-            id=blocker_id,
-            text=text,
-            raised_by=raised_by,
-            meeting_id=meeting_id,
-            now=now,
-        )
-    return blocker_id
 
 
 # ─── read/query functions (deferred here from Phase 3) ────────────────────────
