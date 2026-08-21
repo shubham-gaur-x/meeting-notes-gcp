@@ -98,7 +98,7 @@
   <section class="panel active" id="overview">
     <div class="row">
       <button class="action" onclick="loadOverview()">Refresh</button>
-      <span class="muted">Everything from the last 7 days</span>
+      <span class="muted">Counters below cover the last 7 days</span>
     </div>
     <div class="cards" id="cards"></div>
     <div id="overview-body"></div>
@@ -219,12 +219,13 @@ async function loadOverview() {
     const show = (hi.length ? hi : open).slice(0, 6);
 
     $("#overview-body").innerHTML =
-      `<h3>What was decided</h3>` +
+      `<h3>Latest decisions</h3>` +
+      `<div class="muted" style="font-size:12px;margin:-6px 0 8px">The most recent decisions, not limited to the 7 days above.</div>` +
       ((dec.decisions && dec.decisions.length)
         ? dec.decisions.map(x =>
             `<div class="quote">${esc(x.text)}<div class="muted" style="font-size:12px">` +
             `${esc(x.date)} · ${esc(x.meeting_title)}</div></div>`).join("")
-        : empty("No decisions captured in this period.")) +
+        : empty("No decisions captured yet.")) +
       `<h3>${hi.length ? "Needs attention" : "Open commitments"}</h3>` +
       `<div class="scroll">` +
       table(show, [

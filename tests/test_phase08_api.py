@@ -749,3 +749,27 @@ async def test_quality_ranked_endpoint_returns_scored_meetings(app: Any, monkeyp
     body = response.json()
     assert body["count"] == 1
     assert body["meetings"][0]["quality_score"] == 0.75
+
+
+def test_the_overview_does_not_claim_a_period_it_does_not_filter_on() -> None:
+    """The counters come from /graph/digest/weekly (7-day scoped); the decisions
+    list comes from /graph/decisions (latest N, any date).
+
+    Both sat under one "Everything from the last 7 days" banner, so the panel
+    read "3 DECISIONS" with six decisions listed directly beneath it, two of
+    them older than the window. The empty state said "in this period" for a
+    list that was never filtered by period.
+    """
+    from pathlib import Path
+
+    import api
+
+    html = (Path(api.__file__).parent / "static" / "dashboard.html").read_text()
+    assert "Everything from the last 7 days" not in html, (
+        "a blanket period label over unscoped content"
+    )
+    assert "Counters below cover the last 7 days" in html
+    assert "not limited to the 7 days above" in html, (
+        "the decisions list must say it is not period-scoped"
+    )
+    assert "in this period" not in html, "the empty state claimed a filter that is not applied"
