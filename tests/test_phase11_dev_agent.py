@@ -478,3 +478,140 @@ async def test_verify_pr_respects_a_custom_threshold() -> None:
     )
     assert low_bar.passed is True
     assert high_bar.passed is False
+
+
+# ─── backend.py (Task 6): coding-model routing, NOT llm_client ─────────────
+
+from meeting_notes.dev_agent import backend as dab  # noqa: E402
+
+
+def _settings(**over):
+    from meeting_notes.config import Settings
+
+    return Settings(_env_file=None, **over)
+
+
+def test_select_backend_reads_dev_agent_llm_backend() -> None:
+    for name in ("local", "vertex", "claude"):
+        assert dab.select_backend(_settings(DEV_AGENT_LLM_BACKEND=name)) == name
+
+
+def test_select_backend_defaults_to_local() -> None:
+    assert dab.select_backend(_settings()) == "local"
+
+
+def test_select_backend_rejects_an_unknown_value() -> None:
+    with pytest.raises(ValueError, match="Invalid"):
+        dab.select_backend(_settings(DEV_AGENT_LLM_BACKEND="groq"))
+
+
+def test_local_backend_empties_the_anthropic_api_key() -> None:
+    """A real key sitting in the parent environment must never let a local
+    run route to api.anthropic.com."""
+    env = dab.resolve_backend_env("local", _settings())
+    assert env["ANTHROPIC_API_KEY"] == ""
+
+
+def test_local_backend_pins_both_the_main_and_small_fast_model() -> None:
+    """LM Studio's JIT loader evicts the loaded coder model and reloads at a
+    default 8192 context if Claude Code requests an unknown background model
+    id -- v5's original blocker, reproduced live. Pinning both avoids it."""
+    env = dab.resolve_backend_env("local", _settings(DEV_AGENT_LM_MODEL="qwen-coder-7b"))
+    assert env["ANTHROPIC_MODEL"] == "qwen-coder-7b"
+    assert env["ANTHROPIC_SMALL_FAST_MODEL"] == "qwen-coder-7b"
+
+
+def test_vertex_backend_sets_the_use_vertex_flag_and_no_api_key() -> None:
+    """ADR-020's actual fix: authentication is Application Default
+    Credentials, the same path llm_client.py already proved. No key at all."""
+    env = dab.resolve_backend_env(
+        "vertex", _settings(GCP_PROJECT_ID="my-proj", VERTEX_LOCATION="us-east4")
+    )
+    assert env["CLAUDE_CODE_USE_VERTEX"] == "1"
+    assert env["ANTHROPIC_VERTEX_PROJECT_ID"] == "my-proj"
+    assert env["CLOUD_ML_REGION"] == "us-east4"
+    assert env["ANTHROPIC_API_KEY"] == ""
+
+
+def test_claude_backend_sets_the_real_key_and_routes_to_anthropic() -> None:
+    env = dab.resolve_backend_env(
+        "claude", _settings(DEV_AGENT_ANTHROPIC_API_KEY="sk-ant-leakcanary")
+    )
+    assert env["ANTHROPIC_API_KEY"] == "sk-ant-leakcanary"
+    assert env["ANTHROPIC_BASE_URL"] == "https://api.anthropic.com"
+
+
+def test_resolve_backend_env_covers_all_valid_backends() -> None:
+    """v5 stated this as a discipline explicitly; assert it directly rather
+    than trusting the three tests above happen to cover everything."""
+    for name in dab.VALID_BACKENDS:
+        env = dab.resolve_backend_env(name, _settings(GCP_PROJECT_ID="p"))
+        assert "ANTHROPIC_API_KEY" in env
+
+
+def test_model_for_run_reads_the_matching_setting_per_backend() -> None:
+    s = _settings(
+        DEV_AGENT_LM_MODEL="local-model", DEV_AGENT_VERTEX_MODEL="claude-vertex-model",
+        DEV_AGENT_CLAUDE_MODEL="claude-direct-model",
+    )
+    assert dab.model_for_run("local", s) == "local-model"
+    assert dab.model_for_run("vertex", s) == "claude-vertex-model"
+    assert dab.model_for_run("claude", s) == "claude-direct-model"
+
+
+def test_select_loaded_model_requires_the_minimum_context() -> None:
+    models = [{"state": "loaded", "type": "llm", "id": "m1", "loaded_context_length": 8192}]
+    ok, detail = dab.select_loaded_model(models, min_context=32768)
+    assert ok is False
+    assert "8192" in detail
+
+
+def test_select_loaded_model_ignores_embedding_models() -> None:
+    models = [{"state": "loaded", "type": "embeddings", "id": "e1", "loaded_context_length": 99999}]
+    ok, _ = dab.select_loaded_model(models, min_context=1000)
+    assert ok is False
+
+
+def test_select_loaded_model_picks_the_best_of_several() -> None:
+    models = [
+        {"state": "loaded", "type": "llm", "id": "small", "loaded_context_length": 4096},
+        {"state": "loaded", "type": "llm", "id": "big", "loaded_context_length": 32768},
+    ]
+    ok, detail = dab.select_loaded_model(models, min_context=16384)
+    assert ok is True
+    assert "big" in detail
+
+
+async def test_preflight_vertex_fails_without_a_project_id() -> None:
+    with pytest.raises(dab.PreflightError, match="GCP_PROJECT_ID"):
+        dab.preflight_vertex(_settings(GCP_PROJECT_ID=""))
+
+
+async def test_preflight_vertex_passes_with_a_project_id() -> None:
+    detail = dab.preflight_vertex(_settings(GCP_PROJECT_ID="my-proj"))
+    assert "my-proj" in detail
+
+
+async def test_preflight_claude_fails_without_a_key() -> None:
+    with pytest.raises(dab.PreflightError, match="DEV_AGENT_ANTHROPIC_API_KEY"):
+        dab.preflight_claude(_settings(DEV_AGENT_ANTHROPIC_API_KEY=""))
+
+
+async def test_preflight_dispatches_to_the_right_backend_check() -> None:
+    with pytest.raises(dab.PreflightError, match="GCP_PROJECT_ID"):
+        await dab.preflight("vertex", _settings(GCP_PROJECT_ID=""))
+
+
+def test_dev_agent_never_imports_llm_client() -> None:
+    """CLAUDE.md: coding-model routing stays out of llm_client.py on purpose --
+    a subprocess with tool access is not a chat_json/embed call. Checks for an
+    actual import STATEMENT, not the string -- this module's own docstring
+    explains why llm_client is deliberately unused, which a bare substring
+    check would misread as a violation (same trap as the pipeline/retrieval
+    and api/scheduler guards earlier in this project)."""
+    import re
+    from pathlib import Path
+
+    source = Path(dab.__file__).read_text()
+    importing = re.compile(r"^\s*(from\s+\S*llm_client\S*\s+import|import\s+\S*llm_client)", re.M)
+    assert not importing.search(source)

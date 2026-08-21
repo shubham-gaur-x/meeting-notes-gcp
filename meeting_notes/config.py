@@ -49,6 +49,30 @@ class Settings(BaseSettings):
     # committed sample_data/llm_fixtures/. Tests point it at a tmp_path.
     llm_fixture_dir: str = ""
 
+    # ─── Dev agent (Phase 11, ADR-020) ─────────────────────────────────────
+    # Coding-model routing. Deliberately separate from llm_backend above --
+    # this selects a headless-Claude-Code subprocess backend, not a
+    # chat_json/embed call (CLAUDE.md).
+    dev_agent_llm_backend: str = "local"  # local | vertex | claude
+    dev_agent_lm_model: str = ""
+    dev_agent_claude_model: str = ""
+    dev_agent_anthropic_api_key: str = ""
+    # Confirm the current model id at build time -- they change (CLAUDE.md).
+    dev_agent_vertex_model: str = "claude-sonnet-4-5@20250929"
+    dev_agent_min_context: int = 32768
+    lm_studio_anthropic_url: str = "http://localhost:1234"
+    dev_agent_max_turns: int = 40
+    dev_agent_timeout_seconds: int = 1800
+    dev_agent_max_attempts: int = 1
+    dev_agent_repo_dir: str = "/tmp/dev-agent/repo"
+    dev_agent_work_root: str = "/tmp/dev-agent/worktrees"
+    dev_agent_poll_batch_size: int = 5
+    dev_agent_confidence_threshold: float = 0.6
+    dev_agent_verify_threshold: float = 0.6
+    github_owner: str = ""
+    github_repo: str = ""
+    github_token: str = ""
+
     # Both Memgraph vector indexes are configured for 768. Changing this means
     # migrating both indexes, so it is not a knob to turn casually.
     embedding_dimension: int = 768
