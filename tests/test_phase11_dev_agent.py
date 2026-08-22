@@ -913,9 +913,6 @@ async def test_poll_never_resumes_a_shipped_run() -> None:
     async def fake_preflight(backend_name, settings):
         return "ok"
 
-    async def fake_ensure_repo_cloned(*a, **kw):
-        return None
-
     async def fake_find_sprint_candidates(settings=None):
         return []
 
@@ -924,7 +921,7 @@ async def test_poll_never_resumes_a_shipped_run() -> None:
 
     await orchestrator.poll_and_process(
         _settings(),
-        preflight=fake_preflight, ensure_repo_cloned=fake_ensure_repo_cloned,
+        preflight=fake_preflight,
         get_active_run=fake_get_active_run, should_attempt=fake_should_attempt,
         get_issue_detail=fake_get_issue_detail,
         find_sprint_candidates=fake_find_sprint_candidates, process_ticket=fake_process_ticket,
@@ -950,7 +947,6 @@ async def test_should_attempt_is_consulted_before_resuming_an_active_run() -> No
     await orchestrator.poll_and_process(
         _settings(),
         preflight=lambda b, s: _ok("preflight"),
-        ensure_repo_cloned=lambda *a, **kw: _ok(None),
         get_active_run=fake_get_active_run, should_attempt=fake_should_attempt,
         get_issue_detail=lambda key, settings=None: _ok({"key": key}),
         find_sprint_candidates=lambda settings=None: _ok([]),
@@ -998,6 +994,7 @@ async def test_a_pr_found_gates_the_outcome_not_the_success_flag() -> None:
         transition_issue=fake_transition,
         add_comment=lambda *a, **kw: _ok(None),
         get_issue_detail=lambda key, settings=None: _ok({"key": key, "summary": "s"}),
+        ensure_repo_cloned=lambda *a, **kw: _ok(None),
         create_worktree=lambda *a: _ok(None),
         remove_worktree=lambda *a, **kw: _ok(None),
         run_agent=fake_run_agent,
@@ -1036,6 +1033,7 @@ async def test_process_ticket_advances_through_every_lifecycle_state_on_success(
         transition_issue=lambda *a, **kw: _ok(True),
         add_comment=lambda *a, **kw: _ok(None),
         get_issue_detail=lambda key, settings=None: _ok({"key": key, "summary": "s"}),
+        ensure_repo_cloned=lambda *a, **kw: _ok(None),
         create_worktree=lambda *a: _ok(None),
         remove_worktree=lambda *a, **kw: _ok(None),
         run_agent=fake_run_agent,
@@ -1078,6 +1076,7 @@ async def test_a_missing_pr_marks_the_run_failed_and_records_session_memory() ->
         transition_issue=fake_transition,
         add_comment=lambda *a, **kw: _ok(None),
         get_issue_detail=lambda key, settings=None: _ok({"key": key, "summary": "s"}),
+        ensure_repo_cloned=lambda *a, **kw: _ok(None),
         create_worktree=lambda *a: _ok(None),
         remove_worktree=lambda *a, **kw: _ok(None),
         run_agent=fake_run_agent,
@@ -1122,6 +1121,7 @@ async def test_the_worktree_is_cleaned_up_even_when_the_run_itself_raises() -> N
         transition_issue=lambda *a, **kw: _ok(True),
         add_comment=lambda *a, **kw: _ok(None),
         get_issue_detail=lambda key, settings=None: _ok({"key": key, "summary": "s"}),
+        ensure_repo_cloned=lambda *a, **kw: _ok(None),
         create_worktree=lambda *a: _ok(None),
         remove_worktree=fake_remove_worktree,
         run_agent=exploding_run_agent,
@@ -1219,6 +1219,7 @@ async def _process(ticket, *, diff, run_gates, **over):
         transition_issue=fake_transition,
         add_comment=fake_comment,
         get_issue_detail=lambda key, settings=None: _ok({"key": key, "summary": "s"}),
+        ensure_repo_cloned=lambda *a, **kw: _ok(None),
         create_worktree=lambda *a: _ok(None),
         remove_worktree=lambda *a, **kw: _ok(None),
         run_agent=lambda *a, **kw: _ok(AgentRunResult(success=True, returncode=0, result_text="done")),
@@ -1523,3 +1524,113 @@ async def test_self_verify_survives_markdown_fences() -> None:
     v = await self_verify.verify_pr({"key": "K"}, "d", run_oneshot=fenced)
     assert v.checked is True, "a fenced reply must still parse"
     assert v.passed is True
+
+
+# ─── the repo comes from the ticket, not from one global setting ──────────────
+
+
+def test_repo_is_read_from_the_ticket_description() -> None:
+    """One agent serves many repos, so the target cannot be a single global
+    setting. The ticket says where its work belongs."""
+    from meeting_notes.dev_agent.orchestrator import repo_for_ticket
+
+    s = _settings(GITHUB_OWNER="fallback", GITHUB_REPO="fallback-repo")
+    for description in (
+        "Fix the retry loop.\nrepo: acme/widgets",
+        "Fix the retry loop. Repo: acme/widgets",
+        "See https://github.com/acme/widgets for context.",
+        "repository: acme/widgets",
+    ):
+        assert repo_for_ticket({"description": description}, s) == ("acme", "widgets"), (
+            f"did not parse a repo from: {description!r}"
+        )
+
+
+def test_repo_falls_back_to_settings_when_the_ticket_says_nothing() -> None:
+    from meeting_notes.dev_agent.orchestrator import repo_for_ticket
+
+    s = _settings(GITHUB_OWNER="fallback", GITHUB_REPO="fallback-repo")
+    assert repo_for_ticket({"description": "no repo here"}, s) == ("fallback", "fallback-repo")
+
+
+def test_a_github_url_with_extra_path_still_parses() -> None:
+    """`.git`, a trailing slash, or a deep link must not become part of the name."""
+    from meeting_notes.dev_agent.orchestrator import repo_for_ticket
+
+    s = _settings(GITHUB_OWNER="f", GITHUB_REPO="f")
+    for url in (
+        "https://github.com/acme/widgets.git",
+        "https://github.com/acme/widgets/",
+        "https://github.com/acme/widgets/issues/12",
+    ):
+        assert repo_for_ticket({"description": url}, s) == ("acme", "widgets"), url
+
+
+def test_the_prompt_targets_the_ticket_repo() -> None:
+    """The agent opens the PR itself via `gh`, so the prompt has to name the
+    right repo or the PR lands in whatever the worktree's origin happens to be."""
+    from meeting_notes.dev_agent.orchestrator import build_prompt
+
+    prompt = build_prompt(
+        {"key": "K-1", "summary": "s", "description": "repo: acme/widgets"},
+        repo=("acme", "widgets"),
+    )
+    assert "acme/widgets" in prompt
+
+
+# ─── engineering tickets have to be findable by the agent ─────────────────────
+
+
+async def test_an_engineering_task_is_labelled_for_the_agent() -> None:
+    """find_sprint_candidates selects on the `dev-agent` label, and create_issue
+    labelled only NON-engineering items -- so an engineering ticket was created
+    unlabelled and the agent could never pick it up. The two halves disagreed
+    about how a coding task is marked."""
+    from meeting_notes import jira_client
+
+    captured: dict = {}
+
+    async def transport(method, url, headers, params, body):
+        captured.update(body or {})
+        return 201, {"key": "MNV-1"}
+
+    await jira_client.create_issue(
+        summary="Add a retry", description="repo: acme/widgets", priority="medium",
+        sprint_id=None, is_engineering_task=True,
+        settings=_settings(JIRA_DOMAIN="x.atlassian.net"), transport=transport,
+    )
+    assert "dev-agent" in captured["fields"].get("labels", []), (
+        "an engineering task must carry the label the agent selects on"
+    )
+
+
+async def test_the_clone_and_the_pr_lookup_use_the_ticket_repo() -> None:
+    """Cloning once per poll cannot work when the repo comes from the ticket:
+    the poll runs before any ticket is chosen. The clone moves inside
+    process_ticket, into a directory keyed by the repo so two repos do not
+    fight over one checkout."""
+    cloned: list[tuple] = []
+    pr_lookups: list[tuple] = []
+
+    async def fake_clone(repo_dir, owner, repo, token):
+        cloned.append((repo_dir, owner, repo))
+
+    async def fake_find_pr(owner, repo, branch, token, **kw):
+        pr_lookups.append((owner, repo))
+        return {"number": 5, "html_url": f"https://github.com/{owner}/{repo}/pull/5"}
+
+    calls = await _process(
+        {"key": "K-9", "summary": "s", "description": "repo: acme/widgets"},
+        diff=_DIFF, run_gates=_gates_pass,
+        ensure_repo_cloned=fake_clone, find_open_pr=fake_find_pr,
+        get_issue_detail=lambda key, settings=None: _ok(
+            {"key": key, "summary": "s", "description": "repo: acme/widgets"}),
+    )
+
+    assert cloned, "the ticket's repo was never cloned"
+    assert cloned[0][1:] == ("acme", "widgets"), f"cloned the wrong repo: {cloned}"
+    assert "acme" in cloned[0][0] and "widgets" in cloned[0][0], (
+        f"checkout dir must be keyed by repo, got {cloned[0][0]!r}"
+    )
+    assert pr_lookups and pr_lookups[0] == ("acme", "widgets")
+    assert calls["finishes"][0][0] == lifecycle.SHIPPED

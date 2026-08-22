@@ -310,9 +310,14 @@ async def test_a_non_engineering_task_gets_the_meeting_action_item_label() -> No
     assert seen["fields"]["labels"] == ["meeting-action-item"]
 
 
-async def test_an_engineering_task_gets_no_label() -> None:
-    """Engineering tasks flow through the normal board, not a meeting-derived
-    holding label -- carried from v5 exactly."""
+async def test_an_engineering_task_is_labelled_for_the_dev_agent() -> None:
+    """v5 left engineering tasks unlabelled and this test pinned that.
+
+    It is the bug: `dev_agent.find_sprint_candidates` selects on the
+    `dev-agent` label, so an unlabelled engineering ticket is invisible to the
+    agent forever. Producer and consumer disagreed about how a coding task is
+    marked, and each half looked correct on its own.
+    """
     seen: dict = {}
 
     async def transport(method, url, headers, params, json_body):
@@ -323,7 +328,9 @@ async def test_an_engineering_task_gets_no_label() -> None:
         summary="s", description="d", priority="medium", sprint_id=None,
         is_engineering_task=True, settings=_jira_settings(), transport=transport,
     )
-    assert "labels" not in seen["fields"]
+    assert seen["fields"]["labels"] == ["dev-agent"], (
+        "the agent selects on this label; without it the ticket is never picked up"
+    )
 
 
 async def test_a_high_priority_issue_is_moved_to_the_active_sprint() -> None:

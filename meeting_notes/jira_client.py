@@ -163,6 +163,8 @@ async def add_comment(
 # rewrite.
 
 MEETING_ACTION_ITEM_LABEL = "meeting-action-item"
+# The label `dev_agent.find_sprint_candidates` selects on.
+DEV_AGENT_LABEL = "dev-agent"
 
 _PRIORITY_MAP = {"high": "High", "medium": "Medium", "low": "Low"}
 
@@ -223,10 +225,10 @@ async def create_issue(
 ) -> str:
     """Create one Jira issue. Returns its key.
 
-    Non-engineering items (meeting follow-ups the extractor raised) get the
-    `meeting-action-item` label so they are visibly distinct from work
-    reported through normal channels; engineering tasks flow through the
-    board unlabelled, exactly as v5 did.
+    Follow-ups the extractor raised get `meeting-action-item` so they are
+    visibly distinct from work reported through normal channels. Engineering
+    tasks get `dev-agent`, which is what `find_sprint_candidates` selects on —
+    v5 left them unlabelled, which meant the agent could never see them.
 
     A high-priority item is moved to the active sprint. **A sprint-move
     failure does not fail issue creation** — the issue already exists at that
@@ -246,8 +248,12 @@ async def create_issue(
         "issuetype": {"name": settings.jira_issue_type},
         "priority": {"name": _PRIORITY_MAP.get(priority, "Medium")},
     }
-    if not is_engineering_task:
-        fields["labels"] = [MEETING_ACTION_ITEM_LABEL]
+    # The two halves have to agree on how a coding task is marked:
+    # `find_sprint_candidates` selects on DEV_AGENT_LABEL, so an engineering
+    # task created without it is invisible to the agent forever.
+    fields["labels"] = (
+        [DEV_AGENT_LABEL] if is_engineering_task else [MEETING_ACTION_ITEM_LABEL]
+    )
 
     status, body = await transport(
         "POST", f"{jira_base_url(settings)}/issue", jira_headers(settings), None, {"fields": fields}

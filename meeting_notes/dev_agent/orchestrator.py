@@ -12,6 +12,7 @@ just unit-by-unit in `lifecycle.py` and `db.py`.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, fields
 from typing import Any
 
@@ -25,7 +26,44 @@ from meeting_notes.dev_agent.models import AgentRunResult
 log = structlog.get_logger()
 
 
-def build_prompt(ticket: dict[str, Any], resume_context: str | None = None) -> str:
+# A ticket names its own repo, so one agent can serve many. Accepts
+# "repo: owner/name", "repository: owner/name", or a github.com URL.
+_REPO_PATTERNS = (
+    re.compile(r"github\.com[/:]([\w.-]+)/([\w.-]+?)(?:\.git)?(?=[/\s#?)\]]|$)", re.I),
+    re.compile(r"\brepo(?:sitory)?\s*[:=]\s*([\w.-]+)/([\w.-]+)", re.I),
+)
+
+
+def repo_dir_for(owner: str, repo: str, settings: Settings) -> str:
+    """Checkout directory for one repository.
+
+    Keyed by owner and name: the agent serves whichever repo a ticket names,
+    and a single shared directory would have two repos overwriting each
+    other's checkout between tickets.
+    """
+    return f"{settings.dev_agent_repo_dir}/{owner}__{repo}"
+
+
+def repo_for_ticket(ticket: dict[str, Any], settings: Settings) -> tuple[str, str]:
+    """(owner, repo) for this ticket, from its description.
+
+    Falls back to GITHUB_OWNER/GITHUB_REPO so a ticket that says nothing still
+    works, but the ticket wins: the agent is meant to serve whichever
+    repository the work belongs to, not one configured at deploy time.
+    """
+    text = ticket.get("description") or ""
+    for pattern in _REPO_PATTERNS:
+        found = pattern.search(text)
+        if found:
+            return found.group(1), found.group(2)
+    return settings.github_owner, settings.github_repo
+
+
+def build_prompt(
+    ticket: dict[str, Any],
+    resume_context: str | None = None,
+    repo: tuple[str, str] | None = None,
+) -> str:
     """The instructions given to the headless coding agent.
 
     The agent never merges its own PR — that instruction has zero tolerance
@@ -40,7 +78,10 @@ def build_prompt(ticket: dict[str, Any], resume_context: str | None = None) -> s
         if resume_context else ""
     )
     branch = f"agent/{key}"
+    target = f"{repo[0]}/{repo[1]}" if repo else ""
+    repo_line = f"\nTarget repository: {target}\n" if target else ""
     return f"""Read CLAUDE.md and follow all conventions in this repository.
+{repo_line}
 
 Implement the following Jira ticket in full:
 
@@ -61,7 +102,7 @@ Instructions:
 - Then open a PR:
     gh pr create --title "[{key}] {summary[:80]}" \
         --body "Implements {key}: {summary}. See ticket for full description." \
-        --base main --head {branch}
+        --base main --head {branch}{f" --repo {target}" if target else ""}
 - On the very last line of your output, print the PR URL exactly like this:
     PR_URL: <url>
 """
@@ -133,6 +174,7 @@ class _Dependencies:
     transition_issue: Any
     add_comment: Any
     get_issue_detail: Any
+    ensure_repo_cloned: Any
     create_worktree: Any
     remove_worktree: Any
     run_agent: Any
@@ -167,6 +209,7 @@ def _default_dependencies() -> dict[str, Any]:
         "transition_issue": jira_client.transition_issue,
         "add_comment": jira_client.add_comment,
         "get_issue_detail": jira_client.get_issue_detail,
+        "ensure_repo_cloned": git_ops.ensure_repo_cloned,
         "create_worktree": git_ops.create_worktree,
         "remove_worktree": git_ops.remove_worktree,
         "run_agent": gemini_runner.run_agent,
@@ -198,12 +241,16 @@ def _resolve_dependencies(overrides: dict[str, Any]) -> _Dependencies:
 
 async def _run_coding_agent(
     key: str, detail: dict[str, Any], settings: Settings, deps: _Dependencies,
-    *, work_dir: str, branch_name: str, dev_backend: str, logger: Any,
+    *, work_dir: str, branch_name: str, dev_backend: str, repo: tuple[str, str],
+    logger: Any,
 ) -> AgentRunResult:
     """Take the ticket from PLANNED to a finished agent run."""
-    await deps.create_worktree(settings.dev_agent_repo_dir, work_dir, branch_name)
+    owner, name = repo
+    repo_dir = repo_dir_for(owner, name, settings)
+    await deps.ensure_repo_cloned(repo_dir, owner, name, settings.github_token)
+    await deps.create_worktree(repo_dir, work_dir, branch_name)
     resume_context = await deps.load_resume_context(key)
-    prompt = build_prompt(detail, resume_context=resume_context)
+    prompt = build_prompt(detail, resume_context=resume_context, repo=repo)
 
     await _advance_state(key, lc.IMPLEMENTING, deps.set_state, deps.get_run)
     result: AgentRunResult = await deps.run_agent(
@@ -256,14 +303,14 @@ async def _finish_without_pr(
 
 async def _self_verify(
     ticket: dict[str, Any], pr: dict[str, Any], settings: Settings, deps: _Dependencies,
-    *, dev_backend: str, logger: Any,
+    *, dev_backend: str, repo: tuple[str, str], logger: Any,
 ) -> tuple[str, Any]:
     """Fetch the diff and score it against the ticket. Never blocks (ADR-020)."""
     diff = ""
     verdict = None
     try:
         diff = await deps.get_pr_diff(
-            settings.github_owner, settings.github_repo, pr["number"], settings.github_token
+            repo[0], repo[1], pr["number"], settings.github_token
         )
         verdict = await deps.verify_pr(
             ticket, diff, model=backend.model_for_run(dev_backend, settings),
@@ -448,11 +495,15 @@ async def process_ticket(
         )
 
         detail = await deps.get_issue_detail(key, settings=settings)
+        # The ticket names its own repository; the settings are only a fallback.
+        repo = repo_for_ticket(detail, settings)
+        bound_log = bound_log.bind(repo=f"{repo[0]}/{repo[1]}")
         await _advance_state(key, lc.PLANNED, deps.set_state, deps.get_run)
 
         result = await _run_coding_agent(
             key, detail, settings, deps, work_dir=work_dir,
-            branch_name=branch_name, dev_backend=dev_backend, logger=bound_log,
+            branch_name=branch_name, dev_backend=dev_backend, repo=repo,
+            logger=bound_log,
         )
 
         # The PR check gates the outcome, not result.success: a run can push a
@@ -460,7 +511,7 @@ async def process_ticket(
         # (e.g. hits the turn limit). Dropping that PR and reverting the ticket
         # to To Do would lose good work.
         pr = await deps.find_open_pr(
-            settings.github_owner, settings.github_repo, branch_name, settings.github_token
+            repo[0], repo[1], branch_name, settings.github_token
         )
         if pr is None:
             await _finish_without_pr(key, detail, result, settings, deps, logger=bound_log)
@@ -468,7 +519,8 @@ async def process_ticket(
 
         await _advance_state(key, lc.REVIEWING, deps.set_state, deps.get_run)
         diff, verdict = await _self_verify(
-            ticket, pr, settings, deps, dev_backend=dev_backend, logger=bound_log
+            ticket, pr, settings, deps, dev_backend=dev_backend, repo=repo,
+            logger=bound_log,
         )
         verified = verdict.passed if (verdict and verdict.checked) else None
 
@@ -544,7 +596,6 @@ async def poll_and_process(
     settings: Settings | None = None,
     *,
     preflight: Any = None,
-    ensure_repo_cloned: Any = None,
     get_active_run: Any = None,
     should_attempt: Any = None,
     get_issue_detail: Any = None,
@@ -556,8 +607,6 @@ async def poll_and_process(
 
     if preflight is None:
         preflight = backend.preflight
-    if ensure_repo_cloned is None:
-        ensure_repo_cloned = git_ops.ensure_repo_cloned
     if get_active_run is None:
         from meeting_notes.db import get_active_dev_agent_run as get_active_run
     if should_attempt is None:
@@ -574,15 +623,6 @@ async def poll_and_process(
     except backend.PreflightError as exc:
         log.error("orchestrator.poll.preflight_failed", error=str(exc))
         return {"attempted": 0, "reason": "preflight_failed"}
-
-    try:
-        await ensure_repo_cloned(
-            settings.dev_agent_repo_dir, settings.github_owner, settings.github_repo,
-            settings.github_token,
-        )
-    except Exception as exc:  # noqa: BLE001 - reported, not raised, so the job exits cleanly
-        log.error("orchestrator.poll.repo_unavailable", error=str(exc))
-        return {"attempted": 0, "reason": "repo_unavailable"}
 
     active = await get_active_run()
     if active is not None:
