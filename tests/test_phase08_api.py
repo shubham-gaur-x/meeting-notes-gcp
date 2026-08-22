@@ -211,10 +211,10 @@ async def test_the_dashboard_is_served(app: Any) -> None:
 
 
 async def test_github_webhook_rejects_a_bad_signature(app: Any, monkeypatch: Any) -> None:
-    from meeting_notes import config
+    from meeting_notes.config import Settings
 
     monkeypatch.setattr(
-        config, "get_settings",
+        "api.routers.webhooks.get_settings",
         lambda: Settings(_env_file=None, GITHUB_WEBHOOK_SECRET="s3cret", GCP_PROJECT_ID="p"),
     )
     response = await _post(app, "/webhook/github", content=b"{}",

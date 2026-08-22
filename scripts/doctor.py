@@ -403,6 +403,10 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
+    # Ensure scripts module is resolvable when run directly
+    if str(REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(REPO_ROOT))
+
     # Imported lazily so tier 0 works on a clone with no .env at all.
     from scripts.auth_spike import load_env_file
 
