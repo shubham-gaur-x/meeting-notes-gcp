@@ -10,6 +10,8 @@ keeping unreachable, so it is removed rather than ported unchanged.
 from __future__ import annotations
 
 import asyncio
+import shutil
+from pathlib import Path
 from typing import Any
 
 import structlog
@@ -36,12 +38,50 @@ async def _run_git(args: list[str], cwd: str | None = None) -> str:
     return stdout.decode(errors="replace").strip()
 
 
-async def ensure_repo_cloned(repo_dir: str, owner: str, repo: str, token: str) -> None:
-    """Always a fresh clone. Cloud Run Jobs have no persistent filesystem
-    between executions, so there is never an existing checkout to fetch into."""
+async def ensure_repo_cloned(
+    repo_dir: str,
+    owner: str,
+    repo: str,
+    token: str,
+    *,
+    run: Any = None,
+    exists: Any = None,
+    remove: Any = None,
+) -> None:
+    """Make `repo_dir` a usable checkout of owner/repo, cloning if needed.
+
+    This used to clone unconditionally, on the grounds that Cloud Run Jobs have
+    no persistent filesystem between executions. That is true of Cloud Run and
+    false everywhere else -- and false even there now that the clone happens
+    per ticket, since two tickets targeting the same repo share a directory
+    within one execution. The second one hit `fatal: destination path ...
+    already exists and is not an empty directory` and the run died before the
+    agent started.
+
+    An existing valid checkout is refreshed. A path holding something that is
+    not a git repository is cleared and re-cloned, so leftover junk cannot
+    wedge the agent permanently.
+    """
+    run = run or _run_git
+    exists = exists or (lambda p: Path(p).exists())
+    remove = remove or (lambda p: shutil.rmtree(p, ignore_errors=True))
     url = authed_remote_url(owner, repo, token)
+
+    if exists(repo_dir):
+        try:
+            await run(["rev-parse", "--git-dir"], cwd=repo_dir)
+        except GitError:
+            log.warning("git_ops.clearing_non_repo", repo_dir=repo_dir)
+            remove(repo_dir)
+        else:
+            log.info("git_ops.reusing_checkout", repo_dir=repo_dir, owner=owner, repo=repo)
+            # The token can have rotated since the directory was created.
+            await run(["remote", "set-url", "origin", url], cwd=repo_dir)
+            await run(["fetch", "--prune", "origin"], cwd=repo_dir)
+            return
+
     log.info("git_ops.clone", repo_dir=repo_dir, owner=owner, repo=repo)
-    await _run_git(["clone", url, repo_dir])
+    await run(["clone", url, repo_dir])
 
 
 async def default_branch(repo_dir: str, *, run: Any = None) -> str:

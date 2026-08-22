@@ -1746,3 +1746,85 @@ def test_the_prompt_opens_the_pr_against_the_detected_default() -> None:
 
     prompt = build_prompt({"key": "K-1", "summary": "s"}, base_branch="master")
     assert "--base master" in prompt, "the PR would target a branch that may not exist"
+
+
+async def test_cloning_is_idempotent_when_the_checkout_already_exists() -> None:
+    """`ensure_repo_cloned` justified always-clone with "Cloud Run Jobs have no
+    persistent filesystem". True there, false everywhere else -- and false even
+    on Cloud Run now that the clone is per ticket, since two tickets on the
+    same repo share a directory within one execution.
+
+    Live failure on the second run: `fatal: destination path ... already exists
+    and is not an empty directory`.
+    """
+    from meeting_notes.dev_agent import git_ops
+
+    calls: list[list[str]] = []
+
+    async def fake_git(args, cwd=None):
+        calls.append(args)
+        if args[:2] == ["rev-parse", "--git-dir"]:
+            return ".git"          # an existing, valid checkout
+        return ""
+
+    await git_ops.ensure_repo_cloned(
+        "/repo", "acme", "widgets", "tok", run=fake_git, exists=lambda p: True
+    )
+    flat = [" ".join(a) for a in calls]
+    assert not any(f.startswith("clone") for f in flat), f"re-cloned over a checkout: {flat}"
+    assert any("fetch" in f for f in flat), f"an existing checkout must be refreshed: {flat}"
+
+
+async def test_a_directory_that_is_not_a_repo_is_replaced() -> None:
+    """Left-over junk at the path must not wedge the agent forever."""
+    from meeting_notes.dev_agent import git_ops
+
+    calls: list[list[str]] = []
+    removed: list[str] = []
+
+    async def fake_git(args, cwd=None):
+        calls.append(args)
+        if args[:2] == ["rev-parse", "--git-dir"]:
+            raise git_ops.GitError("not a git repository")
+        return ""
+
+    await git_ops.ensure_repo_cloned(
+        "/repo", "acme", "widgets", "tok",
+        run=fake_git, exists=lambda p: True, remove=removed.append,
+    )
+    assert removed == ["/repo"], "the bad directory was not cleared"
+    assert any(a[0] == "clone" for a in calls), "no fresh clone after clearing"
+
+
+async def test_the_coding_run_can_actually_run_git(monkeypatch, tmp_path) -> None:
+    """`auto_edit` auto-approves EDIT tools only.
+
+    The agent is told to commit, push and open a PR -- all shell -- and
+    headless there is nobody to approve them. Live result: 34 turns,
+    is_error=False, scripts/doctor.py and its test correctly modified in the
+    worktree, and nothing committed, pushed, or opened. The orchestrator
+    reported "success but no PR was found", which was true and told us
+    nothing about why.
+
+    Only `yolo` approves shell. That is safe here precisely because of what
+    surrounds it: an isolated worktree per ticket, seven gates plus a reviewer
+    before anything ships, and a prompt that forbids merging.
+    """
+    _fake_spawn(monkeypatch, _FakeProc('{"response": "done"}', returncode=0))
+    seen: dict = {}
+
+    real = gemini_runner.asyncio.create_subprocess_exec
+
+    async def capture(*args, **kw):
+        seen["argv"] = list(args)
+        return await real(*args, **kw)
+
+    monkeypatch.setattr(gemini_runner.asyncio, "create_subprocess_exec", capture)
+    await gemini_runner.run_agent(str(tmp_path), "x", 60, settings=_runner_settings(tmp_path))
+
+    argv = seen["argv"]
+    mode = argv[argv.index("--approval-mode") + 1]
+    assert mode == "yolo", (
+        f"approval mode {mode!r} cannot run git; the agent edits and then "
+        "silently fails to commit, push, or open a PR"
+    )

@@ -9,7 +9,10 @@ Flag mapping, verified live against gemini-cli 0.42.0:
 
     -p/--prompt              headless (non-interactive) mode
     -o json                  machine-readable result
-    --approval-mode auto_edit  auto-approve edit tools, still prompt for the rest
+    --approval-mode yolo     auto-approve all tools. auto_edit approves EDIT
+                             tools only, so the agent could edit files but not
+                             commit, push, or open a PR -- it finished looking
+                             successful with nothing shipped.
     --skip-trust             the worktree is created fresh per ticket, so the
                              CLI's folder-trust prompt has nothing to protect
                              and would otherwise silently downgrade the
@@ -129,7 +132,13 @@ async def run_agent(
         "gemini", "-p", prompt,
         "-o", "json",
         "--skip-trust",
-        "--approval-mode", "auto_edit",
+        # `auto_edit` approves EDIT tools only. The agent is instructed to
+        # commit, push and open a PR -- all shell -- and headless there is
+        # nobody to approve those, so it edited files and silently stopped.
+        # `yolo` is the only mode that lets it finish the job; the isolation
+        # is the worktree, and the gates and reviewer are what decide whether
+        # any of it ships.
+        "--approval-mode", "yolo",
     ]
     if model:
         cmd += ["-m", model]
