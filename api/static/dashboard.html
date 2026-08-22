@@ -98,7 +98,20 @@
   <section class="panel active" id="overview">
     <div class="row">
       <button class="action" onclick="loadOverview()">Refresh</button>
-      <span class="muted">Counters below cover the last 7 days</span>
+      <select id="range" onchange="onRangeChange()">
+        <option value="7">Past week</option>
+        <option value="30">Past month</option>
+        <option value="90">Past quarter</option>
+        <option value="365">Past year</option>
+        <option value="all">All time</option>
+        <option value="custom">Custom range…</option>
+      </select>
+      <span id="custom-range" style="display:none">
+        <input type="date" id="range-start" onchange="loadOverview()">
+        <span class="muted">to</span>
+        <input type="date" id="range-end" onchange="loadOverview()">
+      </span>
+      <span class="muted" id="range-note"></span>
     </div>
     <div class="cards" id="cards"></div>
     <div id="overview-body"></div>
@@ -199,10 +212,42 @@ async function loadHealth() {
   } catch { $("#health").textContent = "API unreachable"; }
 }
 
+function onRangeChange() {
+  const custom = $("#range").value === "custom";
+  $("#custom-range").style.display = custom ? "" : "none";
+  if (!custom) { loadOverview(); return; }
+  // Waiting for both dates before querying, so say so rather than leaving the
+  // previous range's label sitting above numbers it no longer describes.
+  if (!$("#range-start").value || !$("#range-end").value) {
+    $("#range-note").textContent = "Pick both dates.";
+  } else {
+    loadOverview();
+  }
+}
+
+// The window the counters describe, as a query string plus a label. "All
+// time" is expressed as a very large day count rather than a special case,
+// so the endpoint stays one shape.
+function selectedRange() {
+  const v = $("#range").value;
+  if (v === "custom") {
+    const a = $("#range-start").value, b = $("#range-end").value;
+    if (!a || !b) return null;
+    return { qs: `start=${a}&end=${b}`, label: `${a} to ${b}` };
+  }
+  if (v === "all") return { qs: "days=3650", label: "all time" };
+  const labels = { "7": "the last 7 days", "30": "the last 30 days",
+                   "90": "the last 90 days", "365": "the last year" };
+  return { qs: `days=${v}`, label: labels[v] || `the last ${v} days` };
+}
+
 async function loadOverview() {
   try {
+    const range = selectedRange();
+    if (!range) { $("#range-note").textContent = "Pick both dates."; return; }
+    $("#range-note").textContent = `Counters below cover ${range.label}`;
     const [d, dec] = await Promise.all([
-      get("/graph/digest/weekly"), get("/graph/decisions?limit=6")]);
+      get(`/graph/digest/weekly?${range.qs}`), get("/graph/decisions?limit=6")]);
     const s = d.summary || {};
     $("#cards").innerHTML = [
       ["Meetings", s.total_meetings, ""],
@@ -220,7 +265,7 @@ async function loadOverview() {
 
     $("#overview-body").innerHTML =
       `<h3>Latest decisions</h3>` +
-      `<div class="muted" style="font-size:12px;margin:-6px 0 8px">The most recent decisions, not limited to the 7 days above.</div>` +
+      `<div class="muted" style="font-size:12px;margin:-6px 0 8px">The most recent decisions, regardless of the range above.</div>` +
       ((dec.decisions && dec.decisions.length)
         ? dec.decisions.map(x =>
             `<div class="quote">${esc(x.text)}<div class="muted" style="font-size:12px">` +

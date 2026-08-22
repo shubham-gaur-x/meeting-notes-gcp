@@ -882,46 +882,62 @@ async def get_meetings_quality_ranked(limit: int = 20, driver: Any = None) -> li
         return [dict(r) async for r in result]
 
 
-async def get_period_activity(days: int = 7, driver: Any = None) -> dict[str, Any]:
-    """Meetings, decisions and action items from the last `days` days.
+async def get_period_activity(
+    days: int = 7,
+    driver: Any = None,
+    *,
+    start: str | None = None,
+    end: str | None = None,
+) -> dict[str, Any]:
+    """Meetings, decisions and action items in a window.
 
-    Backs the weekly digest. One query per collection rather than a single
-    joined one: collecting three unrelated one-to-many relationships in one
-    MATCH multiplies rows and the counts come out wrong.
+    `start`/`end` (YYYY-MM-DD, inclusive) win when given; otherwise the window
+    is the last `days` days. An explicit range is what lets the dashboard ask
+    for a quarter or "since the kickoff" rather than only a round number of
+    days back from today.
+
+    Backs the digest. One query per collection rather than a single joined
+    one: collecting three unrelated one-to-many relationships in one MATCH
+    multiplies rows and the counts come out wrong.
     """
     driver = driver or get_driver()
-    cutoff = (datetime.now(UTC) - timedelta(days=days)).strftime("%Y-%m-%d")
+    cutoff = start or (datetime.now(UTC) - timedelta(days=days)).strftime("%Y-%m-%d")
+    # An open-ended upper bound: a date string always sorts below this, so the
+    # same query serves both a preset and a bounded range.
+    until = end or "9999-12-31"
 
     async with driver.session() as session:
         result = await session.run(
             """
-            MATCH (m:Meeting) WHERE m.date >= $cutoff
+            MATCH (m:Meeting) WHERE m.date >= $cutoff AND m.date <= $until
             RETURN m.id AS id, m.title AS title, m.date AS date, m.kind AS kind,
                    m.summary AS summary
             ORDER BY m.date DESC
             """,
-            cutoff=cutoff,
+            cutoff=cutoff, until=until,
         )
         meetings = [dict(r) async for r in result]
 
         result = await session.run(
             """
-            MATCH (m:Meeting)-[:PRODUCED]->(d:Decision) WHERE m.date >= $cutoff
+            MATCH (m:Meeting)-[:PRODUCED]->(d:Decision)
+            WHERE m.date >= $cutoff AND m.date <= $until
             RETURN d.id AS id, d.text AS text, d.confidence AS confidence,
                    m.id AS meeting_id, m.title AS meeting_title
             """,
-            cutoff=cutoff,
+            cutoff=cutoff, until=until,
         )
         decisions = [dict(r) async for r in result]
 
         result = await session.run(
             """
-            MATCH (m:Meeting)-[:FOLLOWS_UP]->(a:ActionItem) WHERE m.date >= $cutoff
+            MATCH (m:Meeting)-[:FOLLOWS_UP]->(a:ActionItem)
+            WHERE m.date >= $cutoff AND m.date <= $until
             RETURN a.id AS id, a.task AS task, a.owner AS owner, a.due AS due,
                    coalesce(a.done, false) AS done, a.priority AS priority,
                    a.jira_key AS jira_key, m.id AS meeting_id
             """,
-            cutoff=cutoff,
+            cutoff=cutoff, until=until,
         )
         action_items = [dict(r) async for r in result]
 

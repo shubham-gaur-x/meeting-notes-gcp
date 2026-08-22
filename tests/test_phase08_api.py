@@ -396,7 +396,9 @@ def test_digest_handles_an_empty_period() -> None:
 
 
 async def test_digest_endpoint_responds(app: Any) -> None:
-    async def fake_activity(days: int = 7, driver: Any = None) -> dict:
+    async def fake_activity(
+        days: int = 7, driver: Any = None, start: str | None = None, end: str | None = None
+    ) -> dict:
         return {"meetings": [], "decisions": [], "action_items": []}
 
     import meeting_notes.graph_client as gc
@@ -768,8 +770,81 @@ def test_the_overview_does_not_claim_a_period_it_does_not_filter_on() -> None:
     assert "Everything from the last 7 days" not in html, (
         "a blanket period label over unscoped content"
     )
-    assert "Counters below cover the last 7 days" in html
-    assert "not limited to the 7 days above" in html, (
-        "the decisions list must say it is not period-scoped"
+    assert "Counters below cover ${range.label}" in html, (
+        "the counter label must name the range actually queried"
+    )
+    assert "regardless of the range above" in html, (
+        "the decisions list must say it is not scoped to the selected range"
+    )
+    assert "not limited to the 7 days above" not in html, (
+        "a fixed window in the copy contradicts a selectable range"
     )
     assert "in this period" not in html, "the empty state claimed a filter that is not applied"
+
+
+# ─── selectable time range on the overview ────────────────────────────────────
+
+
+async def test_digest_accepts_an_explicit_date_range(app: Any, monkeypatch: Any) -> None:
+    """A preset in days cannot express "that quarter" or "since the kickoff",
+    so the endpoint takes an explicit start/end as well."""
+    import api.routers.graph as g
+
+    seen: dict = {}
+
+    async def fake_activity(days=7, start=None, end=None, driver=None):
+        seen.update({"days": days, "start": start, "end": end})
+        return {"meetings": [], "decisions": [], "action_items": []}
+
+    monkeypatch.setattr(g.graph_client, "get_period_activity", fake_activity)
+    response = await _get(app, "/graph/digest/weekly?start=2026-01-01&end=2026-03-31")
+
+    assert response.status_code == 200
+    assert seen["start"] == "2026-01-01" and seen["end"] == "2026-03-31"
+    assert response.json()["period"] == "2026-01-01..2026-03-31"
+
+
+async def test_digest_rejects_a_backwards_range(app: Any) -> None:
+    """An end before the start returns nothing at all, which reads as "quiet
+    period" rather than "you typed it backwards"."""
+    response = await _get(app, "/graph/digest/weekly?start=2026-03-31&end=2026-01-01")
+    assert response.status_code == 422
+
+
+async def test_a_year_long_window_is_allowed(app: Any, monkeypatch: Any) -> None:
+    """The old cap was 90 days, so "past year" could not be asked for."""
+    import api.routers.graph as g
+
+    async def fake_activity(days=7, start=None, end=None, driver=None):
+        return {"meetings": [], "decisions": [], "action_items": []}
+
+    monkeypatch.setattr(g.graph_client, "get_period_activity", fake_activity)
+    assert (await _get(app, "/graph/digest/weekly?days=365")).status_code == 200
+
+
+def test_the_overview_offers_a_range_selector() -> None:
+    """The counters are period-scoped and the corpus spans years, so a quiet
+    week made a 96-meeting graph read as "2 MEETINGS"."""
+    from pathlib import Path
+
+    import api
+
+    html = (Path(api.__file__).parent / "static" / "dashboard.html").read_text()
+    assert 'id="range"' in html, "no range selector"
+    for label in ("Past week", "Past month", "Past year", "All time", "Custom"):
+        assert label in html, f"missing range option: {label}"
+
+
+def test_switching_to_a_custom_range_does_not_leave_a_stale_label() -> None:
+    """Choosing "Custom" waits for both dates before querying, so the previous
+    range's label would otherwise sit above numbers it no longer describes."""
+    from pathlib import Path
+
+    import api
+
+    html = (Path(api.__file__).parent / "static" / "dashboard.html").read_text()
+    start = html.index("function onRangeChange()")
+    body = html[start : start + 700]
+    assert "Pick both dates." in body, (
+        "switching to custom must replace the label immediately"
+    )

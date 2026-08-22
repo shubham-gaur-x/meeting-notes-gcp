@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from api.deps import principal
 from meeting_notes import digest, graph_client
@@ -67,12 +67,26 @@ async def ticket_provenance(ticket_key: str, _: Principal = Depends(principal)) 
     return await graph_client.get_ticket_provenance(ticket_key)
 
 
+_DATE = r"^\d{4}-\d{2}-\d{2}$"
+
+
 @router.get("/digest/weekly")
 async def digest_weekly(
-    days: int = Query(7, ge=1, le=90), _: Principal = Depends(principal)
+    days: int = Query(7, ge=1, le=3660),
+    start: str | None = Query(None, pattern=_DATE, description="inclusive, YYYY-MM-DD"),
+    end: str | None = Query(None, pattern=_DATE, description="inclusive, YYYY-MM-DD"),
+    _: Principal = Depends(principal),
 ) -> dict[str, Any]:
-    """Rollup of the last week: meetings, decisions, and action items by state."""
-    return await digest.weekly_digest(days=days)
+    """Rollup over a window: meetings, decisions, and action items by state.
+
+    `start`/`end` win over `days`. The `days` ceiling is ten years rather than
+    90 so "past year" and "all time" are askable — the old cap silently made
+    them impossible.
+    """
+    if start and end and end < start:
+        # Returning nothing would read as a quiet period rather than a typo.
+        raise HTTPException(status_code=422, detail="end must not be before start")
+    return await digest.weekly_digest(days=days, start=start, end=end)
 
 
 @router.get("/meeting/{meeting_id}")

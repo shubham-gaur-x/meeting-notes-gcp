@@ -15,8 +15,18 @@ log = structlog.get_logger()
 DEFAULT_PERIOD_DAYS = 7
 
 
-def shape(activity: dict[str, Any], days: int = DEFAULT_PERIOD_DAYS) -> dict[str, Any]:
-    """Turn raw period activity into the digest. Pure — no I/O."""
+def shape(
+    activity: dict[str, Any],
+    days: int = DEFAULT_PERIOD_DAYS,
+    *,
+    start: str | None = None,
+    end: str | None = None,
+) -> dict[str, Any]:
+    """Turn raw period activity into the digest. Pure — no I/O.
+
+    `period` describes the window that was actually queried, so a caller
+    cannot show counts from one range under the label of another.
+    """
     meetings = activity.get("meetings") or []
     decisions = activity.get("decisions") or []
     action_items = activity.get("action_items") or []
@@ -26,7 +36,7 @@ def shape(activity: dict[str, Any], days: int = DEFAULT_PERIOD_DAYS) -> dict[str
     high_priority = [a for a in open_actions if a.get("priority") == "high"]
 
     return {
-        "period": f"last_{days}_days",
+        "period": f"{start}..{end}" if (start or end) else f"last_{days}_days",
         "summary": {
             "total_meetings": len(meetings),
             "total_decisions": len(decisions),
@@ -45,9 +55,15 @@ def shape(activity: dict[str, Any], days: int = DEFAULT_PERIOD_DAYS) -> dict[str
     }
 
 
-async def weekly_digest(days: int = DEFAULT_PERIOD_DAYS, *, fetch: Any = None) -> dict[str, Any]:
+async def weekly_digest(
+    days: int = DEFAULT_PERIOD_DAYS,
+    *,
+    start: str | None = None,
+    end: str | None = None,
+    fetch: Any = None,
+) -> dict[str, Any]:
     if fetch is None:
         from meeting_notes import graph_client
 
         fetch = graph_client.get_period_activity
-    return shape(await fetch(days=days), days)
+    return shape(await fetch(days=days, start=start, end=end), days, start=start, end=end)
