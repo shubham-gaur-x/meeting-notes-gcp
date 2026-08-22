@@ -63,6 +63,7 @@ def build_prompt(
     ticket: dict[str, Any],
     resume_context: str | None = None,
     repo: tuple[str, str] | None = None,
+    base_branch: str = "main",
 ) -> str:
     """The instructions given to the headless coding agent.
 
@@ -102,7 +103,7 @@ Instructions:
 - Then open a PR:
     gh pr create --title "[{key}] {summary[:80]}" \
         --body "Implements {key}: {summary}. See ticket for full description." \
-        --base main --head {branch}{f" --repo {target}" if target else ""}
+        --base {base_branch} --head {branch}{f" --repo {target}" if target else ""}
 - On the very last line of your output, print the PR URL exactly like this:
     PR_URL: <url>
 """
@@ -248,9 +249,11 @@ async def _run_coding_agent(
     owner, name = repo
     repo_dir = repo_dir_for(owner, name, settings)
     await deps.ensure_repo_cloned(repo_dir, owner, name, settings.github_token)
-    await deps.create_worktree(repo_dir, work_dir, branch_name)
+    base = await deps.create_worktree(repo_dir, work_dir, branch_name)
     resume_context = await deps.load_resume_context(key)
-    prompt = build_prompt(detail, resume_context=resume_context, repo=repo)
+    prompt = build_prompt(
+        detail, resume_context=resume_context, repo=repo, base_branch=base or "main"
+    )
 
     await _advance_state(key, lc.IMPLEMENTING, deps.set_state, deps.get_run)
     result: AgentRunResult = await deps.run_agent(

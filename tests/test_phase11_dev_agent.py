@@ -1686,3 +1686,63 @@ async def test_ticket_search_keeps_the_sprint_clause_when_a_sprint_is_open() -> 
         settings=_settings(JIRA_DOMAIN="x.atlassian.net"), transport=transport,
     )
     assert "sprint in openSprints()" in seen[0], f"sprint clause dropped: {seen[0]}"
+
+
+# ─── not every repo's default branch is "main" ────────────────────────────────
+
+
+async def test_the_default_branch_is_detected_not_assumed() -> None:
+    """git_ops hardcoded "main". Against a repo whose default is master the
+    very first run died on `fatal: couldn't find remote ref main` -- caught on
+    the first live end-to-end attempt, on this repository."""
+    from meeting_notes.dev_agent import git_ops
+
+    calls: list[list[str]] = []
+
+    async def fake_git(args, cwd=None):
+        calls.append(args)
+        if args[:2] == ["symbolic-ref", "refs/remotes/origin/HEAD"]:
+            return "refs/remotes/origin/master"
+        return ""
+
+    branch = await git_ops.default_branch("/repo", run=fake_git)
+    assert branch == "master", f"expected master, got {branch!r}"
+
+
+async def test_the_default_branch_falls_back_when_head_is_unset() -> None:
+    """A fresh clone can have no origin/HEAD. Guessing "main" there is what
+    caused the failure in the first place, so try the common names instead."""
+    from meeting_notes.dev_agent import git_ops
+
+    async def fake_git(args, cwd=None):
+        if args[:2] == ["symbolic-ref", "refs/remotes/origin/HEAD"]:
+            raise git_ops.GitError("fatal: ref refs/remotes/origin/HEAD is not a symbolic ref")
+        if args[:2] == ["rev-parse", "--verify"] and args[-1].endswith("master"):
+            return "abc123"
+        raise git_ops.GitError("unknown revision")
+
+    assert await git_ops.default_branch("/repo", run=fake_git) == "master"
+
+
+async def test_the_worktree_branches_from_the_detected_default() -> None:
+    from meeting_notes.dev_agent import git_ops
+
+    calls: list[list[str]] = []
+
+    async def fake_git(args, cwd=None):
+        calls.append(args)
+        if args[:2] == ["symbolic-ref", "refs/remotes/origin/HEAD"]:
+            return "refs/remotes/origin/master"
+        return ""
+
+    await git_ops.create_worktree("/repo", "/work", "agent/K-1", run=fake_git)
+    flat = [" ".join(a) for a in calls]
+    assert any("fetch origin master" in f for f in flat), f"fetched the wrong branch: {flat}"
+    assert any("origin/master" in f and "worktree add" in f for f in flat), flat
+
+
+def test_the_prompt_opens_the_pr_against_the_detected_default() -> None:
+    from meeting_notes.dev_agent.orchestrator import build_prompt
+
+    prompt = build_prompt({"key": "K-1", "summary": "s"}, base_branch="master")
+    assert "--base master" in prompt, "the PR would target a branch that may not exist"

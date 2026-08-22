@@ -10,6 +10,7 @@ keeping unreachable, so it is removed rather than ported unchanged.
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 import structlog
 
@@ -43,22 +44,55 @@ async def ensure_repo_cloned(repo_dir: str, owner: str, repo: str, token: str) -
     await _run_git(["clone", url, repo_dir])
 
 
-async def create_worktree(repo_dir: str, work_dir: str, branch_name: str) -> None:
-    await _run_git(["fetch", "origin", "main"], cwd=repo_dir)
+async def default_branch(repo_dir: str, *, run: Any = None) -> str:
+    """The repository's own default branch.
+
+    Assuming "main" broke the very first live run against a repo whose default
+    is `master` -- `fatal: couldn't find remote ref main`, before the agent had
+    done anything at all. `origin/HEAD` is what the remote actually points at;
+    a fresh clone can leave it unset, so fall back to probing the common names
+    rather than guessing one of them.
+    """
+    run = run or _run_git
+    try:
+        ref = await run(["symbolic-ref", "refs/remotes/origin/HEAD"], cwd=repo_dir)
+        name = (ref or "").strip().rsplit("/", 1)[-1]
+        if name:
+            return name
+    except GitError:
+        pass
+    for candidate in ("main", "master", "develop"):
+        try:
+            await run(["rev-parse", "--verify", f"refs/remotes/origin/{candidate}"], cwd=repo_dir)
+            return candidate
+        except GitError:
+            continue
+    return "main"
+
+
+async def create_worktree(
+    repo_dir: str, work_dir: str, branch_name: str, *, run: Any = None
+) -> str:
+    """Branch a worktree off the repository's default branch. Returns that
+    branch, so the caller can tell the agent which base to open the PR against."""
+    run = run or _run_git
+    base = await default_branch(repo_dir, run=run)
+    await run(["fetch", "origin", base], cwd=repo_dir)
     # Remove a stale worktree/branch from a previous failed attempt (ignore errors).
     try:
-        await _run_git(["worktree", "remove", "--force", work_dir], cwd=repo_dir)
+        await run(["worktree", "remove", "--force", work_dir], cwd=repo_dir)
     except GitError:
         pass
     try:
-        await _run_git(["branch", "-D", branch_name], cwd=repo_dir)
+        await run(["branch", "-D", branch_name], cwd=repo_dir)
     except GitError:
         pass
 
-    await _run_git(
-        ["worktree", "add", "-b", branch_name, work_dir, "origin/main"], cwd=repo_dir
+    await run(
+        ["worktree", "add", "-b", branch_name, work_dir, f"origin/{base}"], cwd=repo_dir
     )
-    log.info("git_ops.worktree_created", branch=branch_name, work_dir=work_dir)
+    log.info("git_ops.worktree_created", branch=branch_name, work_dir=work_dir, base=base)
+    return base
 
 
 async def remove_worktree(
