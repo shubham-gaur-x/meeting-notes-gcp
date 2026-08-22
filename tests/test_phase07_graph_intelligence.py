@@ -1089,10 +1089,19 @@ async def test_pending_rows_are_embedded_concurrently() -> None:
 
 
 def _person_gating_source(fn_name: str) -> str:
+    """The function's own body, not a fixed character window.
+
+    A window ran past the end of a short function into the next one's
+    docstring, so the assertion below was satisfied by neighbouring prose
+    rather than by the gate itself -- inserting a function between them broke
+    it while the gate was still perfectly in place.
+    """
     from pathlib import Path
+
     source = Path("meeting_notes/graph_client.py").read_text()
     start = source.index(f"async def {fn_name}(")
-    return source[start : start + 1600]
+    nxt = source.find("\nasync def ", start + 1)
+    return source[start : nxt if nxt != -1 else len(source)]
 
 
 def test_bridge_nodes_gate_untracked_people() -> None:
@@ -1103,7 +1112,7 @@ def test_bridge_nodes_gate_untracked_people() -> None:
     individuals on the dashboard: with 0 of 33 people opted in, it still
     returned three of them by name.
     """
-    assert "tracked" in _person_gating_source("get_bridge_nodes"), (
+    assert "_UNTRACKED_PERSON_EXCLUDED" in _person_gating_source("get_bridge_nodes"), (
         "betweenness centrality names individuals and must honour Person.tracked"
     )
 
@@ -1111,7 +1120,7 @@ def test_bridge_nodes_gate_untracked_people() -> None:
 def test_community_members_gate_untracked_people() -> None:
     """The workstream drill-down lists a cluster's members by name. That is
     still naming individuals, so it takes the same gate."""
-    assert "tracked" in _person_gating_source("get_community_members"), (
+    assert "_UNTRACKED_PERSON_EXCLUDED" in _person_gating_source("get_community_members"), (
         "community membership names individuals and must honour Person.tracked"
     )
 

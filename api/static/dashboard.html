@@ -90,6 +90,7 @@
   <button data-panel="meetings">Meetings</button>
   <button data-panel="actions">Action Items</button>
   <button data-panel="workstreams">Workstreams</button>
+  <button data-panel="graph">Graph</button>
   <button data-panel="ask">Ask</button>
   <button data-panel="review">Needs You</button>
 </nav>
@@ -133,6 +134,32 @@
     </div>
     <p class="hint">Open commitments pulled out of meetings, soonest deadline first.</p>
     <div class="scroll" id="actions-body"></div>
+  </section>
+
+  <section class="panel" id="graph">
+    <div class="row">
+      <button class="action" onclick="loadGraph()">Refresh</button>
+      <select id="graph-labels" onchange="loadGraph()">
+        <option value="">Everything</option>
+        <option value="Meeting,Topic">Meetings and topics</option>
+        <option value="Meeting,Decision,ActionItem">Meetings and what came out of them</option>
+        <option value="Topic">Topics only</option>
+        <option value="Fact">Facts only</option>
+      </select>
+      <select id="graph-limit" onchange="loadGraph()">
+        <option value="80">80 nodes</option>
+        <option value="150" selected>150 nodes</option>
+        <option value="250">250 nodes</option>
+        <option value="400">400 nodes</option>
+      </select>
+      <span class="muted" id="graph-note"></span>
+    </div>
+    <p class="hint">The most connected part of the graph, and the links among it.
+       Drag to pan, scroll to zoom, hover a node for its name.</p>
+    <div id="graph-legend" class="row" style="gap:14px;flex-wrap:wrap;margin-bottom:6px"></div>
+    <canvas id="graph-canvas" style="width:100%;height:560px;border:1px solid #222;
+       border-radius:8px;cursor:grab;display:block"></canvas>
+    <div id="graph-body"></div>
   </section>
 
   <section class="panel" id="workstreams">
@@ -453,11 +480,178 @@ async function loadReview() {
   } catch (e) { fail("#review-body", e); }
 }
 
+
+// ─── graph view ───────────────────────────────────────────────────────────────
+// A force-directed layout written inline. The dashboard ships no external
+// scripts (CSP, and one fewer thing to break), so no vis.js/cytoscape — and at
+// a few hundred nodes an O(n^2) repulsion pass is comfortably fast enough.
+
+const NODE_COLOR = {
+  Meeting: "#6ea8fe", Topic: "#5ddba4", Decision: "#f0a35e", ActionItem: "#e06c9f",
+  Person: "#c792ea", Organization: "#7fd1d8", Fact: "#9aa4b2", Procedure: "#d8c46a",
+  Blocker: "#ff6b6b", Preference: "#b0a0ff",
+};
+const GRAPH = { nodes: [], edges: [], tx: 0, ty: 0, scale: 1, hover: null };
+
+function layout(nodes, edges, w, h) {
+  const idx = new Map(nodes.map((n, i) => [n.id, i]));
+  // Deterministic start: a circle, so the same data lays out the same way and
+  // the picture does not reshuffle on every refresh.
+  nodes.forEach((n, i) => {
+    const a = (2 * Math.PI * i) / nodes.length;
+    n.x = w / 2 + (Math.min(w, h) / 3) * Math.cos(a);
+    n.y = h / 2 + (Math.min(w, h) / 3) * Math.sin(a);
+    n.vx = 0; n.vy = 0;
+  });
+  const links = edges.map(e => [idx.get(e.source), idx.get(e.target)])
+                     .filter(([a, b]) => a !== undefined && b !== undefined);
+  for (let step = 0; step < 220; step++) {
+    for (let i = 0; i < nodes.length; i++) {
+      for (let j = i + 1; j < nodes.length; j++) {
+        const a = nodes[i], b = nodes[j];
+        let dx = a.x - b.x, dy = a.y - b.y;
+        let d2 = dx * dx + dy * dy || 0.01;
+        const rep = 900 / d2;
+        const d = Math.sqrt(d2);
+        a.vx += (dx / d) * rep; a.vy += (dy / d) * rep;
+        b.vx -= (dx / d) * rep; b.vy -= (dy / d) * rep;
+      }
+    }
+    for (const [ai, bi] of links) {
+      const a = nodes[ai], b = nodes[bi];
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const d = Math.sqrt(dx * dx + dy * dy) || 0.01;
+      const f = (d - 70) * 0.012;
+      a.vx += (dx / d) * f; a.vy += (dy / d) * f;
+      b.vx -= (dx / d) * f; b.vy -= (dy / d) * f;
+    }
+    for (const n of nodes) {
+      n.vx += (w / 2 - n.x) * 0.002; n.vy += (h / 2 - n.y) * 0.002;
+      n.x += Math.max(-12, Math.min(12, n.vx)); n.y += Math.max(-12, Math.min(12, n.vy));
+      n.vx *= 0.82; n.vy *= 0.82;
+    }
+  }
+}
+
+function radiusOf(n) { return 4 + Math.min(9, (n.score || 0) * 260); }
+
+function drawGraph() {
+  const c = $("#graph-canvas"), ctx = c.getContext("2d");
+  const w = c.width, h = c.height;
+  ctx.clearRect(0, 0, w, h);
+  ctx.save();
+  ctx.translate(GRAPH.tx, GRAPH.ty); ctx.scale(GRAPH.scale, GRAPH.scale);
+
+  const byId = new Map(GRAPH.nodes.map(n => [n.id, n]));
+  ctx.strokeStyle = "rgba(150,160,180,0.22)"; ctx.lineWidth = 1;
+  for (const e of GRAPH.edges) {
+    const a = byId.get(e.source), b = byId.get(e.target);
+    if (!a || !b) continue;
+    ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+  }
+  for (const n of GRAPH.nodes) {
+    ctx.beginPath();
+    ctx.arc(n.x, n.y, radiusOf(n), 0, 2 * Math.PI);
+    ctx.fillStyle = NODE_COLOR[n.type] || "#888";
+    ctx.globalAlpha = GRAPH.hover && GRAPH.hover !== n ? 0.45 : 1;
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+  if (GRAPH.hover) {
+    const n = GRAPH.hover;
+    const text = `${n.type}: ${n.label || "(untitled)"}`;
+    ctx.font = "12px system-ui, sans-serif";
+    const tw = ctx.measureText(text).width + 10;
+    ctx.fillStyle = "rgba(10,12,16,0.92)";
+    ctx.fillRect(n.x + 8, n.y - 22, tw, 20);
+    ctx.fillStyle = "#e8eaed";
+    ctx.fillText(text, n.x + 13, n.y - 8);
+  }
+  ctx.restore();
+}
+
+function graphPointer(ev) {
+  const c = $("#graph-canvas"), r = c.getBoundingClientRect();
+  return {
+    x: ((ev.clientX - r.left) * (c.width / r.width) - GRAPH.tx) / GRAPH.scale,
+    y: ((ev.clientY - r.top) * (c.height / r.height) - GRAPH.ty) / GRAPH.scale,
+  };
+}
+
+function wireGraphCanvas() {
+  const c = $("#graph-canvas");
+  if (c.dataset.wired) return;
+  c.dataset.wired = "1";
+  let dragging = false, last = null;
+  c.addEventListener("mousedown", e => { dragging = true; last = { x: e.clientX, y: e.clientY };
+                                         c.style.cursor = "grabbing"; });
+  window.addEventListener("mouseup", () => { dragging = false; c.style.cursor = "grab"; });
+  c.addEventListener("mousemove", e => {
+    if (dragging && last) {
+      GRAPH.tx += (e.clientX - last.x); GRAPH.ty += (e.clientY - last.y);
+      last = { x: e.clientX, y: e.clientY };
+      drawGraph(); return;
+    }
+    const p = graphPointer(e);
+    let found = null;
+    for (const n of GRAPH.nodes) {
+      const dx = n.x - p.x, dy = n.y - p.y, r = radiusOf(n) + 4;
+      if (dx * dx + dy * dy <= r * r) { found = n; break; }
+    }
+    if (found !== GRAPH.hover) { GRAPH.hover = found; drawGraph(); }
+  });
+  c.addEventListener("wheel", e => {
+    e.preventDefault();
+    const f = e.deltaY < 0 ? 1.1 : 0.9;
+    GRAPH.scale = Math.max(0.25, Math.min(4, GRAPH.scale * f));
+    drawGraph();
+  }, { passive: false });
+}
+
+async function loadGraph() {
+  const note = $("#graph-note");
+  try {
+    note.textContent = "laying out…";
+    const labels = $("#graph-labels").value, limit = $("#graph-limit").value;
+    const qs = `limit=${limit}` + (labels ? `&labels=${encodeURIComponent(labels)}` : "");
+    const d = await get(`/graph/visualize?${qs}`);
+
+    const c = $("#graph-canvas");
+    // Match the backing store to the CSS box or everything renders blurry.
+    c.width = c.clientWidth; c.height = c.clientHeight;
+    GRAPH.nodes = d.nodes || []; GRAPH.edges = d.edges || [];
+    GRAPH.tx = 0; GRAPH.ty = 0; GRAPH.scale = 1; GRAPH.hover = null;
+
+    if (!GRAPH.nodes.length) {
+      note.textContent = "";
+      $("#graph-body").innerHTML = empty("Nothing to draw for this selection.");
+      c.getContext("2d").clearRect(0, 0, c.width, c.height);
+      return;
+    }
+    layout(GRAPH.nodes, GRAPH.edges, c.width, c.height);
+    wireGraphCanvas();
+    drawGraph();
+
+    const counts = {};
+    for (const n of GRAPH.nodes) counts[n.type] = (counts[n.type] || 0) + 1;
+    $("#graph-legend").innerHTML = Object.entries(counts)
+      .sort((a, b) => b[1] - a[1])
+      .map(([t, n]) =>
+        `<span class="muted" style="font-size:12px">` +
+        `<span style="display:inline-block;width:10px;height:10px;border-radius:50%;` +
+        `background:${NODE_COLOR[t] || "#888"};margin-right:5px"></span>${esc(t)} ${n}</span>`)
+      .join("");
+    note.textContent = `${GRAPH.nodes.length} nodes · ${GRAPH.edges.length} links`;
+    $("#graph-body").innerHTML = "";
+  } catch (e) { note.textContent = ""; fail("#graph-body", e); }
+}
+
 const LOADERS = {
   overview: loadOverview,
   meetings: () => { if (!MEETINGS.length) loadMeetings(); },
   actions: () => { if (!ACTIONS.length) loadActions(); },
   workstreams: loadWorkstreams,
+  graph: loadGraph,
   ask: renderExamples,
   review: loadReview,
 };

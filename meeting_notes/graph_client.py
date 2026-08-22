@@ -739,6 +739,61 @@ async def get_community_members(community_id: int, driver: Any = None) -> list[d
         return [dict(r) async for r in result]
 
 
+async def get_graph_snapshot(
+    limit: int = 150,
+    labels: list[str] | None = None,
+    driver: Any = None,
+) -> dict[str, Any]:
+    """A bounded, drawable slice of the graph: nodes plus the edges among them.
+
+    Bounded on purpose. The full graph is ~600 nodes and several thousand
+    edges, which is neither readable as a picture nor fast to lay out in a
+    browser, so this takes the most connected nodes by PageRank and returns
+    only the edges *between* those — a subgraph, not a truncated edge list,
+    or the picture would show nodes with their relationships cut off.
+
+    Bookkeeping labels are excluded for the same reason they are excluded from
+    insights: a `PersonReview` node beside a Topic tells a reader nothing.
+
+    **Governance:** drawing a person IS naming them, so this reuses the same
+    `Person.tracked` predicate as PageRank, centrality and community
+    membership rather than spelling a fourth variant of the rule.
+    """
+    driver = driver or get_driver()
+    wanted = labels or []
+    async with driver.session() as session:
+        result = await session.run(
+            f"""
+            MATCH (n)
+            WHERE NOT any(l IN labels(n) WHERE l IN $bookkeeping)
+              AND {_UNTRACKED_PERSON_EXCLUDED}
+              AND ($wanted = [] OR any(l IN labels(n) WHERE l IN $wanted))
+            RETURN n.id AS id,
+                   COALESCE(n.name, n.title, n.task, n.text, n.summary, n.email) AS label,
+                   labels(n)[0] AS type,
+                   coalesce(n.pagerank_score, 0.0) AS score,
+                   n.community_id AS community_id
+            ORDER BY coalesce(n.pagerank_score, 0.0) DESC
+            LIMIT $limit
+            """,
+            bookkeeping=list(BOOKKEEPING_LABELS), wanted=wanted, limit=limit,
+        )
+        nodes = [dict(r) async for r in result]
+
+        ids = [n["id"] for n in nodes]
+        result = await session.run(
+            """
+            MATCH (a)-[e]->(b)
+            WHERE a.id IN $ids AND b.id IN $ids
+            RETURN a.id AS source, b.id AS target, type(e) AS type
+            """,
+            ids=ids,
+        )
+        edges = [dict(r) async for r in result]
+
+    return {"nodes": nodes, "edges": edges}
+
+
 async def get_bridge_nodes(limit: int = 10, driver: Any = None) -> list[dict[str, Any]]:
     """Nodes connecting otherwise separate clusters, by betweenness.
 

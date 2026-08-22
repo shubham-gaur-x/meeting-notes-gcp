@@ -89,6 +89,19 @@ async def digest_weekly(
     return await digest.weekly_digest(days=days, start=start, end=end)
 
 
+@router.get("/visualize")
+async def visualize(
+    limit: int = Query(150, ge=10, le=400),
+    labels: str | None = Query(None, description="comma-separated node labels to include"),
+    _: Principal = Depends(principal),
+) -> dict[str, Any]:
+    """A drawable slice of the graph — the most connected nodes and the edges
+    between them."""
+    wanted = [x.strip() for x in labels.split(",") if x.strip()] if labels else None
+    snapshot = await graph_client.get_graph_snapshot(limit=limit, labels=wanted)
+    return {**snapshot, "count": len(snapshot["nodes"])}
+
+
 @router.get("/meeting/{meeting_id}")
 async def meeting_detail(meeting_id: str, _: Principal = Depends(principal)) -> dict[str, Any]:
     """Everything one meeting produced — attendees, topics, decisions, actions."""

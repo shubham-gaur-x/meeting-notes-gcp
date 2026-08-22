@@ -472,7 +472,7 @@ def test_every_tab_has_a_panel_and_a_loader() -> None:
     html = (Path(api.__file__).parent / "static" / "dashboard.html").read_text()
     tabs = set(re.findall(r'data-panel="([a-z]+)"', html))
 
-    assert tabs == {"overview", "meetings", "actions", "workstreams", "ask", "review"}
+    assert tabs == {"overview", "meetings", "actions", "workstreams", "graph", "ask", "review"}
     for panel in tabs:
         assert f'id="{panel}"' in html, f"tab {panel} has no panel"
         assert f"{panel}:" in html, f"tab {panel} has no entry in LOADERS"
@@ -848,3 +848,67 @@ def test_switching_to_a_custom_range_does_not_leave_a_stale_label() -> None:
     assert "Pick both dates." in body, (
         "switching to custom must replace the label immediately"
     )
+
+
+# ─── the graph itself, visible ────────────────────────────────────────────────
+
+
+async def test_graph_snapshot_endpoint_returns_nodes_and_edges(app: Any, monkeypatch: Any) -> None:
+    import api.routers.graph as g
+
+    async def fake_snapshot(limit=150, labels=None, driver=None):
+        return {
+            "nodes": [{"id": "m1", "label": "Kickoff", "type": "Meeting", "score": 0.4},
+                      {"id": "t1", "label": "sow review", "type": "Topic", "score": 0.2}],
+            "edges": [{"source": "m1", "target": "t1", "type": "DISCUSSED"}],
+        }
+
+    monkeypatch.setattr(g.graph_client, "get_graph_snapshot", fake_snapshot)
+    response = await _get(app, "/graph/visualize")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["count"] == 2
+    assert body["nodes"][0]["type"] == "Meeting"
+    assert body["edges"][0]["type"] == "DISCUSSED"
+
+
+def test_the_graph_view_honours_the_tracked_gate() -> None:
+    """A graph view names individuals by construction -- it draws them as
+    nodes. Same rule as PageRank and centrality: naming a person is opt-in."""
+    from pathlib import Path
+
+    source = Path("meeting_notes/graph_client.py").read_text()
+    start = source.index("async def get_graph_snapshot(")
+    assert "_UNTRACKED_PERSON_EXCLUDED" in source[start : start + 1800], (
+        "the graph view must reuse the same tracked predicate as the other "
+        "per-person surfaces"
+    )
+
+
+async def test_the_snapshot_is_bounded(app: Any, monkeypatch: Any) -> None:
+    """597 nodes and thousands of edges is neither readable nor fast. The
+    endpoint caps what it will draw."""
+    import api.routers.graph as g
+
+    seen: dict = {}
+
+    async def fake_snapshot(limit=150, labels=None, driver=None):
+        seen["limit"] = limit
+        return {"nodes": [], "edges": []}
+
+    monkeypatch.setattr(g.graph_client, "get_graph_snapshot", fake_snapshot)
+    await _get(app, "/graph/visualize")
+    assert seen["limit"] <= 400, "an unbounded snapshot would hang the browser"
+    assert (await _get(app, "/graph/visualize?limit=99999")).status_code == 422
+
+
+def test_the_dashboard_has_a_graph_tab() -> None:
+    from pathlib import Path
+
+    import api
+
+    html = (Path(api.__file__).parent / "static" / "dashboard.html").read_text()
+    assert 'data-panel="graph"' in html
+    assert "loadGraph" in html
+    # No CDN: the renderer has to be inline, like everything else here.
+    assert "cdn." not in html and "unpkg" not in html
