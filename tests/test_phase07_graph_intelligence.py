@@ -1141,3 +1141,91 @@ async def test_an_untracked_person_is_absent_from_bridges_and_communities() -> N
 
     for cypher in captured:
         assert "tracked" in cypher, f"no tracked gate in:\n{cypher}"
+
+
+# ─── action-item owners are order-dependent too ───────────────────────────────
+
+
+def test_nightly_reresolves_action_item_owners() -> None:
+    """ASSIGNED_TO has the same order-dependence reresolve_reviews exists for.
+
+    Measured on the rebuilt corpus: meetings written at 23:13:37, first Person
+    node created at 23:15:15. Action items extracted in those 98 seconds could
+    not match anyone, so ASSIGNED_TO never formed -- and nothing ever retried.
+    22 action items, 3 assigned, while the resolver matched 'Namrata Mehta' to
+    namrata.mehta@onixnet.com at confidence 1.00 when asked directly.
+    """
+    from meeting_notes import person_resolver
+
+    assert hasattr(person_resolver, "reresolve_action_owners")
+
+
+async def test_reresolve_attaches_a_now_resolvable_owner() -> None:
+    from meeting_notes import person_resolver
+
+    statements: list[tuple[str, dict]] = []
+
+    class _Result:
+        def __init__(self, rows): self._rows = list(rows)
+        def __aiter__(self): return self
+        async def __anext__(self):
+            if not self._rows:
+                raise StopAsyncIteration
+            return self._rows.pop(0)
+
+    class _Session:
+        async def run(self, cypher, **kw):
+            statements.append((cypher, kw))
+            if "RETURN a.id" in cypher:
+                return _Result([{"action_id": "a1", "owner": "Namrata Mehta"}])
+            return _Result([])
+        async def __aenter__(self): return self
+        async def __aexit__(self, *e): return False
+
+    class _Driver:
+        def session(self): return _Session()
+
+    out = await person_resolver.reresolve_action_owners(
+        driver=_Driver(),
+        known_people=[{"email": "namrata.mehta@onixnet.com", "name": "Namrata Mehta",
+                       "tracked": False}],
+    )
+
+    assert out["resolved"] == 1, f"expected the owner to resolve, got {out}"
+    writes = [c for c, _ in statements if "ASSIGNED_TO" in c]
+    assert writes, "no ASSIGNED_TO edge was written"
+
+
+async def test_reresolve_leaves_an_unresolvable_owner_alone() -> None:
+    """"The group" is not a person. It must not become one."""
+    from meeting_notes import person_resolver
+
+    class _Result:
+        def __init__(self, rows): self._rows = list(rows)
+        def __aiter__(self): return self
+        async def __anext__(self):
+            if not self._rows:
+                raise StopAsyncIteration
+            return self._rows.pop(0)
+
+    written: list[str] = []
+
+    class _Session:
+        async def run(self, cypher, **kw):
+            if "RETURN a.id" in cypher:
+                return _Result([{"action_id": "a1", "owner": "The group"}])
+            written.append(cypher)
+            return _Result([])
+        async def __aenter__(self): return self
+        async def __aexit__(self, *e): return False
+
+    class _Driver:
+        def session(self): return _Session()
+
+    out = await person_resolver.reresolve_action_owners(
+        driver=_Driver(),
+        known_people=[{"email": "namrata.mehta@onixnet.com", "name": "Namrata Mehta",
+                       "tracked": False}],
+    )
+    assert out["resolved"] == 0
+    assert not written, "an unresolvable owner must not write an edge"

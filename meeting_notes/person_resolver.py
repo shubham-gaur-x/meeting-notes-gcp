@@ -306,3 +306,82 @@ async def reresolve_reviews(
         pending=len(pending), resolved=resolved, remaining=len(pending) - resolved,
     )
     return {"pending": len(pending), "resolved": resolved, "remaining": len(pending) - resolved}
+
+
+async def reresolve_action_owners(
+    driver: Any = None,
+    *,
+    roster_path: str | None = None,
+    known_people: list[dict[str, Any]] | None = None,
+    dry_run: bool = False,
+) -> dict[str, int]:
+    """Attach ASSIGNED_TO for action items whose owner is resolvable now.
+
+    Same order-dependence `reresolve_reviews` exists for, on a different edge.
+    `upsert_meeting_graph` reads the known-people set once, before the
+    transaction, so an action item extracted before anyone was in the graph
+    can never match. Measured on a full rebuild: meetings written at 23:13:37,
+    the first Person node created at 23:15:15 — everything in those 98 seconds
+    lost its owner edge permanently, while the resolver matched the same names
+    at confidence 1.00 when asked afterwards.
+
+    The ActionItem keeps its raw `owner` string either way; this only adds the
+    edge. An owner that is not a person — "The group", "Unassigned" — resolves
+    to nothing and is left alone.
+    """
+    from meeting_notes.graph_client import get_driver, get_known_people
+    from meeting_notes.models import Attendee
+    from meeting_notes.utils import uuid5_id
+
+    driver = driver or get_driver()
+    known = known_people if known_people is not None else await get_known_people(driver)
+    roster = load_roster(roster_path)
+
+    async with driver.session() as session:
+        result = await session.run(
+            """
+            MATCH (a:ActionItem)
+            WHERE a.owner IS NOT NULL AND NOT (a)-[:ASSIGNED_TO]->(:Person)
+            RETURN a.id AS action_id, a.owner AS owner
+            """
+        )
+        pending = [dict(x) async for x in result]
+
+    resolved = 0
+    for row in pending:
+        owner = row["owner"] or ""
+        outcome = resolve(
+            Attendee(name=owner, email=owner if "@" in owner else None),
+            roster,
+            known_people=known,
+        )
+        if outcome.status != "resolved" or not outcome.email:
+            continue
+        resolved += 1
+        if dry_run:
+            continue
+
+        now = datetime.now(UTC).isoformat()
+        async with driver.session() as session:
+            await session.run(
+                """
+                MERGE (p:Person {email: $email})
+                ON CREATE SET p.created_at = $now, p.tracked = $tracked
+                SET p.name = $name, p.id = $person_id, p.updated_at = $now
+                WITH p
+                MATCH (a:ActionItem {id: $action_id})
+                MERGE (a)-[:ASSIGNED_TO]->(p)
+                """,
+                email=outcome.email,
+                name=outcome.name,
+                person_id=uuid5_id("person", outcome.email),
+                tracked=outcome.tracked,
+                action_id=row["action_id"],
+                now=now,
+            )
+
+    log.info(
+        "person_resolver.action_owners_reresolved",
+        pending=len(pending), resolved=resolved, remaining=len(pending) - resolved,
+    )
+    return {"pending": len(pending), "resolved": resolved, "remaining": len(pending) - resolved}

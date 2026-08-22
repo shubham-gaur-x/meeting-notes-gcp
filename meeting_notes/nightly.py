@@ -90,9 +90,13 @@ async def run_step(name: str, **kwargs: Any) -> Any:
         # of the review queue before the algorithms means PageRank and community
         # detection see the fuller attendance graph rather than a snapshot of
         # what happened to be knowable at ingest time.
-        return await person_resolver.reresolve_reviews(
-            roster_path=get_settings().person_roster_path or None
-        )
+        roster_path = get_settings().person_roster_path or None
+        reviews = await person_resolver.reresolve_reviews(roster_path=roster_path)
+        # Attendees and action-item owners have the same order-dependence and
+        # the same remedy; running them together means one pass over what the
+        # graph now knows.
+        owners = await person_resolver.reresolve_action_owners(roster_path=roster_path)
+        return {"reviews": reviews, "action_owners": owners}
     if name == "algorithms":
         return await graph_algorithms.run_full()
     if name == "consolidate":
