@@ -294,8 +294,16 @@ async def list_active_sprint_tickets(
     tickets lives in orchestrator.find_sprint_candidates, one layer up.
     """
     settings = settings or get_settings()
+    # `sprint in openSprints()` matches nothing on a board without sprints, so
+    # on a Kanban board it silently hides every ticket from the agent --
+    # confirmed live: 0 issues with the clause, the whole project without it.
+    # Where there are no sprints the filter is meaningless; the status and
+    # label gates still do the selecting.
+    sprint = await active_sprint_id(settings=settings, transport=transport)
     status_clause = " OR ".join(f'status = "{s}"' for s in statuses)
-    jql_parts = [f"project = {project_key}", "sprint in openSprints()", f"({status_clause})"]
+    jql_parts = [f"project = {project_key}", f"({status_clause})"]
+    if sprint is not None:
+        jql_parts.insert(1, "sprint in openSprints()")
     for label in require_labels:
         jql_parts.append(f'labels = "{label}"')
     for label in skip_labels:

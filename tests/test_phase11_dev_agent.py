@@ -1634,3 +1634,55 @@ async def test_the_clone_and_the_pr_lookup_use_the_ticket_repo() -> None:
     )
     assert pr_lookups and pr_lookups[0] == ("acme", "widgets")
     assert calls["finishes"][0][0] == lifecycle.SHIPPED
+
+
+# ─── boards without sprints ───────────────────────────────────────────────────
+
+
+async def test_ticket_search_drops_the_sprint_clause_on_a_board_without_sprints() -> None:
+    """`sprint in openSprints()` matches nothing on a Kanban board, so the
+    agent could never find a ticket.
+
+    Confirmed live against the real board (type "simple"): the JQL with the
+    sprint clause returned 0 issues and the same JQL without it returned the
+    whole project. The status and label gates still apply -- only the sprint
+    filter, which is meaningless where there are no sprints, is dropped.
+    """
+    from meeting_notes import jira_client
+
+    seen: list[str] = []
+
+    async def transport(method, url, headers, params, body):
+        if "/sprint" in url:
+            return 200, {"values": []}          # no active sprint: Kanban
+        seen.append((params or {}).get("jql", ""))
+        return 200, {"issues": []}
+
+    await jira_client.list_active_sprint_tickets(
+        "MNV", ["To Do"], ["dev-agent"], ["skip"],
+        settings=_settings(JIRA_DOMAIN="x.atlassian.net"), transport=transport,
+    )
+    assert seen, "no search was issued"
+    assert "openSprints" not in seen[0], f"sprint clause survived: {seen[0]}"
+    assert 'labels = "dev-agent"' in seen[0], "the label gate must still apply"
+    assert 'status = "To Do"' in seen[0], "the status gate must still apply"
+
+
+async def test_ticket_search_keeps_the_sprint_clause_when_a_sprint_is_open() -> None:
+    """On a Scrum board the sprint is the point: it is what stops the agent
+    picking up the whole backlog."""
+    from meeting_notes import jira_client
+
+    seen: list[str] = []
+
+    async def transport(method, url, headers, params, body):
+        if "/sprint" in url:
+            return 200, {"values": [{"id": 7, "state": "active"}]}
+        seen.append((params or {}).get("jql", ""))
+        return 200, {"issues": []}
+
+    await jira_client.list_active_sprint_tickets(
+        "MNV", ["To Do"], ["dev-agent"], ["skip"],
+        settings=_settings(JIRA_DOMAIN="x.atlassian.net"), transport=transport,
+    )
+    assert "sprint in openSprints()" in seen[0], f"sprint clause dropped: {seen[0]}"
