@@ -65,6 +65,8 @@ Full detail: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 | [`docs/GOOGLE_AUTH.md`](docs/GOOGLE_AUTH.md) | OAuth setup, the 7-day token problem, the Onix migration path |
 | [`docs/DECISIONS.md`](docs/DECISIONS.md) | ADR log. Append, never rewrite. |
 | [`docs/SETUP.md`](docs/SETUP.md) | Runbook for all three tiers |
+| [`docs/KNOWLEDGE_TRANSFER.html`](docs/KNOWLEDGE_TRANSFER.html) | Onboarding reference — architecture, file-by-file module map, built vs pending. Open in a browser |
+| [`docs/meeting-notes-gcp-KT.pptx`](docs/meeting-notes-gcp-KT.pptx) | 16-slide handover deck, speaker notes included. Regenerate with `npm i pptxgenjs && node docs/kt-deck.js` |
 
 ## Getting started
 

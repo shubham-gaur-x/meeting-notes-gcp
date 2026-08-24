@@ -60,6 +60,10 @@ graphify-out/.graphify_root
 # never be committed.
 dev-agent/
 
+# Node — only ever installed transiently to regenerate the KT deck
+node_modules/
+package-lock.json
+
 # Logs
 *.log
 logs/

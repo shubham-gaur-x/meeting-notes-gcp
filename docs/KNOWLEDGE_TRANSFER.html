@@ -1,0 +1,555 @@
+<title>Meeting Memory Graph</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Serif:wght@500;600&display=swap">
+<style>
+  :root{
+    --ground:#f7f8fa; --surface:#ffffff; --raised:#eef1f6;
+    --ink:#171a21; --muted:#5c6472; --faint:#8a92a1;
+    --rule:#dfe4ec; --rule-soft:#e9edf3;
+    --accent:#2f6fd0; --accent-soft:#e6eefb;
+    --good:#1f8a5f; --good-soft:#e2f3ea;
+    --warn:#b3641a; --warn-soft:#fbeee0;
+    --stop:#b3323c; --stop-soft:#fbe6e8;
+    --sans:"IBM Plex Sans",ui-sans-serif,system-ui,sans-serif;
+    --serif:"IBM Plex Serif",Georgia,serif;
+    --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,monospace;
+  }
+  @media (prefers-color-scheme:dark){
+    :root:not([data-theme="light"]){
+      --ground:#12151c; --surface:#1a1e27; --raised:#232833;
+      --ink:#e6e9ef; --muted:#98a1b3; --faint:#6b7484;
+      --rule:#2b313d; --rule-soft:#232833;
+      --accent:#6ea8fe; --accent-soft:#1b2740;
+      --good:#5ddba4; --good-soft:#15302a;
+      --warn:#e0a458; --warn-soft:#33260f;
+      --stop:#f28b93; --stop-soft:#331a1d;
+    }
+  }
+  :root[data-theme="dark"]{
+    --ground:#12151c; --surface:#1a1e27; --raised:#232833;
+    --ink:#e6e9ef; --muted:#98a1b3; --faint:#6b7484;
+    --rule:#2b313d; --rule-soft:#232833;
+    --accent:#6ea8fe; --accent-soft:#1b2740;
+    --good:#5ddba4; --good-soft:#15302a;
+    --warn:#e0a458; --warn-soft:#33260f;
+    --stop:#f28b93; --stop-soft:#331a1d;
+  }
+
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--ground); color:var(--ink);
+    font-family:var(--sans); font-size:16px; line-height:1.65;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{display:grid; grid-template-columns:236px minmax(0,1fr); gap:56px;
+        max-width:1180px; margin:0 auto; padding:0 32px}
+  @media(max-width:900px){ .wrap{grid-template-columns:1fr; gap:0; padding:0 20px} }
+
+  /* ── nav ─────────────────────────────────────────────── */
+  nav{position:sticky; top:0; align-self:start; max-height:100vh; overflow-y:auto;
+      padding:44px 0 40px; font-size:13.5px}
+  @media(max-width:900px){ nav{position:static; max-height:none; padding:28px 0 0;
+      border-bottom:1px solid var(--rule); margin-bottom:28px} }
+  nav .navtitle{font-family:var(--mono); font-size:11px; letter-spacing:.09em;
+      text-transform:uppercase; color:var(--faint); margin:0 0 14px}
+  nav ol{list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:1px}
+  nav a{display:block; padding:5px 10px; color:var(--muted); text-decoration:none;
+        border-left:2px solid transparent; border-radius:0 4px 4px 0}
+  nav a:hover{color:var(--ink); background:var(--raised); border-left-color:var(--accent)}
+  nav a:focus-visible{outline:2px solid var(--accent); outline-offset:1px}
+
+  /* ── masthead ────────────────────────────────────────── */
+  main{padding:44px 0 96px; min-width:0}
+  header.mast{border-bottom:1px solid var(--rule); padding-bottom:30px; margin-bottom:8px}
+  .eyebrow{font-family:var(--mono); font-size:11.5px; letter-spacing:.1em;
+      text-transform:uppercase; color:var(--accent); margin:0 0 12px}
+  h1{font-family:var(--serif); font-weight:600; font-size:clamp(30px,4.4vw,44px);
+     line-height:1.15; margin:0 0 14px; text-wrap:balance; letter-spacing:-.015em}
+  .standfirst{font-size:18px; color:var(--muted); margin:0; max-width:62ch}
+
+  .facts{display:grid; grid-template-columns:repeat(auto-fit,minmax(118px,1fr));
+         gap:1px; background:var(--rule-soft); border:1px solid var(--rule-soft);
+         border-radius:8px; overflow:hidden; margin:26px 0 0}
+  .fact{background:var(--surface); padding:13px 15px}
+  .fact b{display:block; font-family:var(--mono); font-size:19px; font-weight:500;
+          color:var(--ink); font-variant-numeric:tabular-nums; letter-spacing:-.02em}
+  .fact span{display:block; font-size:11.5px; color:var(--faint); margin-top:2px}
+
+  /* ── sections ────────────────────────────────────────── */
+  section{padding-top:52px; scroll-margin-top:16px}
+  h2{font-family:var(--serif); font-weight:600; font-size:25px; margin:0 0 6px;
+     letter-spacing:-.01em; text-wrap:balance}
+  h2 .num{font-family:var(--mono); font-size:12px; color:var(--faint);
+          font-weight:400; margin-right:11px; letter-spacing:0}
+  .lede{color:var(--muted); margin:0 0 22px; max-width:68ch}
+  h3{font-size:15px; font-weight:600; margin:30px 0 9px; letter-spacing:.005em}
+  p{max-width:68ch; margin:0 0 15px}
+  a{color:var(--accent)}
+  code{font-family:var(--mono); font-size:.875em; background:var(--raised);
+       padding:1.5px 5px; border-radius:3px; color:var(--ink)}
+
+  /* ── tables ──────────────────────────────────────────── */
+  .scroll{overflow-x:auto; margin:0 0 8px; border:1px solid var(--rule);
+          border-radius:8px; background:var(--surface)}
+  table{border-collapse:collapse; width:100%; font-size:13.5px; min-width:560px}
+  th{text-align:left; font-family:var(--mono); font-weight:500; font-size:10.5px;
+     letter-spacing:.08em; text-transform:uppercase; color:var(--faint);
+     padding:11px 15px; border-bottom:1px solid var(--rule); white-space:nowrap}
+  td{padding:10px 15px; border-bottom:1px solid var(--rule-soft); vertical-align:top}
+  tr:last-child td{border-bottom:0}
+  td.f{font-family:var(--mono); font-size:12.5px; white-space:nowrap; color:var(--ink)}
+  td.n{font-family:var(--mono); font-variant-numeric:tabular-nums; text-align:right;
+       color:var(--muted); font-size:12.5px}
+
+  /* ── chips ───────────────────────────────────────────── */
+  .chip{display:inline-block; font-family:var(--mono); font-size:10.5px; font-weight:500;
+        letter-spacing:.05em; text-transform:uppercase; padding:2.5px 8px;
+        border-radius:20px; white-space:nowrap}
+  .ok{background:var(--good-soft); color:var(--good)}
+  .part{background:var(--warn-soft); color:var(--warn)}
+  .no{background:var(--stop-soft); color:var(--stop)}
+  .info{background:var(--accent-soft); color:var(--accent)}
+
+  /* ── flow diagram ────────────────────────────────────── */
+  .flow{display:flex; flex-direction:column; gap:0; margin:6px 0 22px}
+  .stage{display:grid; grid-template-columns:26px minmax(0,1fr); gap:16px;
+         padding:14px 16px; background:var(--surface);
+         border:1px solid var(--rule); border-radius:8px}
+  .stage + .arrow{color:var(--faint); font-family:var(--mono); font-size:13px;
+                  padding:3px 0 3px 39px; line-height:1}
+  .stage .idx{font-family:var(--mono); font-size:11px; color:var(--accent);
+              padding-top:3px; font-variant-numeric:tabular-nums}
+  .stage h4{margin:0 0 3px; font-size:14.5px; font-weight:600}
+  .stage p{margin:0; font-size:13px; color:var(--muted); max-width:none}
+  .stage .files{font-family:var(--mono); font-size:11.5px; color:var(--faint);
+                margin-top:6px; display:block; word-break:break-word}
+
+  /* ── callouts ────────────────────────────────────────── */
+  .note{border-left:2px solid var(--accent); background:var(--surface);
+        padding:14px 18px; margin:0 0 18px; border-radius:0 6px 6px 0}
+  .note.warn{border-left-color:var(--warn)}
+  .note p{margin:0; font-size:14px}
+  .note p + p{margin-top:9px}
+  .note .lbl{font-family:var(--mono); font-size:10.5px; letter-spacing:.08em;
+             text-transform:uppercase; color:var(--faint); display:block; margin-bottom:5px}
+
+  ul.tight{margin:0 0 16px; padding-left:20px; max-width:68ch}
+  ul.tight li{margin-bottom:7px}
+  ul.tight li::marker{color:var(--faint)}
+
+  footer{margin-top:64px; padding-top:22px; border-top:1px solid var(--rule);
+         color:var(--faint); font-size:12.5px}
+</style>
+
+<div class="wrap">
+<nav>
+  <p class="navtitle">Contents</p>
+  <ol>
+    <li><a href="#what">What it is</a></li>
+    <li><a href="#flow">How data moves</a></li>
+    <li><a href="#map">Module map</a></li>
+    <li><a href="#schema">Graph schema</a></li>
+    <li><a href="#agent">The dev agent</a></li>
+    <li><a href="#rules">Rules that hold</a></li>
+    <li><a href="#status">Built vs pending</a></li>
+    <li><a href="#run">Running it</a></li>
+    <li><a href="#bugs">Bugs worth knowing</a></li>
+  </ol>
+</nav>
+
+<main>
+<header class="mast">
+  <p class="eyebrow">Knowledge transfer · meeting-notes-gcp</p>
+  <h1>Meetings, turned into a graph that answers questions</h1>
+  <p class="standfirst">Gmail, Calendar and Meet go in. A property graph comes out — one that
+  computes influence, remembers facts, files Jira tickets, and hands coding work to an agent
+  that opens pull requests.</p>
+  <div class="facts">
+    <div class="fact"><b>13,005</b><span>lines of source</span></div>
+    <div class="fact"><b>9,105</b><span>lines of tests</span></div>
+    <div class="fact"><b>665</b><span>tests passing</span></div>
+    <div class="fact"><b>52</b><span>modules</span></div>
+    <div class="fact"><b>24</b><span>ADRs</span></div>
+    <div class="fact"><b>96</b><span>meetings in graph</span></div>
+  </div>
+</header>
+
+<section id="what">
+  <h2><span class="num">01</span>What it is</h2>
+  <p class="lede">A meeting-memory pipeline. It reads a Google Workspace account, extracts
+  structure with an LLM, and stores it as a graph rather than as documents.</p>
+
+  <p>The point of the graph is that it answers questions a folder of notes cannot:
+  <em>who is central to this workstream</em>, <em>what did we decide about the SOW</em>,
+  <em>what am I on the hook for</em>. Meetings, people, topics, decisions and commitments are
+  nodes; who attended what and what produced what are edges.</p>
+
+  <p>This is <strong>v6</strong>, a deliberate rebuild of a working local system (v5). Two
+  things changed fundamentally, and they are the reason the port exists:</p>
+  <ul class="tight">
+    <li><strong>Airbyte is gone.</strong> Ingestion is four connectors we own, running as
+      Cloud Run Jobs. v5 depended on a hosted product for this.</li>
+    <li><strong>No in-process scheduler.</strong> v5 ran APScheduler inside its own web
+      service. v6 uses Cloud Scheduler triggering stateless jobs, so nothing depends on a
+      long-lived process staying alive.</li>
+  </ul>
+  <p>Everything else — Memgraph, the extraction prompts, the Cypher, the test suite — was
+  carried across on purpose rather than rewritten.</p>
+
+  <div class="note">
+    <p><span class="lbl">Read this first</span>
+    <code>CLAUDE.md</code> at the repo root is the authoritative spec — module boundaries,
+    graph schema, conventions. <code>docs/DECISIONS.md</code> holds 24 ADRs explaining why
+    things are the way they are. When this document and those disagree, they win.</p>
+  </div>
+</section>
+
+<section id="flow">
+  <h2><span class="num">02</span>How data moves</h2>
+  <p class="lede">Six stages, each a separate process. Numbered because the order is real —
+  each stage only sees what the previous one committed.</p>
+
+  <div class="flow">
+    <div class="stage">
+      <span class="idx">1</span>
+      <div>
+        <h4>Ingest</h4>
+        <p>Four connectors fetch from source APIs and write raw payloads to one staging
+        table. Each tracks a watermark so re-running is cheap and safe.</p>
+        <span class="files">sources/gmail.py · sources/calendar.py · sources/meet.py · sources/jira.py · sources/runner.py</span>
+      </div>
+    </div>
+    <div class="arrow">↓ staged rows, unprocessed</div>
+
+    <div class="stage">
+      <span class="idx">2</span>
+      <div>
+        <h4>Claim</h4>
+        <p>The drain claims a batch with <code>SELECT … FOR UPDATE SKIP LOCKED</code>, so two
+        workers never take the same row. Exactly-once without a queue.</p>
+        <span class="files">db.py · pipeline_drain.py</span>
+      </div>
+    </div>
+    <div class="arrow">↓ one record at a time</div>
+
+    <div class="stage">
+      <span class="idx">3</span>
+      <div>
+        <h4>Classify and route</h4>
+        <p>A rules-based score decides whether a record is even a meeting — no LLM, no cost.
+        Most email is not. Survivors get an extraction prompt chosen by meeting type.</p>
+        <span class="files">classifier.py · meeting_type_router.py · prompts.py</span>
+      </div>
+    </div>
+    <div class="arrow">↓ text + a prompt</div>
+
+    <div class="stage">
+      <span class="idx">4</span>
+      <div>
+        <h4>Extract</h4>
+        <p>Vertex Gemini returns structured JSON: title, attendees, topics, decisions,
+        action items, blockers. Validated into Pydantic models; a malformed reply is not
+        retried, because temperature 0 would return the same thing.</p>
+        <span class="files">llm_client.py · extractor.py · models.py</span>
+      </div>
+    </div>
+    <div class="arrow">↓ an ExtractedMeeting</div>
+
+    <div class="stage">
+      <span class="idx">5</span>
+      <div>
+        <h4>Resolve and write</h4>
+        <p>Attendees resolve to canonical people; unresolvable ones queue for review rather
+        than being invented. The whole meeting commits in <strong>one transaction</strong> —
+        it lands complete or not at all.</p>
+        <span class="files">person_resolver.py · graph_client.py · pipeline.py</span>
+      </div>
+    </div>
+    <div class="arrow">↓ graph write, then side effects</div>
+
+    <div class="stage">
+      <span class="idx">6</span>
+      <div>
+        <h4>Enrich and act</h4>
+        <p>Facts, relationships, causality and embeddings are layered on. Action items above
+        the confidence threshold become Jira tickets; below it they go to a review queue.</p>
+        <span class="files">memory/*.py · jira_pusher.py · dedup.py</span>
+      </div>
+    </div>
+  </div>
+
+  <p>A separate nightly job runs graph-wide work that makes no sense per-record: PageRank,
+  community detection, memory consolidation, decay, and re-resolving people who were unknown
+  when their meeting was first processed.</p>
+</section>
+
+<section id="map">
+  <h2><span class="num">03</span>Module map</h2>
+  <p class="lede">Every file, what it does, and how big it is. Four modules are deliberately
+  the <em>only</em> place a given thing may appear — those are marked.</p>
+
+  <h3>Core pipeline</h3>
+  <div class="scroll"><table>
+    <thead><tr><th>File</th><th>Does</th><th>Lines</th></tr></thead>
+    <tbody>
+      <tr><td class="f">config.py</td><td>Typed settings. <strong>The only reader of <code>os.environ</code>.</strong></td><td class="n">155</td></tr>
+      <tr><td class="f">models.py</td><td>Pydantic shapes for extraction and staging</td><td class="n">146</td></tr>
+      <tr><td class="f">utils.py</td><td>Deterministic IDs, retries, logging, lenient JSON parsing</td><td class="n">129</td></tr>
+      <tr><td class="f">db.py</td><td>Cloud SQL staging. <strong>The only module containing SQL.</strong></td><td class="n">539</td></tr>
+      <tr><td class="f">graph_client.py</td><td>Memgraph. <strong>The only module with generic Cypher.</strong></td><td class="n">1,246</td></tr>
+      <tr><td class="f">graph_algorithms.py</td><td>MAGE. <strong>The only module calling graph procedures.</strong></td><td class="n">176</td></tr>
+      <tr><td class="f">llm_client.py</td><td>Vertex / Gemini / fake behind one interface. <strong>The only module constructing an LLM client.</strong></td><td class="n">436</td></tr>
+      <tr><td class="f">pipeline.py</td><td>One <code>process()</code> plus a per-source adapter — not three copies</td><td class="n">472</td></tr>
+      <tr><td class="f">pipeline_drain.py</td><td>Routes a claimed batch to the pipeline or to Jira sync</td><td class="n">75</td></tr>
+      <tr><td class="f">classifier.py</td><td>Rules-based "is this worth processing" score</td><td class="n">108</td></tr>
+      <tr><td class="f">meeting_type_router.py</td><td>Picks the extraction prompt for a meeting type</td><td class="n">77</td></tr>
+      <tr><td class="f">extractor.py</td><td>Prompt assembly and reply validation</td><td class="n">144</td></tr>
+      <tr><td class="f">person_resolver.py</td><td>Attendee → canonical person; review queue for the rest</td><td class="n">403</td></tr>
+      <tr><td class="f">dedup.py</td><td>Is this action item a duplicate of an open one?</td><td class="n">57</td></tr>
+      <tr><td class="f">nightly.py</td><td>Seven maintenance passes, orchestrated</td><td class="n">137</td></tr>
+      <tr><td class="f">digest.py</td><td>Period rollup for the dashboard counters</td><td class="n">69</td></tr>
+      <tr><td class="f">access_control.py</td><td>Principal → scope policy</td><td class="n">178</td></tr>
+      <tr><td class="f">meeting_quality.py</td><td>Composite quality score per meeting</td><td class="n">157</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Sources — ingestion</h3>
+  <div class="scroll"><table>
+    <thead><tr><th>File</th><th>Does</th><th>Lines</th></tr></thead>
+    <tbody>
+      <tr><td class="f">sources/base.py</td><td>The <code>Source</code> protocol and the staging loop all connectors share</td><td class="n">98</td></tr>
+      <tr><td class="f">sources/gmail.py</td><td>Gmail. Groups messages into one record <em>per thread</em></td><td class="n">205</td></tr>
+      <tr><td class="f">sources/calendar.py</td><td>Calendar events, with real invitee addresses</td><td class="n">135</td></tr>
+      <tr><td class="f">sources/meet.py</td><td>Meet conference records and transcripts</td><td class="n">209</td></tr>
+      <tr><td class="f">sources/jira.py</td><td>Jira issues, for status flowing back</td><td class="n">85</td></tr>
+      <tr><td class="f">sources/runner.py</td><td>One ingestion run wired end to end</td><td class="n">98</td></tr>
+      <tr><td class="f">google_auth.py</td><td>Refresh token in, access token out</td><td class="n">138</td></tr>
+      <tr><td class="f">token_health.py</td><td>Checks expiry before it becomes a silent failure</td><td class="n">57</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Memory layers</h3>
+  <p>Four kinds of memory, each owning its own node types. This is what separates the project
+  from a search index.</p>
+  <div class="scroll"><table>
+    <thead><tr><th>File</th><th>Does</th><th>Lines</th></tr></thead>
+    <tbody>
+      <tr><td class="f">memory/semantic.py</td><td>Durable facts, preferences, relationship weights</td><td class="n">346</td></tr>
+      <tr><td class="f">memory/episodic.py</td><td>What happened in what order, and what caused what</td><td class="n">265</td></tr>
+      <tr><td class="f">memory/procedural.py</td><td>Recurring meeting shapes — recognising a kickoff</td><td class="n">161</td></tr>
+      <tr><td class="f">memory/vector.py</td><td>768-dim embeddings and semantic search</td><td class="n">252</td></tr>
+      <tr><td class="f">memory/retrieval.py</td><td>Natural-language questions answered from the graph</td><td class="n">303</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Jira</h3>
+  <div class="scroll"><table>
+    <thead><tr><th>File</th><th>Does</th><th>Lines</th></tr></thead>
+    <tbody>
+      <tr><td class="f">jira_client.py</td><td><strong>The only module talking to Jira.</strong> REST calls only</td><td class="n">366</td></tr>
+      <tr><td class="f">jira_pusher.py</td><td>Confidence gate, dedup gate, then create the ticket</td><td class="n">259</td></tr>
+      <tr><td class="f">jira_sync.py</td><td>The reverse direction: ticket status back into the graph</td><td class="n">61</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>API and entrypoints</h3>
+  <div class="scroll"><table>
+    <thead><tr><th>File</th><th>Does</th><th>Lines</th></tr></thead>
+    <tbody>
+      <tr><td class="f">api/main.py</td><td>FastAPI app, health check, dashboard route</td><td class="n">99</td></tr>
+      <tr><td class="f">api/routers/graph.py</td><td>Meetings, decisions, actions, timeline, provenance</td><td class="n">124</td></tr>
+      <tr><td class="f">api/routers/insights.py</td><td>Influence, communities, bridges</td><td class="n">64</td></tr>
+      <tr><td class="f">api/routers/memory.py</td><td>Ask, semantic search, person profiles</td><td class="n">87</td></tr>
+      <tr><td class="f">api/routers/review.py</td><td>Review queues — low-confidence items, unidentified people, blockers</td><td class="n">40</td></tr>
+      <tr><td class="f">api/routers/webhooks.py</td><td>GitHub and Jira webhooks. HMAC-verified</td><td class="n">93</td></tr>
+      <tr><td class="f">api/static/dashboard.html</td><td>The whole UI — seven tabs, no build step, no CDN</td><td class="n">—</td></tr>
+      <tr><td class="f">jobs/*.py</td><td>Seven Cloud Run Job entrypoints. Thin by rule — logic lives in the package</td><td class="n">~10–38</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="schema">
+  <h2><span class="num">04</span>Graph schema</h2>
+  <p class="lede">Node types and the edges between them. Every node carries a deterministic
+  <code>id</code> derived with <code>uuid5</code>, so reprocessing merges rather than duplicates.</p>
+
+  <div class="scroll"><table>
+    <thead><tr><th>Layer</th><th>Nodes</th><th>Key edges</th></tr></thead>
+    <tbody>
+      <tr><td>Core</td><td class="f">Meeting, Person, Organization, Topic, Decision, ActionItem</td><td class="f">ATTENDED, DISCUSSED, PRODUCED, FOLLOWS_UP, ASSIGNED_TO, WORKS_AT</td></tr>
+      <tr><td>Memory</td><td class="f">Fact, Preference, Procedure, ProcedureStep, MemorySession</td><td class="f">HAS_FACT, PREFERS, KNOWS, INTERESTED_IN, PRECEDED_BY, CAUSED_BY</td></tr>
+      <tr><td>Governance</td><td class="f">PersonReview, Blocker</td><td class="f">NEEDS_REVIEW, RAISES_BLOCKER</td></tr>
+      <tr><td>Provenance</td><td class="f">Ticket, PullRequest, AgentRun</td><td class="f">TICKETED_AS, IMPLEMENTS, PRODUCED, RESOLVED_BY</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="note">
+    <p><span class="lbl">The one rule to explain out loud</span>
+    <code>Person.tracked</code> defaults to <strong>false</strong>, and every per-person
+    analytic — PageRank, centrality, community membership, the graph view — filters on it.
+    Aggregates are the default; naming an individual is opt-in, and only the roster file can
+    grant it.</p>
+    <p>This is why the dashboard's "Most connected people" panel reads empty. That is the
+    gate working, not a bug — the panel says so directly.</p>
+  </div>
+</section>
+
+<section id="agent">
+  <h2><span class="num">05</span>The dev agent</h2>
+  <p class="lede">The part most worth demoing. Engineering action items become Jira tickets;
+  the agent picks them up and opens pull requests.</p>
+
+  <p>It runs as a Cloud Run Job on a schedule. Each cycle: find labelled tickets in the
+  active sprint, claim one, clone <em>the repository the ticket names</em>, create a worktree,
+  run a headless Gemini CLI session inside it, then judge what came out.</p>
+
+  <div class="scroll"><table>
+    <thead><tr><th>File</th><th>Does</th><th>Lines</th></tr></thead>
+    <tbody>
+      <tr><td class="f">dev_agent/orchestrator.py</td><td>The whole flow — triage, implement, verify, ship or escalate</td><td class="n">666</td></tr>
+      <tr><td class="f">dev_agent/lifecycle.py</td><td>States, legal transitions, deterministic provenance IDs</td><td class="n">128</td></tr>
+      <tr><td class="f">dev_agent/guardrails.py</td><td>Seven pure gate functions over a diff</td><td class="n">396</td></tr>
+      <tr><td class="f">dev_agent/gate_runner.py</td><td>Runs those gates inside the worktree</td><td class="n">133</td></tr>
+      <tr><td class="f">dev_agent/reviewer.py</td><td>Independent LLM reviewer — the second layer</td><td class="n">150</td></tr>
+      <tr><td class="f">dev_agent/self_verify.py</td><td>Cheap "does this diff match the ticket" score. Never blocks</td><td class="n">99</td></tr>
+      <tr><td class="f">dev_agent/gemini_runner.py</td><td>Spawns the headless coding CLI</td><td class="n">240</td></tr>
+      <tr><td class="f">dev_agent/git_ops.py</td><td>One git worktree per ticket</td><td class="n">150</td></tr>
+      <tr><td class="f">dev_agent/github_client.py</td><td>Read-only: find the PR, fetch its diff</td><td class="n">68</td></tr>
+      <tr><td class="f">dev_agent/session_memory.py</td><td>What a failed attempt learned, for the next one</td><td class="n">125</td></tr>
+      <tr><td class="f">dev_agent/backend.py</td><td>Coding-model routing. Deliberately separate from <code>llm_client</code></td><td class="n">140</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Two layers decide whether it ships</h3>
+  <p><strong>Seven deterministic gates</strong>, each a pure function over the diff: tests
+  green, lint and types clean, diff within budget, no protected paths touched, no new
+  dependencies, no secrets, module boundaries respected. A gate that cannot run counts as a
+  failure, never a skip.</p>
+  <p><strong>An independent LLM reviewer</strong> then reads the ticket, the diff and the gate
+  evidence. Only high-severity findings block; anything less is surfaced for the human.</p>
+  <p>If either layer objects, the run ends at <code>NEEDS_HUMAN</code> — terminal, so the
+  poller will not retry it — and the PR is deliberately left open, because the work is real
+  and just needs a person.</p>
+
+  <div class="note">
+    <p><span class="lbl">It never merges</span>
+    The agent has no merge path at all. <code>CLOSED</code> is written only by the GitHub
+    webhook when a human actually merges the PR. That is the checkpoint.</p>
+  </div>
+
+  <h3>Proven end to end</h3>
+  <p>Ticket <code>MNV-108</code> was picked up, implemented, committed, pushed and opened as
+  a pull request. All seven gates passed, the reviewer approved, the ticket moved to
+  <strong>In Review</strong>, and provenance was written to the graph as
+  <code>AgentRun -[:PRODUCED]-&gt; PullRequest</code>.</p>
+</section>
+
+<section id="rules">
+  <h2><span class="num">06</span>Rules that hold</h2>
+  <p class="lede">These are enforced by tests and by a guardrail gate. Breaking one is
+  usually the sign of a misunderstanding rather than a shortcut.</p>
+  <ul class="tight">
+    <li><strong>One module owns each external system.</strong> SQL only in <code>db.py</code>,
+      generic Cypher only in <code>graph_client.py</code>, MAGE calls only in
+      <code>graph_algorithms.py</code>, Jira REST only in <code>jira_client.py</code>.</li>
+    <li><strong>Only <code>config.py</code> reads the environment.</strong> Everything else
+      takes settings as an argument, which is why the suite runs with no <code>.env</code>.</li>
+    <li><strong>One transaction per meeting.</strong> Never a sequence of driver calls that
+      can half-succeed.</li>
+    <li><strong>MERGE, never CREATE</strong>, for anything with a deterministic id.</li>
+    <li><strong>Topic keys are lowercased and trimmed.</strong> Raw casing fragmented single
+      topics across several nodes in v5 and quietly understated every insight.</li>
+    <li><strong>No scheduler inside a process.</strong> Cloud Scheduler triggers stateless jobs.</li>
+    <li><strong>Tests never need credentials.</strong> All 665 run offline against fixtures.</li>
+  </ul>
+</section>
+
+<section id="status">
+  <h2><span class="num">07</span>Built vs pending</h2>
+  <p class="lede">The honest version. Everything below has been run against a real corpus on
+  a laptop; none of it has been deployed.</p>
+
+  <h3>Working</h3>
+  <div class="scroll"><table>
+    <thead><tr><th>Area</th><th>State</th><th>Evidence</th></tr></thead>
+    <tbody>
+      <tr><td>Ingestion — Gmail, Calendar, Meet</td><td><span class="chip ok">Done</span></td><td>144 records staged</td></tr>
+      <tr><td>Pipeline — classify, extract, resolve, write</td><td><span class="chip ok">Done</span></td><td>96 meetings, 0 failures</td></tr>
+      <tr><td>Memory — semantic, episodic, procedural, vector</td><td><span class="chip ok">Done</span></td><td>263 facts, all embedded</td></tr>
+      <tr><td>Graph algorithms and nightly</td><td><span class="chip ok">Done</span></td><td>7/7 passes, 604 nodes scored</td></tr>
+      <tr><td>API and dashboard</td><td><span class="chip ok">Done</span></td><td>17/17 endpoints, 7 tabs</td></tr>
+      <tr><td>Jira push</td><td><span class="chip ok">Done</span></td><td>23 tickets created</td></tr>
+      <tr><td>Dev agent</td><td><span class="chip ok">Done</span></td><td>PR #1 opened autonomously</td></tr>
+      <tr><td>Terraform — written</td><td><span class="chip ok">Done</span></td><td>821 lines, durable + ephemeral tiers</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Pending</h3>
+  <div class="scroll"><table>
+    <thead><tr><th>Gap</th><th>State</th><th>What it means</th></tr></thead>
+    <tbody>
+      <tr><td>Deploy to GCP</td><td><span class="chip no">Not started</span></td><td><strong>The big one.</strong> No Terraform applied, no Cloud Run service or job exists. Everything runs locally today</td></tr>
+      <tr><td>Jira status flowing back</td><td><span class="chip part">Wired, unfed</span></td><td><code>jira_sync</code> is connected to the drain, but the Jira ingest job has never run — so every action item still reads "created"</td></tr>
+      <tr><td>Scope gate for the agent</td><td><span class="chip part">Gap</span></td><td>On its live run the agent also edited an unrelated passing test. Seven gates allowed it, correctly by their own rules</td></tr>
+      <tr><td>Cloud Run Job timeout</td><td><span class="chip part">Config</span></td><td>The drain took 56 min for 144 records; Cloud Run Jobs default to 10 min. Needs an explicit timeout before it runs in production</td></tr>
+      <tr><td>Cross-source duplicates</td><td><span class="chip part">Known</span></td><td>A calendar invite and the Gmail thread about it produce two meetings. Within-source duplication is fixed; across-source is not</td></tr>
+      <tr><td>Sequential embeddings</td><td><span class="chip part">Perf</span></td><td>Three embedding passes are independent but run one after another — roughly 40s per meeting recoverable</td></tr>
+      <tr><td>Phase 9 hardening / Phase 10 Onix migration</td><td><span class="chip no">Not started</span></td><td>Migration is blocked on approval, not on engineering</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="run">
+  <h2><span class="num">08</span>Running it</h2>
+  <p class="lede">Three tiers, each additive and each honest about what it actually proves.</p>
+  <div class="scroll"><table>
+    <thead><tr><th>Tier</th><th>Command</th><th>Needs</th><th>Proves</th></tr></thead>
+    <tbody>
+      <tr><td>0</td><td class="f">make demo</td><td>nothing</td><td>Pipeline, graph, memory, API, dashboard — offline against recorded fixtures</td></tr>
+      <tr><td>1</td><td class="f">make demo LLM=gemini</td><td>one free API key</td><td>Genuine LLM extraction</td></tr>
+      <tr><td>2</td><td class="f">make sync-up</td><td>GCP + Workspace + Jira</td><td>The deployed product</td></tr>
+    </tbody>
+  </table></div>
+  <p><code>make doctor</code> reports exactly what is missing and how to fix it before
+  anything fails with a stack trace. The dashboard is at
+  <code>localhost:8080/dashboard</code>; interactive API docs at <code>/docs</code>.</p>
+</section>
+
+<section id="bugs">
+  <h2><span class="num">09</span>Bugs worth knowing</h2>
+  <p class="lede">Each of these looked like working code and had passing tests. They are the
+  most useful thing to hand over, because they show where this codebase hides failure.</p>
+
+  <div class="note warn">
+    <p><span class="lbl">Green tests, wrong data</span>
+    A unit test asserted that <code>extract_overrides()</code> returned the right dict, and it
+    did. The bug was one layer up: <code>model_copy(update=…)</code> does not validate, so the
+    overridden attendees stayed raw dicts, and <code>getattr</code> on a dict silently returned
+    defaults. Every attendee vanished into the review queue with no exception and no log line.</p>
+  </div>
+
+  <ul class="tight">
+    <li><strong>Ground truth thrown away.</strong> The Calendar API returns exact invitee
+      addresses. The adapter passed the model a <em>count</em>, so it inferred attendees from
+      prose. Fixing it took Person nodes from 6 to 67.</li>
+    <li><strong>Producer and consumer disagreed.</strong> Ticket creation left engineering
+      tasks unlabelled; the agent selected on that exact label. Each half looked correct
+      alone, and the agent could never see a coding task.</li>
+    <li><strong>A query that matched nothing.</strong> Candidate JQL required
+      <code>openSprints()</code>, which matches nothing on a Kanban board. This is why the
+      agent read as blocked for months.</li>
+    <li><strong>Counting distinct values, not items.</strong>
+      <code>collect(DISTINCT a.done)</code> reported three completed actions as one.</li>
+    <li><strong>Order-dependence with no retry.</strong> Action items extracted before any
+      Person existed could never match an owner, and nothing re-tried them. The nightly pass
+      now does — <code>ASSIGNED_TO</code> went from 3 to 17.</li>
+  </ul>
+
+  <p>The pattern is consistent: none of these were caught by tests, and all were caught by
+  running the system against real data and reading the output. That is worth carrying forward.</p>
+</section>
+
+<footer>
+  meeting-notes-gcp · knowledge transfer · figures from the verification run of 2026-08-22
+</footer>
+</main>
+</div>
