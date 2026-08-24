@@ -34,6 +34,16 @@ log = structlog.get_logger()
 
 @dataclass(frozen=True)
 class PipelineResult:
+    """What one staged record turned into.
+
+    All three outcomes are normal and none is an error: `skipped_low_score`
+    means the classifier judged the record not to be a meeting (most email is
+    not), and `extract_failed` means the model's reply would not validate. In
+    every case the record is still marked processed, because retrying an
+    identical input at temperature 0 produces an identical failure — the drain
+    would stall on it forever.
+    """
+
     status: str  # "processed" | "skipped_low_score" | "extract_failed"
     meeting_id: str | None = None
     score: float | None = None
@@ -84,6 +94,15 @@ def _route_hint(title: str, body: str, source_type: str) -> str:
 
 
 class EmailAdapter:
+    """Gmail. One record is a whole thread, not a single message.
+
+    The hardest thing about email is that most of it is not a meeting, so
+    this leans on the classifier's score gate more than the other two sources
+    do. It also declines to override the extracted date: a mail header says
+    when the message was sent, which is often not when the meeting it
+    discusses happened.
+    """
+
     source_type = "email"
 
     def text(self, payload: dict[str, Any]) -> str:
@@ -130,6 +149,15 @@ class EmailAdapter:
 
 
 class CalendarAdapter:
+    """Google Calendar. The most structured source, and the most trusted.
+
+    An invite states its own start time and invitee list, so both override
+    whatever the model inferred from the title and description — see
+    `extract_overrides`. Calendar records are also where nearly every Person
+    node comes from, since they are the only source carrying real email
+    addresses.
+    """
+
     source_type = "calendar"
 
     def text(self, payload: dict[str, Any]) -> str:
@@ -209,6 +237,14 @@ class CalendarAdapter:
 
 
 class MeetAdapter:
+    """Google Meet conference records, with a transcript when one exists.
+
+    A real transcript is strong enough signal to bypass the classifier's
+    score gate entirely (`skip_score_gate`); a record with only a title falls
+    back to the normal gate, because a bare calendar-like title is exactly
+    what the classifier is good at judging.
+    """
+
     source_type = "meet"
 
     def text(self, payload: dict[str, Any]) -> str:
@@ -255,6 +291,12 @@ _ADAPTERS: dict[str, Adapter] = {
 
 
 def adapter_for(source_type: str) -> Adapter:
+    """The adapter for one source type.
+
+    Raises rather than returning a default: a source with no adapter would
+    otherwise be silently processed as though it were email, and produce
+    plausible-looking nonsense.
+    """
     try:
         return _ADAPTERS[source_type]
     except KeyError:

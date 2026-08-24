@@ -17,6 +17,7 @@ router = APIRouter(prefix="/graph", tags=["graph"])
 async def meetings_recent(
     limit: int = Query(10, ge=1, le=100), _: Principal = Depends(principal)
 ) -> dict[str, Any]:
+    """Meetings by date, newest first."""
     meetings = await graph_client.get_recent_meetings(limit=limit)
     return {"meetings": meetings, "count": len(meetings)}
 
@@ -34,17 +35,20 @@ async def meetings_quality(
 async def timeline(
     limit: int = Query(30, ge=1, le=200), _: Principal = Depends(principal)
 ) -> dict[str, Any]:
+    """Meetings in date order with the gap between them, for the timeline view."""
     events = await graph_client.get_timeline(limit=limit)
     return {"timeline": events, "count": len(events)}
 
 
 @router.get("/person/{email}")
 async def person(email: str, _: Principal = Depends(principal)) -> dict[str, Any]:
+    """One person's meetings, topics and commitments, addressed by email."""
     return await graph_client.get_person_graph(email)
 
 
 @router.get("/topic/{name}")
 async def topic(name: str, _: Principal = Depends(principal)) -> dict[str, Any]:
+    """One topic and the meetings that discussed it."""
     return await graph_client.get_topic_graph(name)
 
 
@@ -52,6 +56,7 @@ async def topic(name: str, _: Principal = Depends(principal)) -> dict[str, Any]:
 async def actions_open(
     limit: int = Query(50, ge=1, le=200), _: Principal = Depends(principal)
 ) -> dict[str, Any]:
+    """Undone action items, soonest deadline first, with Jira keys where filed."""
     actions = await graph_client.get_open_actions(limit=limit)
     return {"actions": actions, "count": len(actions)}
 
@@ -64,6 +69,8 @@ async def meeting_provenance(meeting_id: str, _: Principal = Depends(principal))
 
 @router.get("/provenance/by-ticket/{ticket_key}")
 async def ticket_provenance(ticket_key: str, _: Principal = Depends(principal)) -> dict[str, Any]:
+    """What a Jira ticket traces back to — the meeting, and the run that
+    implemented it if the dev agent did."""
     return await graph_client.get_ticket_provenance(ticket_key)
 
 

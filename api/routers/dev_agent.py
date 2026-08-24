@@ -38,6 +38,7 @@ async def preflight(_: Principal = Depends(principal)) -> dict[str, Any]:
 async def runs(
     limit: int = Query(50, ge=1, le=200), _: Principal = Depends(principal)
 ) -> dict[str, Any]:
+    """Recent dev-agent runs, newest first, with the PR each produced."""
     items = await db.list_recent_dev_agent_runs(limit=limit)
     return {"runs": [r.model_dump(mode="json") for r in items], "count": len(items)}
 
@@ -46,5 +47,9 @@ async def runs(
 async def trigger(
     background_tasks: BackgroundTasks, _: Principal = Depends(principal)
 ) -> dict[str, Any]:
+    """Run one poll cycle now instead of waiting for Cloud Scheduler.
+
+    Returns what the cycle attempted; it does not wait for the coding run to
+    finish, which can take many minutes."""
     background_tasks.add_task(poll_and_process)
     return {"status": "accepted"}

@@ -408,6 +408,11 @@ async def finish_dev_agent_run(
     error: str | None = None,
     pool: asyncpg.Pool | None = None,
 ) -> None:
+    """Close out a run in a terminal state, recording the PR it produced.
+
+    `finished_at` is stamped here and nowhere else, so "is this run over" has
+    one answer in the database as well as one in `lifecycle.TERMINAL_STATES`.
+    """
     pool = pool or await get_pool()
     async with pool.acquire() as conn:
         await conn.execute(_FINISH_DEV_AGENT_RUN_SQL, ticket_key, state, pr_url, pr_number, error)
@@ -426,6 +431,7 @@ async def set_dev_agent_state(
 async def get_dev_agent_run(
     ticket_key: str, pool: asyncpg.Pool | None = None
 ) -> DevAgentRun | None:
+    """This ticket's run, whatever state it is in, or None if never attempted."""
     pool = pool or await get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(_GET_DEV_AGENT_RUN_SQL, ticket_key)
@@ -470,6 +476,12 @@ async def should_attempt_dev_agent_run(
 async def get_dev_agent_session_memory(
     ticket_key: str, pool: asyncpg.Pool | None = None
 ) -> dict[str, Any] | None:
+    """The resumable record a retry reads, or None.
+
+    Lives in Postgres rather than on the graph's AgentRun node because the
+    resume read happens BEFORE a run, on a failed attempt where no PR — and
+    so no AgentRun node — exists yet.
+    """
     run = await get_dev_agent_run(ticket_key, pool=pool)
     return run.state_payload if run else None
 
@@ -477,6 +489,7 @@ async def get_dev_agent_session_memory(
 async def set_dev_agent_session_memory(
     ticket_key: str, memory: dict[str, Any], pool: asyncpg.Pool | None = None
 ) -> None:
+    """Persist what this attempt learned, for the next one to read."""
     pool = pool or await get_pool()
     async with pool.acquire() as conn:
         await conn.execute(_SET_DEV_AGENT_SESSION_MEMORY_SQL, ticket_key, json.dumps(memory))
@@ -485,6 +498,7 @@ async def set_dev_agent_session_memory(
 async def list_recent_dev_agent_runs(
     limit: int = 50, pool: asyncpg.Pool | None = None
 ) -> list[DevAgentRun]:
+    """Recent runs, newest first — the dashboard's dev-agent panel."""
     pool = pool or await get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(

@@ -77,6 +77,13 @@ def _given_name_matches(
 
 @dataclass
 class RosterEntry:
+    """One known person from the operator-supplied roster file.
+
+    The roster is the only place `tracked` can be turned on: opting someone
+    into per-person analytics is a deliberate act by whoever maintains that
+    file, never something extraction infers.
+    """
+
     name: str
     email: str
     aliases: list[str] = field(default_factory=list)
@@ -85,6 +92,13 @@ class RosterEntry:
 
 @dataclass
 class Resolution:
+    """The outcome of matching one attendee to a person.
+
+    `status` is "resolved" or "review". `reason` records HOW -- roster-email,
+    person-name, no-email-no-match -- which is what makes the review queue
+    diagnosable rather than a pile of names.
+    """
+
     name: str
     role: str = "attendee"
     email: str | None = None          # canonical email if resolved, else None
@@ -94,6 +108,8 @@ class Resolution:
 
 
 class Roster:
+    """Indexed lookup over the roster file, by email and by normalised name."""
+
     def __init__(self, entries: list[RosterEntry]):
         self.entries = entries
         self._by_email: dict[str, RosterEntry] = {}

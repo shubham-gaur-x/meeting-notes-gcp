@@ -25,6 +25,14 @@ from pydantic import BaseModel, ConfigDict
 
 
 class GateResult(BaseModel):
+    """One gate's verdict, with the evidence that produced it.
+
+    `evidence` is not decoration: it is what lands in the Jira comment when a
+    run is blocked, and it is the only thing a human has to go on before
+    opening the PR. A gate that fails without saying why is barely better
+    than one that does not run.
+    """
+
     model_config = ConfigDict(extra="ignore")
 
     name: str
@@ -33,6 +41,13 @@ class GateResult(BaseModel):
 
 
 class ReviewFinding(BaseModel):
+    """One issue the LLM reviewer raised against a diff.
+
+    Only `severity == "high"` blocks a ship. Lower severities are surfaced in
+    the Jira comment and left for the human reviewer, because a model that
+    can block on any nitpick will eventually block on all of them.
+    """
+
     model_config = ConfigDict(extra="ignore")
 
     severity: str  # "low" | "medium" | "high"
@@ -47,6 +62,13 @@ CommandRunner = Callable[[], tuple[int, str]]
 
 
 def gate_tests_green(runner: CommandRunner) -> GateResult:
+    """The project's own test suite, run inside the agent's worktree.
+
+    A runner that cannot execute at all reports a nonzero code, which fails
+    the gate. That is deliberate: a gate that cannot run is a failure, never
+    a skip (CLAUDE.md).
+    """
+
     code, output = runner()
     return GateResult(
         name="tests_green",
@@ -56,6 +78,13 @@ def gate_tests_green(runner: CommandRunner) -> GateResult:
 
 
 def gate_lint_type_clean(lint: CommandRunner, typecheck: CommandRunner) -> GateResult:
+    """ruff and mypy together, as one gate.
+
+    Both run even when the first fails, so a diff with both kinds of problem
+    reports both at once rather than making the agent discover them over two
+    attempts.
+    """
+
     lc, lo = lint()
     tc, to = typecheck()
     passed = lc == 0 and tc == 0
@@ -74,12 +103,20 @@ def gate_lint_type_clean(lint: CommandRunner, typecheck: CommandRunner) -> GateR
 # ─── Gate 3 — diff budget ───────────────────────────────────────────────────────
 
 
-def gate_diff_budget(
+def gate_diff_budget(  # noqa: D417 - thresholds documented in the body
+
     changed_files: Sequence[str],
     changed_lines: int,
     max_files: int = 10,
     max_lines: int = 600,
 ) -> GateResult:
+    """Refuse a change far larger than the ticket implies.
+
+    Not a quality judgement — a big diff can be perfectly good. It is a
+    scope tripwire: an agent that has misunderstood a ticket tends to rewrite
+    far more than one that has understood it, and a human should look before
+    that lands.
+    """
     n_files = len(changed_files)
     ok = n_files <= max_files and changed_lines <= max_lines
     return GateResult(
@@ -174,6 +211,13 @@ _SECRET_PATTERNS = [
 
 
 def gate_secret_scan(added_lines: Sequence[str]) -> GateResult:
+    """Scan ADDED lines only for credential-shaped strings.
+
+    Added lines rather than the whole file: a pre-existing example key in the
+    repo is not this diff's fault, and flagging it would train whoever reads
+    the result to ignore the gate.
+    """
+
     hits: list[str] = []
     for ln in added_lines:
         for pat in _SECRET_PATTERNS:
@@ -340,8 +384,13 @@ def evaluate_gates(
 
 
 def all_passed(results: Sequence[GateResult]) -> bool:
+    """True only when every gate passed. An empty list is vacuously True --
+    callers must ensure the gates actually ran."""
+
     return all(r.passed for r in results)
 
 
 def failed_gates(results: Sequence[GateResult]) -> list[GateResult]:
+    """The failures, in the order they ran, for the blocking Jira comment."""
+
     return [r for r in results if not r.passed]

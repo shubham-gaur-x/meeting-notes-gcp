@@ -46,6 +46,24 @@ graphify-out/.graphify_python
 # Absolute path to this checkout — machine-specific, would break a fresh clone.
 graphify-out/.graphify_root
 
+# Agent/editor tooling. Local-only by design:
+#   .claude/launch.json pinned a machine's interpreter path, this laptop's
+#   forwarded ports, and a hardcoded GCP_PROJECT_ID -- which CLAUDE.md
+#   forbids anywhere in the repo. How to run the API belongs in the README,
+#   where it is portable; how YOUR editor runs it does not belong in git.
+.claude/
+.gemini/
+.cursor/
+
+# The dev agent's own scratch space (DEV_AGENT_GEMINI_CLI_HOME, worktrees,
+# per-repo checkouts). Defaults live under /tmp, but a local override must
+# never be committed.
+dev-agent/
+
+# Logs
+*.log
+logs/
+
 # OS / editor
 .DS_Store
 .idea/

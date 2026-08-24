@@ -91,16 +91,38 @@ def assert_transition(from_state: str, to_state: str) -> None:
 
 
 def is_terminal(state: str) -> bool:
+    """Whether a run in this state is finished for good.
+
+    Reads TERMINAL_STATES, which is the single definition. The v5 bug this
+    guards against was a second, hardcoded list in db.py drifting from it --
+    so nothing here re-spells the set.
+    """
+
     return state in TERMINAL_STATES
 
 
 def run_id(ticket_key: str, attempt: int) -> str:
+    """Deterministic AgentRun id. Keyed on attempt, so a retry is a new node.
+
+    Writer and reader must derive this identically -- id drift between the
+    two cost real debugging time twice in v5, which is why every provenance
+    id lives in this one module (CLAUDE.md).
+    """
+
     return uuid5_id("dev-agent-run", f"{ticket_key}#{attempt}")
 
 
 def ticket_node_id(ticket_key: str) -> str:
+    """Deterministic Ticket id. Stable across attempts -- one ticket, one node."""
+
     return uuid5_id("ticket", ticket_key)
 
 
 def pull_request_node_id(pr_url: str) -> str:
+    """Deterministic PullRequest id, keyed on the URL.
+
+    The URL rather than the number: `/webhook/github`'s merge handler only
+    receives the URL, and it has to find the node this wrote.
+    """
+
     return uuid5_id("pullrequest", pr_url)

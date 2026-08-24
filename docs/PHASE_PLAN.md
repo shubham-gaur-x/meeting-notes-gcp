@@ -691,7 +691,7 @@ fully verifiable locally against the same graph.
 
 ---
 
-## Phase 11 — Autonomous dev agent 🟦 (ADR-020)
+## Phase 11 — Autonomous dev agent ✅ DONE (2026-08-22, ADR-020 / ADR-021)
 
 Moved from v2 to v1. `PHASE_PLAN` originally deferred `dev_agent` reasoning that the pipeline
 had to be solid first — that held while Phases 1-8 were unbuilt. Reading v5's implementation
@@ -753,23 +753,18 @@ low-confidence diff but never blocks review; the rule that the agent never merge
 9. `/webhook/github`'s `pull_request.merged` handler writes `CLOSED` and the `RESOLVED_BY` edge
    — the provenance write path ADR-008 deferred, now un-deferred by this phase existing.
 
-**Status (2026-08-20): Tasks 1-9 implemented and tested, Task 10 (live verification) blocked.**
-All nine modules above are built, wired into `api/main.py` and `/webhook/github`, and covered
-by ~150 tests in `tests/test_phase11_dev_agent.py` plus the API-route tests in
-`tests/test_phase08_api.py`. Every regression test in this phase — the `SHIPPED` fix at both
-the state-machine and orchestration level, all seven guardrail gates, the webhook merge-close
-path, the trigger route's backgrounding — was proven genuine by planting the corresponding bug
-and watching the specific test fail before restoring.
+**Status (2026-08-22): complete, verified live.**
+All modules are built, wired into `api/main.py` and `/webhook/github`, and covered by the tests
+in `tests/test_phase11_dev_agent.py` plus the API-route tests in `tests/test_phase08_api.py`.
+Every regression test in this phase — the `SHIPPED` fix at both the state-machine and
+orchestration level, all seven guardrail gates, the webhook merge-close path, the trigger
+route's backgrounding — was proven genuine by planting the corresponding bug and watching the
+specific test fail before restoring.
 
-Live verification has not run. This session's `.env` has Jira credentials and `gh` is
-authenticated, but is missing everything else an end-to-end run needs: `POSTGRES_*` /
-`CLOUD_SQL_CONNECTION_NAME` (no reachable Postgres for `dev_agent_runs`), `MEMGRAPH_*` (no
-reachable graph for provenance writes), and `GITHUB_OWNER` / `GITHUB_REPO` / `GITHUB_TOKEN` /
-`DEV_AGENT_LLM_BACKEND` (all empty — `dev_agent_llm_backend` defaults to `local`, i.e. LM
-Studio, unconfirmed running). Standing these up is infrastructure work; a real run on top of
-them pushes a branch and opens a real PR against a real GitHub repo and transitions a real Jira
-ticket — side effects requiring the user's explicit go-ahead, not something to trigger
-unilaterally.
+The earlier blocker (no reachable Postgres or Memgraph, no GitHub credentials, and a coding
+backend defaulting to LM Studio) is resolved: the local stack runs both databases, `gh` is
+authenticated, and ADR-021 moved the backend to the `gemini` CLI on Vertex. See **Outcome**
+above for what the live run actually did.
 
 **Exit criteria**
 - A regression test proves the fix: a `SHIPPED` run is excluded from `get_active_run()`, and
@@ -784,6 +779,33 @@ unilaterally.
   not done until this runs for real.**
 
 ---
+
+**Outcome (2026-08-22).** Ran end to end against the real repo: ticket MNV-108 picked up from
+Jira, implemented in a per-ticket worktree, committed, pushed, and opened as
+[PR #1](https://github.com/shubham-gaur-x/meeting-notes-gcp/pull/1). All 7 guardrail gates
+passed, the independent reviewer approved with one non-blocking finding, the ticket moved to
+**In Review**, and the run reached `SHIPPED` — terminal, no resume loop, `attempt_count` 1.
+Provenance written: `AgentRun -[:PRODUCED]-> PullRequest`.
+
+Six bugs surfaced only by running it, none of which had a failing test:
+
+1. `create_issue` labelled non-engineering items but left engineering tasks unlabelled, while
+   `find_sprint_candidates` selected on `dev-agent` — producer and consumer disagreed about how
+   a coding task is marked, so the agent could never see one.
+2. The candidate JQL required `openSprints()`, which matches nothing on a Kanban board. This is
+   why the phase read as blocked.
+3. `main` was hardcoded as the PR base; this repo's default branch is `master`.
+4. `ensure_repo_cloned` was not idempotent — "path already exists" on the second run.
+5. `--approval-mode auto_edit` approves edit tools only, so headless the agent edited files and
+   silently shipped nothing. `yolo` is what lets it commit, push and open a PR; the worktree is
+   the isolation and the gates decide what ships.
+6. The target repo now comes from the ticket description (`repo: owner/name` or a GitHub URL),
+   falling back to settings — one agent, many repositories.
+
+**Known gap.** The gates do not police scope. On its live run the agent also modified an
+unrelated test that passes untouched on master. The change was arguably an improvement, but it
+was not asked for, and nothing flagged it: a "files changed are plausibly related to the
+ticket" check is the missing gate.
 
 ## v2 — Deferred scope
 

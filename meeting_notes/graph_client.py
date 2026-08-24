@@ -55,6 +55,12 @@ def get_driver(settings: Settings | None = None) -> AsyncDriver:
 
 
 async def close_driver() -> None:
+    """Close the shared Bolt driver.
+
+    Cloud Run recycles instances freely, and a leaked driver holds
+    server-side sessions after the instance is gone -- so every job
+    entrypoint closes it in a `finally`.
+    """
     global _driver
     if _driver is not None:
         await _driver.close()
@@ -378,6 +384,11 @@ async def upsert_meeting_graph(
 
 
 async def update_action_jira_key(action_id: str, jira_key: str, driver: Any | None = None) -> None:
+    """Record the filed ticket on the ActionItem, marking it `created`.
+
+    The id must match `upsert_meeting_graph`'s derivation exactly, or this
+    silently updates nothing (jira_pusher carries the same warning).
+    """
     driver = driver or get_driver()
     async with driver.session() as session:
         await session.run(
@@ -444,6 +455,12 @@ async def mark_action_needs_review(action_id: str, reason: str, driver: Any | No
 
 
 async def get_action_confidence(action_id: str, driver: Any | None = None) -> float | None:
+    """Extraction confidence of one ActionItem, or None if it has no node.
+
+    None means nothing extracted produced this -- a human wrote the ticket.
+    The dev agent treats that as PASSING its confidence gate: the gate exists
+    to distrust low-confidence extraction, not people.
+    """
     driver = driver or get_driver()
     async with driver.session() as session:
         result = await session.run(
@@ -499,6 +516,7 @@ def _normalise_topic(name: str) -> str:
 
 
 async def get_recent_meetings(limit: int = 10, driver: Any = None) -> list[dict[str, Any]]:
+    """Meetings by date descending — the dashboard's Meetings tab."""
     driver = driver or get_driver()
     async with driver.session() as session:
         result = await session.run(
@@ -534,6 +552,12 @@ async def get_timeline(limit: int = 30, driver: Any = None) -> list[dict[str, An
 
 
 async def get_person_graph(email: str, driver: Any = None) -> dict[str, Any]:
+    """One person's meetings, topics and action items, keyed by email.
+
+    Addressed by email rather than name because email is the identity the
+    resolver settles on: two people share a display name far more often than
+    they share an address.
+    """
     driver = driver or get_driver()
     async with driver.session() as session:
         result = await session.run(
@@ -624,6 +648,7 @@ async def get_person_reviews(limit: int = 50, driver: Any = None) -> list[dict[s
 
 
 async def get_open_blockers(limit: int = 50, driver: Any = None) -> list[dict[str, Any]]:
+    """Blockers still open, newest first, with the meeting that raised each."""
     driver = driver or get_driver()
     async with driver.session() as session:
         result = await session.run(
@@ -721,6 +746,12 @@ async def get_all_communities(driver: Any = None) -> list[dict[str, Any]]:
 
 
 async def get_community_members(community_id: int, driver: Any = None) -> list[dict[str, Any]]:
+    """Everything inside one community — the workstream drill-down.
+
+    Untracked people are excluded: listing a cluster's members by name is
+    still naming individuals, so it takes the same `Person.tracked` gate as
+    PageRank and centrality.
+    """
     driver = driver or get_driver()
     async with driver.session() as session:
         result = await session.run(
@@ -821,6 +852,7 @@ async def get_bridge_nodes(limit: int = 10, driver: Any = None) -> list[dict[str
 
 
 async def get_node_insights(node_id: str, driver: Any = None) -> dict[str, Any]:
+    """One node's centrality scores, community, and immediate neighbours."""
     driver = driver or get_driver()
     async with driver.session() as session:
         result = await session.run(

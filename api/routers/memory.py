@@ -44,6 +44,7 @@ async def memory_person(email: str, _: Principal = Depends(principal)) -> dict[s
 async def memory_sessions(
     limit: int = Query(20, ge=1, le=100), _: Principal = Depends(principal)
 ) -> dict[str, Any]:
+    """Recent retrieval sessions — what has been asked, and what it touched."""
     driver = graph_client.get_driver()
     async with driver.session() as session:
         result = await session.run(
@@ -67,6 +68,7 @@ async def search_meetings(
     limit: int = Query(5, ge=1, le=50),
     _: Principal = Depends(principal),
 ) -> dict[str, Any]:
+    """Semantic search over meeting summaries, by embedding similarity."""
     hits = await vector.search_similar_meetings(q, limit=limit)
     return {"query": q, "results": hits, "count": len(hits)}
 
@@ -77,5 +79,9 @@ async def search_facts(
     limit: int = Query(5, ge=1, le=50),
     _: Principal = Depends(principal),
 ) -> dict[str, Any]:
+    """Semantic search over extracted facts.
+
+    Returns nothing unless the facts carry embeddings; the nightly vector
+    pass is what fills them in."""
     hits = await vector.search_similar_facts(q, limit=limit)
     return {"query": q, "results": hits, "count": len(hits)}

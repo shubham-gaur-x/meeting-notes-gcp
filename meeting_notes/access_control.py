@@ -27,10 +27,19 @@ class AccessDeniedError(RuntimeError):
 
 @dataclass(frozen=True)
 class Scope:
+    """What a principal is allowed to see, as a kind plus an optional value.
+
+    Deliberately coarse: `all`, `org`, `team:<name>`, `project:<key>`. Finer
+    grained scoping would need per-node ACLs, which is a much larger promise
+    than this project makes.
+    """
+
     kind: str            # "all" | "org" | "team" | "project"
     value: str | None = None     # team name / project key; None for all/org
 
     def token(self) -> str:
+        """The scope as a single string, e.g. "team:platform" or "org"."""
+
         return self.kind if self.value is None else f"{self.kind}:{self.value}"
 
 
@@ -50,6 +59,12 @@ def parse_scope(raw: str) -> Scope:
 
 @dataclass(frozen=True)
 class Principal:
+    """Who is asking, and what they may see.
+
+    `tracked` is separate from anything here: being able to READ per-person
+    analytics is not the same as consenting to APPEAR in them.
+    """
+
     name: str
     role: str
     team: str | None = None
@@ -91,6 +106,12 @@ def load_policy(path: str | None = None) -> dict[str, Principal]:
 
 
 def resolve_principal(name: str, policy: dict[str, Principal] | None = None) -> Principal:
+    """Look up who is asking. Raises for an unknown name.
+
+    Raising rather than returning an anonymous default: an unrecognised
+    principal silently downgraded to "least privilege" is how a
+    misconfiguration becomes an empty dashboard that nobody investigates.
+    """
     policy = policy if policy is not None else load_policy()
     if name not in policy:
         raise AccessDeniedError(f"unknown principal {name!r}")

@@ -2,8 +2,14 @@
 
 > Meeting memory pipeline — v6. GCP-native. Cloud Run + Cloud SQL + Vertex AI + Memgraph.
 
-**Status: Phase 0 — documentation complete, implementation not started.**
-Start at [`docs/PHASE_PLAN.md`](docs/PHASE_PLAN.md).
+**Status: Phases 0–8 and 11 built and running.** 665 tests, no live credentials required.
+Phase 9 (hardening) and Phase 10 (Onix migration) remain — see
+[`docs/PHASE_PLAN.md`](docs/PHASE_PLAN.md).
+
+Validated end to end on a real corpus: 144 staged records → 96 meetings, 263 facts (all
+embedded), 67 people across 6 organisations, plus PageRank, community detection and quality
+scores from the nightly pass. The dev agent has taken a Jira ticket through to an open pull
+request without a human touching the keyboard.
 
 ## What this is
 
@@ -12,6 +18,11 @@ is ingested by our own connectors, extracted into structured form by an LLM, and
 property graph. The graph then does more than store: it computes influence, remembers durable
 facts, decays stale context, recognises recurring meeting workflows, answers natural-language
 questions, and semantically searches its own history.
+
+Engineering work it finds gets filed to Jira, and an autonomous agent picks those tickets up,
+implements them in an isolated worktree, and opens a pull request against the repository the
+ticket names — behind seven deterministic gates and an independent reviewer. It never merges;
+that stays human.
 
 This is a GCP-native rebuild of [`airbyte-lm-studio-memgraph`](../airbyte-lm-studio-memgraph)
 (v5), which ran entirely on a laptop via Docker Compose. Two things change fundamentally:
@@ -36,6 +47,9 @@ Memgraph + MAGE             one ACID transaction per meeting
    │                        + MCP server for Claude Desktop
    ▼
 Cloud Run Service           FastAPI query layer + dashboard, scales to zero
+   │
+   ▼
+Cloud Run Job               dev agent: Jira ticket → worktree → gates → PR
 ```
 
 Full detail: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
@@ -50,6 +64,7 @@ Full detail: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 | [`docs/MIGRATION_FROM_V5.md`](docs/MIGRATION_FROM_V5.md) | Module-by-module port map, plus ten bugs that must not be reintroduced |
 | [`docs/GOOGLE_AUTH.md`](docs/GOOGLE_AUTH.md) | OAuth setup, the 7-day token problem, the Onix migration path |
 | [`docs/DECISIONS.md`](docs/DECISIONS.md) | ADR log. Append, never rewrite. |
+| [`docs/SETUP.md`](docs/SETUP.md) | Runbook for all three tiers |
 
 ## Getting started
 
@@ -83,6 +98,34 @@ creating an OAuth consent screen or Desktop client, so tier 2 needs a one-time
 console visit. `docs/GOOGLE_AUTH.md` §5 walks through it, and `make doctor TIER=2`
 tells you if it is outstanding.
 
+## The dashboard
+
+`make demo` brings up the stack; the dashboard is at **http://localhost:8080/dashboard**.
+To run just the API against an already-running stack:
+
+```bash
+.venv/bin/python -m uvicorn api.main:app --port 8080
+```
+
+Seven tabs, each answering a question someone actually asks:
+
+| Tab | Answers |
+|---|---|
+| Overview | What happened? Counters over a selectable window, latest decisions, open commitments |
+| Meetings | What was decided, who was there, what came out of it — click any row |
+| Action Items | What do I owe? Filterable by owner, with Jira links |
+| Workstreams | What is this project made of? Clusters the graph found, named by their topics |
+| Graph | The graph itself — force-directed, filterable, hover for names |
+| Ask | Anything else, in natural language, answered from the graph |
+| Needs You | What the system chose to ask about rather than guess |
+
+Interactive API docs are at `/docs`.
+
+**Naming people is opt-in.** Per-person analytics — PageRank, centrality, community
+membership, the graph view — filter on `Person.tracked`, which only the roster file can set.
+Aggregates are the default, so "Most connected people" reads as empty until someone opts in.
+That is the governance gate working, not a bug.
+
 ## Stack
 
 | Component | Choice |
@@ -97,6 +140,7 @@ tells you if it is outstanding.
 | API | FastAPI on Cloud Run, scales to zero |
 | IaC | Terraform |
 | Secrets | Secret Manager |
+| Dev agent | Gemini CLI, headless, on Vertex (ADR-021) |
 
 ## Deployment context
 

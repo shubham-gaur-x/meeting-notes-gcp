@@ -31,6 +31,7 @@ async def influential(
 
 @router.get("/communities")
 async def communities(_: Principal = Depends(principal)) -> dict[str, Any]:
+    """Clusters the graph found on its own, each named by the topics inside it."""
     found = await graph_client.get_all_communities()
     return {"communities": found, "count": len(found)}
 
@@ -39,6 +40,8 @@ async def communities(_: Principal = Depends(principal)) -> dict[str, Any]:
 async def community_members(
     community_id: int, _: Principal = Depends(principal)
 ) -> dict[str, Any]:
+    """Everything inside one cluster. Untracked people are excluded — naming
+    an individual is opt-in (CLAUDE.md)."""
     members = await graph_client.get_community_members(community_id)
     return {"community_id": community_id, "members": members, "count": len(members)}
 
@@ -47,10 +50,15 @@ async def community_members(
 async def bridges(
     limit: int = Query(10, ge=1, le=100), _: Principal = Depends(principal)
 ) -> dict[str, Any]:
+    """Nodes joining otherwise separate clusters, by betweenness centrality.
+
+    Untracked people are excluded: centrality is named directly in CLAUDE.md's
+    per-person rule."""
     nodes = await graph_client.get_bridge_nodes(limit=limit)
     return {"nodes": nodes, "count": len(nodes)}
 
 
 @router.get("/node/{node_id}")
 async def node_insights(node_id: str, _: Principal = Depends(principal)) -> dict[str, Any]:
+    """One node's centrality, community and immediate neighbours."""
     return await graph_client.get_node_insights(node_id)

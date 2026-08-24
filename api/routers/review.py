@@ -35,5 +35,6 @@ async def people(
 async def blockers(
     limit: int = Query(50, ge=1, le=200), _: Principal = Depends(principal)
 ) -> dict[str, Any]:
+    """Open blockers raised in meetings, with who raised each."""
     items = await graph_client.get_open_blockers(limit=limit)
     return {"blockers": items, "count": len(items)}
