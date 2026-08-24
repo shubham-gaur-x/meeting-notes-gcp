@@ -365,63 +365,79 @@ def _rejection_reason(failed: list[Any], review: Any) -> str:
     return "\n\n".join(parts)
 
 
-async def _record_provenance(
-    key: str, pr: dict[str, Any], ticket: dict[str, Any], status: str,
-    verified: bool | None, deps: _Dependencies, *, branch_name: str, logger: Any,
-) -> None:
+@dataclass(frozen=True)
+class _Outcome:
+    """Everything the terminal steps need about one finished agent run.
+
+    `_ship` and `_escalate_to_human` took twelve and fourteen positional
+    arguments respectively — the same clump each time, in an order a caller
+    had to get exactly right with no help from the type checker, since most
+    of them were `dict[str, Any]`. Grouping them means adding a field is one
+    edit rather than four, and a mis-ordered call becomes a name error.
+    """
+
+    key: str
+    ticket: dict[str, Any]
+    detail: dict[str, Any]
+    pr: dict[str, Any]
+    result: AgentRunResult
+    diff: str
+    verdict: Any
+    verified: bool | None
+    branch_name: str
+    settings: Settings
+    deps: _Dependencies
+    logger: Any
+
+
+async def _record_provenance(ctx: _Outcome, status: str) -> None:
     """Write the AgentRun node the merge webhook later finds by PR url.
 
     Best-effort: a graph hiccup must not lose the PR link or undo the Jira
     transition that already happened.
     """
-    run_after = await deps.get_run(key)
+    run_after = await ctx.deps.get_run(ctx.key)
     try:
-        await deps.write_run_provenance(
-            ticket_key=key, attempt=run_after.attempt_count if run_after else 1,
-            pr_url=pr["html_url"], pr_number=pr.get("number"), branch=branch_name,
-            ticket_summary=ticket.get("summary", ""), status=status, verified=verified,
+        await ctx.deps.write_run_provenance(
+            ticket_key=ctx.key, attempt=run_after.attempt_count if run_after else 1,
+            pr_url=ctx.pr["html_url"], pr_number=ctx.pr.get("number"),
+            branch=ctx.branch_name, ticket_summary=ctx.ticket.get("summary", ""),
+            status=status, verified=ctx.verified,
         )
     except Exception:  # noqa: BLE001 - provenance is not worth failing the run over
-        logger.warning("orchestrator.provenance_write_failed", exc_info=True)
+        ctx.logger.warning("orchestrator.provenance_write_failed", exc_info=True)
 
 
-async def _escalate_to_human(
-    key: str, ticket: dict[str, Any], detail: dict[str, Any], pr: dict[str, Any],
-    result: AgentRunResult, diff: str, verdict: Any, failed: list[Any], review: Any,
-    verified: bool | None, settings: Settings, deps: _Dependencies,
-    *, branch_name: str, logger: Any,
-) -> None:
+async def _escalate_to_human(ctx: _Outcome, failed: list[Any], review: Any) -> None:
     """A PR that did not pass review. NEEDS_HUMAN is terminal, so the poller
     will not retry it, and the PR is deliberately left open: the work is real,
     it just needs a person."""
-    logger.warning(
+    ctx.logger.warning(
         "orchestrator.review_blocked", failed=[g.name for g in failed],
-        review_blocking=bool(review and review.blocking), pr_url=pr["html_url"],
+        review_blocking=bool(review and review.blocking), pr_url=ctx.pr["html_url"],
     )
-    await deps.add_comment(
-        key,
+    await ctx.deps.add_comment(
+        ctx.key,
         "Dev agent opened a PR but it did NOT pass review, so it has not been marked "
         f"shipped.\n\n{_rejection_reason(failed, review)}\n\n"
-        f"PR: {pr['html_url']}\n\nA human needs to review this before it merges.",
-        settings=settings,
+        f"PR: {ctx.pr['html_url']}\n\nA human needs to review this before it merges.",
+        settings=ctx.settings,
     )
-    if not await deps.transition_issue(key, "In Review", settings=settings):
-        logger.warning("orchestrator.review_transition_failed")
-    await deps.finish_run(
-        key, lc.NEEDS_HUMAN, pr_url=pr["html_url"], pr_number=pr["number"],
+    if not await ctx.deps.transition_issue(ctx.key, "In Review", settings=ctx.settings):
+        ctx.logger.warning("orchestrator.review_transition_failed")
+    await ctx.deps.finish_run(
+        ctx.key, lc.NEEDS_HUMAN, pr_url=ctx.pr["html_url"], pr_number=ctx.pr["number"],
         error=(
             "failed gates: " + ", ".join(g.name for g in failed) if failed
             else "reviewer requested changes"
         ),
     )
-    await _advance_state(key, lc.NEEDS_HUMAN, deps.set_state, deps.get_run)
-    await _record_provenance(
-        key, pr, ticket, lc.NEEDS_HUMAN, verified, deps, branch_name=branch_name, logger=logger,
-    )
-    await deps.record_session_memory(
-        detail, outcome="pr_opened", pr=pr,
-        files_changed=session_memory.files_from_diff(diff),
-        verdict=verdict, raw_notes=result.result_text or "",
+    await _advance_state(ctx.key, lc.NEEDS_HUMAN, ctx.deps.set_state, ctx.deps.get_run)
+    await _record_provenance(ctx, lc.NEEDS_HUMAN)
+    await ctx.deps.record_session_memory(
+        ctx.detail, outcome="pr_opened", pr=ctx.pr,
+        files_changed=session_memory.files_from_diff(ctx.diff),
+        verdict=ctx.verdict, raw_notes=ctx.result.result_text or "",
     )
 
 
@@ -442,31 +458,29 @@ def _ship_comment(result: AgentRunResult, verdict: Any, pr: dict[str, Any]) -> s
     return f"{base}{flag} PR: {pr['html_url']}"
 
 
-async def _ship(
-    key: str, ticket: dict[str, Any], detail: dict[str, Any], pr: dict[str, Any],
-    result: AgentRunResult, diff: str, verdict: Any, verified: bool | None,
-    settings: Settings, deps: _Dependencies, *, branch_name: str, logger: Any,
-) -> None:
+async def _ship(ctx: _Outcome) -> None:
     """Gates and reviewer both passed. SHIPPED means the PR is open and the
     ticket is in review — CLOSED happens only when a human actually merges,
     via `/webhook/github`."""
-    await deps.add_comment(key, _ship_comment(result, verdict, pr), settings=settings)
-    if not await deps.transition_issue(key, "In Review", settings=settings):
-        logger.warning("orchestrator.review_transition_failed")
+    await ctx.deps.add_comment(
+        ctx.key, _ship_comment(ctx.result, ctx.verdict, ctx.pr), settings=ctx.settings
+    )
+    if not await ctx.deps.transition_issue(ctx.key, "In Review", settings=ctx.settings):
+        ctx.logger.warning("orchestrator.review_transition_failed")
 
-    await deps.finish_run(key, lc.SHIPPED, pr_url=pr["html_url"], pr_number=pr["number"])
-    await _advance_state(key, lc.SHIPPED, deps.set_state, deps.get_run)
-    await _record_provenance(
-        key, pr, ticket, lc.SHIPPED, verified, deps, branch_name=branch_name, logger=logger,
+    await ctx.deps.finish_run(
+        ctx.key, lc.SHIPPED, pr_url=ctx.pr["html_url"], pr_number=ctx.pr["number"]
     )
-    await deps.record_session_memory(
-        detail, outcome="pr_opened", pr=pr,
-        files_changed=session_memory.files_from_diff(diff),
-        verdict=verdict, raw_notes=result.result_text or "",
+    await _advance_state(ctx.key, lc.SHIPPED, ctx.deps.set_state, ctx.deps.get_run)
+    await _record_provenance(ctx, lc.SHIPPED)
+    await ctx.deps.record_session_memory(
+        ctx.detail, outcome="pr_opened", pr=ctx.pr,
+        files_changed=session_memory.files_from_diff(ctx.diff),
+        verdict=ctx.verdict, raw_notes=ctx.result.result_text or "",
     )
-    logger.info(
-        "orchestrator.ticket_done", pr_url=pr["html_url"],
-        run_success=result.success, verified=verified,
+    ctx.logger.info(
+        "orchestrator.ticket_done", pr_url=ctx.pr["html_url"],
+        run_success=ctx.result.success, verified=ctx.verified,
     )
 
 
@@ -532,17 +546,16 @@ async def process_ticket(
         )
         failed = guardrails.failed_gates(gates)
 
+        outcome = _Outcome(
+            key=key, ticket=ticket, detail=detail, pr=pr, result=result, diff=diff,
+            verdict=verdict, verified=verified, branch_name=branch_name,
+            settings=settings, deps=deps, logger=bound_log,
+        )
         if failed or (review and review.blocking):
-            await _escalate_to_human(
-                key, ticket, detail, pr, result, diff, verdict, failed, review,
-                verified, settings, deps, branch_name=branch_name, logger=bound_log,
-            )
+            await _escalate_to_human(outcome, failed, review)
             return
 
-        await _ship(
-            key, ticket, detail, pr, result, diff, verdict, verified,
-            settings, deps, branch_name=branch_name, logger=bound_log,
-        )
+        await _ship(outcome)
 
     except Exception as exc:
         bound_log.error("orchestrator.unexpected_error", exc_info=True)

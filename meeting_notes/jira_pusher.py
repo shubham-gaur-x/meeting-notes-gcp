@@ -124,47 +124,100 @@ async def push_action_items(
         # or this whole function silently gates/dedups against zero rows.
         action_id = uuid5_id("action", f"{source_id}:{i}:{action.task}")
 
-        if action.confidence < settings.jira_confidence_threshold:
-            await mark_needs_review(action_id, f"confidence {action.confidence:.2f} below threshold")
-            log.info(
-                "jira_pusher.needs_review",
-                task=action.task[:60], confidence=round(action.confidence, 2),
-            )
+        if await _is_gated(
+            action, action_id, meeting, meeting_id, settings,
+            mark_needs_review=mark_needs_review, get_open_actions=get_open_actions,
+            embed=embed, link_mentioned_in=link_mentioned_in, add_comment=add_comment,
+        ):
             continue
 
-        if settings.jira_dedup_enabled:
-            duplicate = await _find_duplicate(
-                action, action_id, meeting, meeting_id,
-                get_open_actions=get_open_actions, embed=embed,
-                link_mentioned_in=link_mentioned_in, add_comment=add_comment,
-                threshold=settings.jira_dedup_threshold,
-            )
-            if duplicate is not None:
-                continue
-
-        description = (
-            f"From meeting: {meeting.title} ({meeting.date})\n"
-            f"Owner: {action.owner}\nDue: {action.due or 'not specified'}"
+        jira_key = await _create_ticket(
+            action, action_id, meeting, sprint_id,
+            create_issue=create_issue, update_jira_key=update_jira_key,
         )
-        try:
-            jira_key = await create_issue(
-                summary=action.task[:255],
-                description=description,
-                priority=action.priority,
-                sprint_id=sprint_id,
-                is_engineering_task=action.is_engineering_task,
-            )
-            await update_jira_key(action_id, jira_key)
+        if jira_key:
             created_keys.append(jira_key)
-            log.info("jira_pusher.issue_created", jira_key=jira_key, task=action.task[:60])
-        except Exception as exc:  # noqa: BLE001 - one bad item must not fail the batch
-            log.error("jira_pusher.issue_failed", task=action.task[:60], error=str(exc))
 
     log.info(
         "jira_pusher.batch_done", source_id=source_id,
         total=len(action_items), created=len(created_keys),
     )
     return created_keys
+
+
+async def _is_gated(
+    action: ActionItem,
+    action_id: str,
+    meeting: ExtractedMeeting,
+    meeting_id: str,
+    settings: Settings,
+    *,
+    mark_needs_review: Any,
+    get_open_actions: Any,
+    embed: Any,
+    link_mentioned_in: Any,
+    add_comment: Any,
+) -> bool:
+    """True when this item must NOT become a ticket.
+
+    Two independent reasons, both of which leave the item in the graph: the
+    extractor was not confident enough to file it automatically, or it repeats
+    something already open. Neither is a failure — an item that reaches the
+    review queue is one the system chose to ask about rather than guess.
+    """
+    if action.confidence < settings.jira_confidence_threshold:
+        await mark_needs_review(action_id, f"confidence {action.confidence:.2f} below threshold")
+        log.info(
+            "jira_pusher.needs_review",
+            task=action.task[:60], confidence=round(action.confidence, 2),
+        )
+        return True
+
+    if settings.jira_dedup_enabled:
+        duplicate = await _find_duplicate(
+            action, action_id, meeting, meeting_id,
+            get_open_actions=get_open_actions, embed=embed,
+            link_mentioned_in=link_mentioned_in, add_comment=add_comment,
+            threshold=settings.jira_dedup_threshold,
+        )
+        if duplicate is not None:
+            return True
+
+    return False
+
+
+async def _create_ticket(
+    action: ActionItem,
+    action_id: str,
+    meeting: ExtractedMeeting,
+    sprint_id: int | None,
+    *,
+    create_issue: Any,
+    update_jira_key: Any,
+) -> str | None:
+    """Create one ticket and record its key on the ActionItem, or None.
+
+    A failure here is logged and swallowed on purpose: one unbuildable item
+    must not cost the rest of the batch its tickets.
+    """
+    description = (
+        f"From meeting: {meeting.title} ({meeting.date})\n"
+        f"Owner: {action.owner}\nDue: {action.due or 'not specified'}"
+    )
+    try:
+        jira_key: str = await create_issue(
+            summary=action.task[:255],
+            description=description,
+            priority=action.priority,
+            sprint_id=sprint_id,
+            is_engineering_task=action.is_engineering_task,
+        )
+        await update_jira_key(action_id, jira_key)
+        log.info("jira_pusher.issue_created", jira_key=jira_key, task=action.task[:60])
+        return jira_key
+    except Exception as exc:  # noqa: BLE001 - one bad item must not fail the batch
+        log.error("jira_pusher.issue_failed", task=action.task[:60], error=str(exc))
+        return None
 
 
 async def _find_duplicate(

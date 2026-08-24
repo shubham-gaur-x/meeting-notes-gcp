@@ -1828,3 +1828,52 @@ async def test_the_coding_run_can_actually_run_git(monkeypatch, tmp_path) -> Non
         f"approval mode {mode!r} cannot run git; the agent edits and then "
         "silently fails to commit, push, or open a PR"
     )
+
+
+# ─── the CLI's awkward outputs, now unit-testable ─────────────────────────────
+
+
+def test_a_stream_error_alongside_finished_work_is_not_a_hard_failure() -> None:
+    """Seen live: the CLI wrote the file correctly, then emitted
+    {"error": {"type": "INVALID_STREAM"}} on its way out. `success` records
+    what the CLI claimed; the orchestrator decides on whether a PR exists."""
+    from meeting_notes.dev_agent.gemini_runner import _result_from_output
+
+    out = _result_from_output(
+        0, json.dumps({"error": {"type": "INVALID_STREAM", "message": "stream closed"}}), "", 10
+    )
+    assert out.success is False
+    assert out.result_text == "stream closed", "the message must survive for the Jira comment"
+
+
+def test_a_nonzero_exit_prefers_the_clis_json_over_stderr() -> None:
+    """stderr is usually just warnings; the useful message is on stdout."""
+    from meeting_notes.dev_agent.gemini_runner import _result_from_output
+
+    out = _result_from_output(
+        1, json.dumps({"error": {"message": "quota exhausted"}}), "warning: node 18 deprecated", 10
+    )
+    assert out.success is False
+    assert "quota exhausted" in out.result_text
+    assert "deprecated" not in out.result_text
+
+
+def test_unparseable_stdout_is_treated_as_success() -> None:
+    """The run may well have done the work -- the PR check is what decides."""
+    from meeting_notes.dev_agent.gemini_runner import _result_from_output
+
+    out = _result_from_output(0, "not json at all", "", 10)
+    assert out.success is True
+    assert "not json" in out.result_text
+
+
+def test_a_clean_run_reports_the_response_and_turn_count() -> None:
+    from meeting_notes.dev_agent.gemini_runner import _result_from_output
+
+    out = _result_from_output(0, json.dumps({
+        "response": "PR_URL: https://github.com/a/b/pull/1",
+        "stats": {"models": {"gemini-3-pro": {"api": {"totalRequests": 7}}}},
+    }), "", 10)
+    assert out.success is True
+    assert out.num_turns == 7
+    assert "pull/1" in out.result_text

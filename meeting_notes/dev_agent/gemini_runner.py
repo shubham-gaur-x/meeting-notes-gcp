@@ -116,9 +116,11 @@ async def run_agent(
 ) -> AgentRunResult:
     """Run the coding agent to completion on a real task, in `work_dir`.
 
-    ``--approval-mode auto_edit`` lets it implement the ticket, run tests, and
-    (via shell) commit/push/open a PR. The prompt is the only thing telling it
-    not to merge — see `orchestrator.build_prompt`.
+    ``--approval-mode yolo`` is what lets it implement the ticket, run tests,
+    and (via shell) commit, push and open a PR. The prompt is the only thing
+    telling it not to merge — see `orchestrator.build_prompt`. Isolation comes
+    from the per-ticket worktree, and nothing ships until the gates and the
+    reviewer agree.
 
     There is no turn cap: the CLI exposes none. `timeout_seconds` and the
     guardrail gates are the bounds.
@@ -172,13 +174,33 @@ async def run_agent(
         )
 
     duration_ms = int((time.monotonic() - start) * 1000)
-    stdout_str = stdout_bytes.decode(errors="replace")
-    stderr_str = stderr_bytes.decode(errors="replace")
+    return _result_from_output(
+        proc.returncode or 0,
+        stdout_bytes.decode(errors="replace"),
+        stderr_bytes.decode(errors="replace"),
+        duration_ms,
+    )
+
+
+def _result_from_output(
+    returncode: int, stdout_str: str, stderr_str: str, duration_ms: int
+) -> AgentRunResult:
+    """Interpret one finished CLI run. Pure, so the awkward cases are testable.
+
+    Three of them, all seen live:
+
+    * nonzero exit — the useful message is the CLI's own JSON on *stdout*,
+      not stderr, which is usually just warnings;
+    * unparseable stdout — treated as success, because the run may well have
+      done the work and the PR check is what actually decides;
+    * a stream-level error alongside completed work — the CLI wrote the file
+      correctly, then emitted `{"error": {"type": "INVALID_STREAM"}}` on the
+      way out. `success` records what the CLI claimed; the orchestrator gates
+      on whether a PR exists, never on this flag alone (ADR-020).
+    """
     parsed = _parse_result(stdout_str)
 
-    if proc.returncode != 0:
-        # The CLI's own JSON error (the actually useful message) goes to
-        # stdout even on nonzero exit; stderr is frequently just warnings.
+    if returncode != 0:
         error_detail = ""
         if parsed is not None:
             error = parsed.get("error")
@@ -187,11 +209,11 @@ async def run_agent(
         if not error_detail:
             error_detail = stderr_str.strip() or stdout_str
         log.error(
-            "gemini_runner.nonzero_exit", returncode=proc.returncode,
+            "gemini_runner.nonzero_exit", returncode=returncode,
             error_detail=error_detail[-2000:],
         )
         return AgentRunResult(
-            success=False, returncode=proc.returncode or 0,
+            success=False, returncode=returncode,
             result_text=error_detail[-2000:], duration_ms=duration_ms,
         )
 
@@ -201,22 +223,18 @@ async def run_agent(
             success=True, returncode=0, result_text=stdout_str[-2000:], duration_ms=duration_ms
         )
 
-    # A run can report a stream-level error and STILL have done the work --
-    # observed live: the CLI wrote the file correctly, then emitted
-    # {"error": {"type": "INVALID_STREAM"}} on the way out. `success` records
-    # what the CLI claimed; the orchestrator gates the outcome on whether a PR
-    # actually exists, never on this flag alone (ADR-020).
     error = parsed.get("error")
     error = error if isinstance(error, dict) and error else None
     result_text = parsed.get("response") or ""
     if error is not None and not result_text:
         result_text = error.get("message") or ""
 
+    turns = _turns_from_stats(parsed.get("stats"))
     log.info(
         "gemini_runner.finish", duration_ms=duration_ms,
-        num_turns=_turns_from_stats(parsed.get("stats")), is_error=error is not None,
+        num_turns=turns, is_error=error is not None,
     )
     return AgentRunResult(
-        success=error is None, returncode=proc.returncode, result_text=result_text,
-        num_turns=_turns_from_stats(parsed.get("stats")), duration_ms=duration_ms,
+        success=error is None, returncode=returncode, result_text=result_text,
+        num_turns=turns, duration_ms=duration_ms,
     )
