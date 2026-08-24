@@ -231,6 +231,75 @@ async def consolidate(driver: Any = None) -> dict[str, int]:
     return {"facts_boosted": int(boosted)}
 
 
+async def _consolidate_one(
+    person: dict[str, Any],
+    driver: Any,
+    settings: Settings | None,
+    chat: Any,
+    *,
+    history: int,
+    now: str,
+) -> int:
+    """Infer and write one person's preferences. Returns how many were written.
+
+    Every failure here is contained to this person on purpose: a batch pass
+    over 25 people must not lose 24 of them because one had a malformed reply
+    or a write hiccup.
+    """
+    async with driver.session() as session:
+        result = await session.run(
+            """
+            MATCH (p:Person {email: $email})-[:ATTENDED]->(m:Meeting)
+            RETURN m.title AS title, coalesce(m.summary, '') AS summary
+            ORDER BY m.date DESC
+            LIMIT $history
+            """,
+            email=person["email"],
+            history=history,
+        )
+        recent = [dict(r) async for r in result]
+
+    if not recent:
+        return 0
+
+    context = f"Person: {person['name']} <{person['email']}>\n" + "\n".join(
+        f"- {r['title']}: {r['summary'][:180]}" for r in recent
+    )
+    try:
+        prefs = _parse_list(await _chat(PREF_SYSTEM, context, settings, chat))
+    except Exception as exc:  # noqa: BLE001 - one person must not sink the pass
+        log.warning("semantic.preferences_failed", email=person["email"], error=str(exc))
+        return 0
+
+    written = 0
+    async with driver.session() as session:
+        for pref in prefs:
+            if not isinstance(pref, dict):
+                continue
+            category, value = pref.get("category"), pref.get("value")
+            if not category or not value:
+                continue
+            try:
+                await session.run(
+                    """
+                    MATCH (p:Person {email: $email})
+                    MERGE (pref:Preference {id: $pref_id})
+                    ON CREATE SET pref.category = $category, pref.created_at = $now
+                    SET pref.value = $value, pref.updated_at = $now
+                    MERGE (p)-[:PREFERS]->(pref)
+                    """,
+                    email=person["email"],
+                    pref_id=uuid5_id("preference", f"{person['email']}:{category}"),
+                    category=category,
+                    value=value,
+                    now=now,
+                )
+                written += 1
+            except Exception as exc:  # noqa: BLE001
+                log.warning("semantic.preference_write_failed", error=str(exc))
+    return written
+
+
 async def consolidate_preferences(
     driver: Any = None,
     *,
@@ -269,56 +338,9 @@ async def consolidate_preferences(
 
     written = 0
     for person in people:
-        async with driver.session() as session:
-            result = await session.run(
-                """
-                MATCH (p:Person {email: $email})-[:ATTENDED]->(m:Meeting)
-                RETURN m.title AS title, coalesce(m.summary, '') AS summary
-                ORDER BY m.date DESC
-                LIMIT $history
-                """,
-                email=person["email"],
-                history=history,
-            )
-            recent = [dict(r) async for r in result]
-
-        if not recent:
-            continue
-        context = f"Person: {person['name']} <{person['email']}>\n" + "\n".join(
-            f"- {r['title']}: {r['summary'][:180]}" for r in recent
+        written += await _consolidate_one(
+            person, driver, settings, chat, history=history, now=now
         )
-
-        try:
-            prefs = _parse_list(await _chat(PREF_SYSTEM, context, settings, chat))
-        except Exception as exc:  # noqa: BLE001 - one person must not sink the pass
-            log.warning("semantic.preferences_failed", email=person["email"], error=str(exc))
-            continue
-
-        async with driver.session() as session:
-            for pref in prefs:
-                if not isinstance(pref, dict):
-                    continue
-                category, value = pref.get("category"), pref.get("value")
-                if not category or not value:
-                    continue
-                try:
-                    await session.run(
-                        """
-                        MATCH (p:Person {email: $email})
-                        MERGE (pref:Preference {id: $pref_id})
-                        ON CREATE SET pref.category = $category, pref.created_at = $now
-                        SET pref.value = $value, pref.updated_at = $now
-                        MERGE (p)-[:PREFERS]->(pref)
-                        """,
-                        email=person["email"],
-                        pref_id=uuid5_id("preference", f"{person['email']}:{category}"),
-                        category=category,
-                        value=value,
-                        now=now,
-                    )
-                    written += 1
-                except Exception as exc:  # noqa: BLE001
-                    log.warning("semantic.preference_write_failed", error=str(exc))
 
     log.info("semantic.preferences_consolidated", people=len(people), written=written)
     return {"people": len(people), "preferences": written}
