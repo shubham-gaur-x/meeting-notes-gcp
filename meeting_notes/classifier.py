@@ -58,9 +58,26 @@ _EMAIL_NOISE_PATTERNS = [
     re.compile(r"\bunsubscribe\b", re.I),
     re.compile(r"\bpromotion\b", re.I),
     re.compile(r"\bnewsletter\b", re.I),
-    re.compile(r"\bno.reply\b", re.I),
-    re.compile(r"\bnoreply\b", re.I),
+    re.compile(r"\bno[-.]?reply\b", re.I),
+    re.compile(r"\bdonotreply\b", re.I),
     re.compile(r"\bmarketing\b", re.I),
+    # 2FA / OTP / Sign-in alerts
+    re.compile(r"\bverification code\b", re.I),
+    re.compile(r"\bone-time (code|passcode|password)\b", re.I),
+    re.compile(r"\bsecurity code\b", re.I),
+    re.compile(r"\bsign-on notification\b", re.I),
+    re.compile(r"\bnew login to\b", re.I),
+    re.compile(r"\b(password reset|reset your password|temporary password)\b", re.I),
+    # Out of office / Auto-responses
+    re.compile(r"\b(out of office|automatic reply|auto[- ]?reply|autoreply)\b", re.I),
+    # Operational & HR notifications
+    re.compile(r"\btimecard\b", re.I),
+    re.compile(r"\bmissing time\b", re.I),
+    re.compile(r"\bpay statement\b", re.I),
+    # Billing / Receipts / Invoices
+    re.compile(r"\b(order .* confirmed|billing statement|payment received|invoice #)\b", re.I),
+    # Security training simulations
+    re.compile(r"\b(phishing simulation|security awareness)\b", re.I),
 ]
 
 
@@ -69,10 +86,14 @@ def classify(text: str, metadata: dict[str, Any]) -> float:
     text_lower = text.lower()
     words = set(re.findall(r"\b\w+\b", text_lower))
 
-    # Penalty for noise patterns (marketing/auto emails)
+    # Penalty for noise patterns (marketing/auto emails/auth alerts)
     noise_hits = sum(1 for p in _EMAIL_NOISE_PATTERNS if p.search(text))
-    if noise_hits >= 2:
-        return 0.0
+    if noise_hits >= 1:
+        sender = str(metadata.get("from", "")).lower()
+        if any(term in sender for term in ("no-reply", "noreply", "donotreply", "notifications")):
+            return 0.0
+        if noise_hits >= 2:
+            return 0.0
 
     # Signal 1: meeting keywords in subject/title (strong signal)
     keyword_hits = len(words & _MEETING_KEYWORDS)

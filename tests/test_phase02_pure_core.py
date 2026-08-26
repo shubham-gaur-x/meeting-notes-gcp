@@ -299,9 +299,30 @@ def test_marketing_noise_short_circuits_to_zero() -> None:
 
 
 def test_a_single_noise_marker_does_not_short_circuit() -> None:
-    """The gate is >= 2. One stray 'unsubscribe' in a genuine thread is not
+    """The gate is >= 2 unless from an automated sender. One stray 'unsubscribe' in a genuine thread is not
     enough to discard it."""
     assert classify("Standup agenda. Unsubscribe link at the bottom.", {}) > 0.0
+
+
+def test_otp_and_verification_emails_score_zero() -> None:
+    """2FA codes and sign-in alerts must always score 0.0."""
+    text = "Your verification code is 6TV-QF8. Enter this security code to verify."
+    assert classify(text, {}) == 0.0
+    assert classify("Your one-time passcode for Databricks SSO is 849201", {}) == 0.0
+
+
+def test_no_reply_senders_with_noise_score_zero() -> None:
+    """Automated notifications from no-reply senders must score 0.0."""
+    text = "Submit your timecard by Friday EOD for payroll processing."
+    assert classify(text, {"from": "no-reply@notify.docker.com"}) == 0.0
+    assert classify(text, {"from": "sf-user@onixnet.com"}) == 0.0
+
+
+def test_enterprise_noise_patterns_score_zero() -> None:
+    """Out of office, password resets, and invoices must score 0.0."""
+    assert classify("Automatic reply: I am currently out of office until Monday.", {}) == 0.0
+    assert classify("Click here to reset your password. Temporary password enclosed.", {}) == 0.0
+    assert classify("Your payment received. Order R-44Z confirmed with billing statement.", {}) == 0.0
 
 
 def test_a_real_meeting_scores_above_the_default_threshold() -> None:
