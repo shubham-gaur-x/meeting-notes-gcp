@@ -526,23 +526,11 @@ async function askMemory() {
       body: JSON.stringify({question}),
     });
     if (!r.ok) throw new Error("query -> " + r.status);
-    const d = await r.json();
-
-    const followupsHtml = (d.suggested_followups && d.suggested_followups.length)
-      ? `<div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">` +
-        `<div class="muted" style="font-size:12px;font-weight:600;margin-bottom:8px">🔍 Next Questions to Explore:</div>` +
-        d.suggested_followups.map(f =>
-          `<button class="followup-btn" onclick="askQuestion('${esc(f).replace(/'/g, "\\'")}')">` +
-          `↳ ${esc(f)}</button>`
-        ).join("") + `</div>`
-      : "";
-
+    const count = (d.node_ids || []).length;
+    const noun = count === 1 ? "item" : "items";
     $("#ask-body").innerHTML =
-      `<div class="answer" style="line-height:1.6">${renderMarkdown(d.answer)}` +
-      followupsHtml +
-      `</div>` +
-      `<p class="muted" style="font-size:12px;margin-top:8px">Answered from ${esc((d.node_ids || []).length)} ` +
-      `item(s) in your meeting memory.</p>`;
+      `<div class="answer" style="line-height:1.6">${renderMarkdown(d.answer)}</div>` +
+      `<p class="muted" style="font-size:12px;margin-top:8px">Answered from ${count} ${noun} in your meeting memory.</p>`;
   } catch (e) { fail("#ask-body", e); }
 }
 

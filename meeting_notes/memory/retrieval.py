@@ -37,16 +37,16 @@ ENTITY_SYSTEM = (
 
 SYNTHESIS_SYSTEM_PREFIX = (
     "You are an intelligent executive assistant with access to the user's meeting memory, decisions, and task graph.\n"
-    "Your goal is to answer the user's question directly, concisely, and cleanly in markdown.\n"
-    "Guidelines:\n"
-    "- Address the user directly using natural second-person language ('you' / 'your'). Never refer to the user in the third person or leak the user's full name.\n"
-    "- Be concise, direct, and get straight to the point.\n"
-    "- For each task, project, or place referenced, include its direct clickable markdown links (e.g. [🔷 Jira MDP-XX](...), [✉️ Gmail Thread](...), [📊 Google Slides](...)), owner, and due date INLINE directly on that task.\n"
-    "- Do NOT create a separate duplicate 'Links' or 'Action Items Summary' section at the bottom; keep links attached directly to each item.\n"
-    "- Base your answer strictly on the context below. If specific info (such as duration) is not in the context, mention it briefly in one sentence.\n"
-    "- Do NOT guess or hallucinate any facts not present in the context.\n\n"
+    "Your goal is to answer the user's question directly, cleanly, and with executive polish in markdown.\n\n"
+    "Formatting & Guidelines:\n"
+    "- Address the user directly using natural second-person language ('you' / 'your'). Never refer to the user in the third person or leak the user's name.\n"
+    "- Structure your answer with rich, scannable formatting (e.g. bold deliverable titles, clear stakeholder headers, and inline attribute metadata)—never just a flat list of plain bullets.\n"
+    "- ALWAYS include direct clickable markdown links (e.g. [🔷 Jira MDP-XX](...), [✉️ Gmail Thread](...), [📊 Google Slides](...), [📄 Document](...)) for every task, deliverable, or resource whenever links or URLs are available in the context, even if the user did not explicitly ask for links.\n"
+    "- For each deliverable or task, display its owner, due date (if any), and actionable details inline.\n"
+    "- Do NOT create a separate duplicate 'Links Summary' or 'References' section at the bottom; attach links directly to each item.\n"
+    "- Base your answer strictly on the context below. If specific details are not in the context, mention it briefly in one sentence.\n\n"
     'Respond ONLY with JSON of exactly this shape: {"answer": "your markdown answer here"}.\n'
-    "The answer value must be plain readable markdown prose, not nested objects or lists.\n\n"
+    "The answer value must be formatted markdown text, not nested objects or lists.\n\n"
     "Context:\n"
 )
 
@@ -107,6 +107,33 @@ async def assemble_context(
     topics = [t.lower().strip() for t in entities.get("topics", []) if isinstance(t, str)]
 
     async with driver.session() as session:
+        # 1. Action Items (always queried to surface open commitments & deliverables)
+        actions_res = await session.run(
+            """
+            MATCH (m:Meeting)-[:FOLLOWS_UP]->(a:ActionItem)
+            WHERE coalesce(a.done, false) = false
+            RETURN DISTINCT a.id AS id, a.task AS task, a.owner AS owner,
+                   a.due AS due, a.priority AS priority, a.jira_key AS jira_key,
+                   m.title AS meeting_title, m.source_id AS source_id, m.date AS date
+            ORDER BY CASE WHEN a.priority = 'high' THEN 0 ELSE 1 END, a.due ASC
+            LIMIT 15
+            """
+        )
+        async for record in actions_res:
+            node_ids.append(record["id"])
+            link_parts = []
+            if record.get("jira_key"):
+                link_parts.append(f"[🔷 Jira {record['jira_key']}](https://michael-baylard.atlassian.net/browse/{record['jira_key']})")
+            if record.get("source_id") and str(record["source_id"]).startswith("gmail:"):
+                gmail_id = str(record["source_id"]).split(":")[-1]
+                link_parts.append(f"[✉️ Gmail Thread](https://mail.google.com/mail/u/0/#inbox/{gmail_id})")
+
+            links_str = f" | Links: {' '.join(link_parts)}" if link_parts else ""
+            lines.append(
+                f"ActionItem: Task: {record['task']} | Owner: {record['owner']} | Due: {record['due'] or 'None'} | Priority: {record['priority']} | Source: {record['meeting_title']}{links_str}"
+            )
+
+        # 2. People
         if people:
             result = await session.run(
                 """
@@ -123,6 +150,7 @@ async def assemble_context(
                 node_ids.append(record["id"])
                 lines.append(f"Person: {record['name']} <{record['email']}>")
 
+        # 3. Topics & Meetings
         if topics:
             result = await session.run(
                 """
@@ -130,7 +158,7 @@ async def assemble_context(
                 MATCH (t:Topic)<-[:DISCUSSED]-(m:Meeting)
                 WHERE t.name CONTAINS topic
                 RETURN DISTINCT m.id AS id, m.title AS title, m.date AS date,
-                                m.summary AS summary
+                                m.summary AS summary, m.source_id AS source_id
                 ORDER BY m.date DESC
                 LIMIT 10
                 """,
@@ -138,10 +166,34 @@ async def assemble_context(
             )
             async for record in result:
                 node_ids.append(record["id"])
+                link_parts = []
+                if record.get("source_id") and str(record["source_id"]).startswith("gmail:"):
+                    gmail_id = str(record["source_id"]).split(":")[-1]
+                    link_parts.append(f"[✉️ Gmail Thread](https://mail.google.com/mail/u/0/#inbox/{gmail_id})")
+                links_str = f" | Links: {' '.join(link_parts)}" if link_parts else ""
                 lines.append(
-                    f"Meeting ({record['date']}): {record['title']} — {record['summary']}"
+                    f"Meeting ({record['date']}): {record['title']}{links_str} — {record['summary']}"
                 )
 
+        # 4. Decisions
+        decisions_res = await session.run(
+            """
+            MATCH (m:Meeting)-[:DECIDED]->(d:Decision)
+            RETURN DISTINCT d.id AS id, d.text AS text, m.title AS meeting_title, m.date AS date, m.source_id AS source_id
+            ORDER BY m.date DESC
+            LIMIT 8
+            """
+        )
+        async for record in decisions_res:
+            node_ids.append(record["id"])
+            link_parts = []
+            if record.get("source_id") and str(record["source_id"]).startswith("gmail:"):
+                gmail_id = str(record["source_id"]).split(":")[-1]
+                link_parts.append(f"[✉️ Gmail Thread](https://mail.google.com/mail/u/0/#inbox/{gmail_id})")
+            links_str = f" | Links: {' '.join(link_parts)}" if link_parts else ""
+            lines.append(f"Decision: {record['text']} (Meeting: {record['meeting_title']}{links_str})")
+
+        # 5. Facts
         result = await session.run(
             """
             MATCH (f:Fact)
