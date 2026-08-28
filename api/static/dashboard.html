@@ -501,7 +501,7 @@ async function renderExamples() {
     }
   }
 
-  container.innerHTML = `<p class="hint" style="margin-bottom:8px">Try one:</p>` +
+  container.innerHTML =
     `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;margin-bottom:14px">` +
     SUGGESTED_QUESTIONS.map(q =>
       `<div class="prompt-card" onclick="askQuestion('${esc(q.question).replace(/'/g, "\\'")}')">` +
