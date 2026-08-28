@@ -382,13 +382,9 @@ async function openMeeting(m) {
           `identified: ${d.unresolved_attendees.map(esc).join(", ")}</p>` : "") +
       ((d.facts && d.facts.length) ? `<h3>What this told us</h3>` +
         d.facts.map(f => `<div class="quote">${esc(f.text)}</div>`).join("") : "") +
-      ((d.original_email || d.source_id) ? `<h3>Original Email & Source Message</h3>` +
-        `<div style="margin-bottom:10px">` +
-          (d.source_id ? `<a href="https://mail.google.com/mail/u/0/#search/rfc822msgid:${encodeURIComponent(d.source_id)}" target="_blank" rel="noopener" class="pill" style="background:#1e3a8a;color:#ffffff;font-weight:600;text-decoration:none;padding:4px 10px">Open in Gmail</a> ` : "") +
-          `<a href="https://mail.google.com/mail/u/0/#search/${encodeURIComponent(d.title || '')}" target="_blank" rel="noopener" class="pill" style="background:#2d3748;color:#ffffff;font-weight:600;text-decoration:none;padding:4px 10px">Search Gmail Thread</a>` +
-        `</div>` +
-        (d.original_email ? `<div class="quote" style="white-space:pre-wrap;max-height:220px;overflow-y:auto;background:rgba(255,255,255,0.03);padding:10px;font-size:12px">${esc(d.original_email.body || d.original_email.text || d.original_email.snippet || (typeof d.original_email === 'string' ? d.original_email : JSON.stringify(d.original_email, null, 2)))}</div>` : "")
-      : "");
+      ((d.source_id) ? `<div style="margin-top:16px">` +
+        `<a href="https://mail.google.com/mail/u/0/#search/rfc822msgid:${encodeURIComponent(d.source_id)}" target="_blank" rel="noopener" class="pill" style="background:#1e3a8a;color:#ffffff;font-weight:600;text-decoration:none;padding:5px 12px">Open in Gmail</a>` +
+        `</div>` : "");
   } catch (e) { $("#d-body").innerHTML = `<div class="err">${esc(e.message)}</div>`; }
 }
 

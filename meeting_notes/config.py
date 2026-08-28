@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     # tier-0 default and the test suite's backend.
     llm_backend: LLMBackend = "fake"
     gemini_api_key: str = ""
-    gemini_chat_model: str = "gemini-2.5-flash"
+    gemini_chat_model: str = "gemini-3.7-flash"
     vertex_chat_model: str = ""
     vertex_embedding_model: str = "text-embedding-005"
     vertex_location: str = "us-central1"
