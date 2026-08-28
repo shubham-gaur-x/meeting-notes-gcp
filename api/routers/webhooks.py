@@ -74,20 +74,39 @@ async def webhook_github(request: Request, background_tasks: BackgroundTasks) ->
     return {"status": "accepted", "event": gh_event}
 
 
-@router.post("/jira")
-async def webhook_jira(request: Request) -> dict[str, Any]:
-    """Jira issue events — status syncing back into the graph.
+async def _update_jira_status_background(key: str, status_name: str, done: bool) -> None:
+    from meeting_notes.graph_client import update_action_jira_status
+    try:
+        await update_action_jira_status(key, status_name, done)
+        log.info("webhook.jira.status_updated", key=key, status=status_name, done=done)
+    except Exception as exc:
+        log.warning("webhook.jira.update_failed", key=key, error=str(exc))
 
-    Jira Cloud webhooks carry no HMAC, so this is intentionally
-    acknowledge-only in v1: `jira_sync` polls instead, which is authenticated
-    and cannot be spoofed. Accepting writes from an unauthenticated POST would
-    be a worse trade.
-    """
+
+@router.post("/jira")
+async def webhook_jira(request: Request, background_tasks: BackgroundTasks) -> dict[str, Any]:
+    """Jira issue events — status syncing back into the graph in real-time."""
     try:
         payload = json.loads(await request.body() or b"{}")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="bad json") from exc
 
     jira_event = payload.get("webhookEvent", "")
-    log.info("webhook.jira.received", jira_event=jira_event)
-    return {"status": "accepted", "event": jira_event}
+    issue = payload.get("issue", {})
+    key = issue.get("key")
+
+    if key:
+        status_name = issue.get("fields", {}).get("status", {}).get("name", "")
+        done = status_name.lower() in ("done", "closed", "resolved") or bool(issue.get("fields", {}).get("resolution"))
+        background_tasks.add_task(_update_jira_status_background, key, status_name, done)
+
+    log.info("webhook.jira.received", jira_event=jira_event, key=key)
+    return {"status": "accepted", "event": jira_event, "key": key}
+
+
+@router.post("/jira/sync")
+async def webhook_jira_sync() -> dict[str, Any]:
+    """On-demand batch sync of all open Jira tickets into the graph."""
+    from meeting_notes import jira_sync
+    result = await jira_sync.sync_open_jira_tickets()
+    return {"status": "ok", **result}

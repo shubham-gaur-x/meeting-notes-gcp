@@ -36,18 +36,18 @@ ENTITY_SYSTEM = (
 )
 
 SYNTHESIS_SYSTEM_PREFIX = (
-    "You are a meeting memory assistant with access to a structured knowledge graph. "
-    "Answer the question using ONLY the context below. "
-    "Be specific and cite names and dates when available. "
-    "If the context does not contain enough information, say so — do not guess.\n"
-    # The shape is pinned because the Vertex and Gemini backends set
-    # responseMimeType=application/json, so the model MUST return JSON. Without
-    # naming the key it invents its own nested structure and the caller ends up
-    # stringifying a dict into the answer field -- observed live against real
-    # graph data before this line existed.
-    'Respond ONLY with JSON of exactly this shape: {"answer": "your prose answer here"}. '
-    "The answer value must be plain readable prose, not nested objects or lists.\n"
-    "Context: "
+    "You are an intelligent executive assistant with access to the user's meeting memory, decisions, and task graph.\n"
+    "Your goal is to answer the user's question directly, cleanly, and with executive polish in markdown.\n\n"
+    "Formatting & Guidelines:\n"
+    "- Address the user directly using natural second-person language ('you' / 'your'). Never refer to the user in the third person or leak the user's name.\n"
+    "- Structure your answer with rich, scannable formatting (e.g. bold deliverable titles, clear stakeholder headers, and inline attribute metadata)—never just a flat list of plain bullets.\n"
+    "- ALWAYS include direct clickable markdown links (e.g. [🔷 Jira MDP-XX](...), [✉️ Gmail Thread](...), [📊 Google Slides](...), [📄 Document](...)) for every task, deliverable, or resource whenever links or URLs are available in the context, even if the user did not explicitly ask for links.\n"
+    "- For each deliverable or task, display its owner, due date (if any), and actionable details inline.\n"
+    "- Do NOT create a separate duplicate 'Links Summary' or 'References' section at the bottom; attach links directly to each item.\n"
+    "- Base your answer strictly on the context below. If specific details are not in the context, mention it briefly in one sentence.\n\n"
+    'Respond ONLY with JSON of exactly this shape: {"answer": "your markdown answer here"}.\n'
+    "The answer value must be formatted markdown text, not nested objects or lists.\n\n"
+    "Context:\n"
 )
 
 NO_CONTEXT_ANSWER = (
@@ -107,6 +107,33 @@ async def assemble_context(
     topics = [t.lower().strip() for t in entities.get("topics", []) if isinstance(t, str)]
 
     async with driver.session() as session:
+        # 1. Action Items (always queried to surface open commitments & deliverables)
+        actions_res = await session.run(
+            """
+            MATCH (m:Meeting)-[:FOLLOWS_UP]->(a:ActionItem)
+            WHERE coalesce(a.done, false) = false
+            RETURN DISTINCT a.id AS id, a.task AS task, a.owner AS owner,
+                   a.due AS due, a.priority AS priority, a.jira_key AS jira_key,
+                   m.title AS meeting_title, m.source_id AS source_id, m.date AS date
+            ORDER BY CASE WHEN a.priority = 'high' THEN 0 ELSE 1 END, a.due ASC
+            LIMIT 15
+            """
+        )
+        async for record in actions_res:
+            node_ids.append(record["id"])
+            link_parts = []
+            if record.get("jira_key"):
+                link_parts.append(f"[🔷 Jira {record['jira_key']}](https://michael-baylard.atlassian.net/browse/{record['jira_key']})")
+            if record.get("source_id") and str(record["source_id"]).startswith("gmail:"):
+                gmail_id = str(record["source_id"]).split(":")[-1]
+                link_parts.append(f"[✉️ Gmail Thread](https://mail.google.com/mail/u/0/#inbox/{gmail_id})")
+
+            links_str = f" | Links: {' '.join(link_parts)}" if link_parts else ""
+            lines.append(
+                f"ActionItem: Task: {record['task']} | Owner: {record['owner']} | Due: {record['due'] or 'None'} | Priority: {record['priority']} | Source: {record['meeting_title']}{links_str}"
+            )
+
+        # 2. People
         if people:
             result = await session.run(
                 """
@@ -123,6 +150,7 @@ async def assemble_context(
                 node_ids.append(record["id"])
                 lines.append(f"Person: {record['name']} <{record['email']}>")
 
+        # 3. Topics & Meetings
         if topics:
             result = await session.run(
                 """
@@ -130,7 +158,7 @@ async def assemble_context(
                 MATCH (t:Topic)<-[:DISCUSSED]-(m:Meeting)
                 WHERE t.name CONTAINS topic
                 RETURN DISTINCT m.id AS id, m.title AS title, m.date AS date,
-                                m.summary AS summary
+                                m.summary AS summary, m.source_id AS source_id
                 ORDER BY m.date DESC
                 LIMIT 10
                 """,
@@ -138,10 +166,34 @@ async def assemble_context(
             )
             async for record in result:
                 node_ids.append(record["id"])
+                link_parts = []
+                if record.get("source_id") and str(record["source_id"]).startswith("gmail:"):
+                    gmail_id = str(record["source_id"]).split(":")[-1]
+                    link_parts.append(f"[✉️ Gmail Thread](https://mail.google.com/mail/u/0/#inbox/{gmail_id})")
+                links_str = f" | Links: {' '.join(link_parts)}" if link_parts else ""
                 lines.append(
-                    f"Meeting ({record['date']}): {record['title']} — {record['summary']}"
+                    f"Meeting ({record['date']}): {record['title']}{links_str} — {record['summary']}"
                 )
 
+        # 4. Decisions
+        decisions_res = await session.run(
+            """
+            MATCH (m:Meeting)-[:DECIDED]->(d:Decision)
+            RETURN DISTINCT d.id AS id, d.text AS text, m.title AS meeting_title, m.date AS date, m.source_id AS source_id
+            ORDER BY m.date DESC
+            LIMIT 8
+            """
+        )
+        async for record in decisions_res:
+            node_ids.append(record["id"])
+            link_parts = []
+            if record.get("source_id") and str(record["source_id"]).startswith("gmail:"):
+                gmail_id = str(record["source_id"]).split(":")[-1]
+                link_parts.append(f"[✉️ Gmail Thread](https://mail.google.com/mail/u/0/#inbox/{gmail_id})")
+            links_str = f" | Links: {' '.join(link_parts)}" if link_parts else ""
+            lines.append(f"Decision: {record['text']} (Meeting: {record['meeting_title']}{links_str})")
+
+        # 5. Facts
         result = await session.run(
             """
             MATCH (f:Fact)
@@ -212,12 +264,149 @@ async def full_memory_query(
         except Exception as exc:  # noqa: BLE001 - logging must not fail the answer
             log.warning("retrieval.session_log_failed", error=str(exc))
 
+    # Generate progressive follow-up question chips based on retrieved entities and context
+    followups: list[str] = []
+    if entities.get("topics"):
+        for top in entities["topics"][:2]:
+            followups.append(f"What key decisions and deliverables relate to {top}?")
+    if entities.get("people"):
+        for person in entities["people"][:1]:
+            followups.append(f"What action items or commitments involve {person}?")
+    if not followups:
+        followups = [
+            "What related decisions were established on this topic?",
+            "Who are the main collaborators and owners involved?",
+            "What upcoming deadlines are associated with this work?",
+        ]
+
     return {
         "question": question,
         "answer": answer,
+        "suggested_followups": followups[:3],
         "node_ids": node_ids,
         "entities": entities,
     }
+
+
+async def generate_suggested_questions(
+    *, driver: Any = None, settings: Settings | None = None
+) -> list[dict[str, str]]:
+    """Generate dynamic, context-rich questions based on the user's active graph data.
+
+    Favors active project deliverables, upcoming deadlines, stakeholder requests,
+    and progressive information gathering over time.
+    """
+    settings = settings or get_settings()
+    driver = driver or _driver()
+
+    questions: list[dict[str, str]] = []
+
+    try:
+        async with driver.session() as session:
+            # 1. Open / High-Priority Action Items
+            actions_res = await session.run(
+                """
+                MATCH (a:ActionItem)
+                WHERE coalesce(a.done, false) = false
+                RETURN a.task AS task, a.owner AS owner, a.due AS due, a.priority AS priority
+                ORDER BY CASE WHEN a.priority = 'high' THEN 0 ELSE 1 END, a.due ASC
+                LIMIT 5
+                """
+            )
+            actions = [dict(r) async for r in actions_res]
+
+            # 2. Key Topics / Workstreams
+            topics_res = await session.run(
+                """
+                MATCH (t:Topic)
+                OPTIONAL MATCH (t)<-[r]-()
+                RETURN t.name AS name, count(r) AS degree
+                ORDER BY degree DESC
+                LIMIT 5
+                """
+            )
+            topics = [dict(r) async for r in topics_res]
+
+            # 3. Recent Decisions
+            decisions_res = await session.run(
+                """
+                MATCH (d:Decision)<-[:DECIDED]-(m:Meeting)
+                RETURN d.text AS text, m.title AS meeting_title, m.date AS date
+                ORDER BY m.date DESC
+                LIMIT 3
+                """
+            )
+            decisions = [dict(r) async for r in decisions_res]
+
+            # 4. Open Blockers
+            blockers_res = await session.run(
+                """
+                MATCH (b:Blocker)<-[:RAISES_BLOCKER]-(m:Meeting)
+                RETURN b.text AS text, m.title AS meeting_title
+                LIMIT 3
+                """
+            )
+            blockers = [dict(r) async for r in blockers_res]
+
+        for a in actions[:2]:
+            task = a.get("task") or ""
+            if task:
+                short_task = task[:70] + "..." if len(task) > 70 else task
+                if a.get("due"):
+                    questions.append({
+                        "category": "⏰ Upcoming Deadline",
+                        "question": f"What is the status and requirements for '{short_task}' (due {a['due']})?",
+                    })
+                else:
+                    questions.append({
+                        "category": "🎯 Project Action",
+                        "question": f"What are the details and next steps for '{short_task}'?",
+                    })
+
+        for t in topics[:2]:
+            name = t.get("name")
+            if name:
+                questions.append({
+                    "category": "📂 Project Workstream",
+                    "question": f"What recent updates, decisions, and action items do we have regarding {name}?",
+                })
+
+        for d in decisions[:1]:
+            text = d.get("text")
+            title = d.get("meeting_title")
+            if text and title:
+                questions.append({
+                    "category": "📋 Decision Context",
+                    "question": f"What led to the decision '{text[:60]}...' in {title}?",
+                })
+
+        for b in blockers[:1]:
+            text = b.get("text")
+            if text:
+                questions.append({
+                    "category": "⚠️ Risk & Blockers",
+                    "question": f"What is currently blocking '{text[:60]}...' and how can we resolve it?",
+                })
+    except Exception as exc:  # noqa: BLE001
+        log.warning("retrieval.suggested_questions_failed", error=str(exc))
+
+    if len(questions) < 4:
+        questions.extend([
+            {
+                "category": "🚀 Executive Overview",
+                "question": "What are all of my open deliverables, urgent deadlines, and high-priority commitments?",
+            },
+            {
+                "category": "👥 Stakeholder Tracking",
+                "question": "Who is currently waiting on me for deliverables or approvals?",
+            },
+            {
+                "category": "💡 Knowledge Discovery",
+                "question": "What key architectural decisions and project milestones were established in recent syncs?",
+            },
+        ])
+
+    return questions[:6]
 
 
 async def person_memory_profile(

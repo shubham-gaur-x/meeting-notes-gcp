@@ -59,3 +59,59 @@ async def sync_one(
 
     bound.info("jira_sync.issue_synced", done=done, matched=matched)
     return matched
+
+
+async def sync_open_jira_tickets(
+    *, driver: Any | None = None, settings: Any | None = None, transport: Any | None = None
+) -> dict[str, Any]:
+    """Query Jira Cloud for the current status of all open action items and update Memgraph in batch.
+
+    Runs a single bulk JQL query against Jira and updates matching ActionItem nodes.
+    Zero LLM tokens are used ($0.00 cost).
+    """
+    from meeting_notes import jira_client
+    from meeting_notes.config import get_settings
+    from meeting_notes.graph_client import get_driver, update_action_jira_status
+
+    settings = settings or get_settings()
+    driver = driver or get_driver()
+
+    async with driver.session() as session:
+        result = await session.run(
+            """
+            MATCH (a:ActionItem)
+            WHERE a.jira_key IS NOT NULL
+            RETURN DISTINCT a.jira_key AS key, coalesce(a.done, false) AS done, a.jira_status AS current_status
+            """
+        )
+        items = [dict(r) async for r in result]
+
+    if not items:
+        return {"total": 0, "synced": 0, "completed": 0}
+
+    keys = [item["key"] for item in items if item.get("key")]
+    jql = f"key in ({','.join(keys)})"
+
+    try:
+        issues = await jira_client.search_issues(
+            jql, fields=["status", "resolution"], max_results=len(keys), settings=settings, transport=transport
+        )
+    except Exception as exc:
+        log.warning("jira_sync.search_failed", error=str(exc))
+        return {"total": len(items), "synced": 0, "completed": 0, "error": str(exc)}
+
+    synced = 0
+    completed = 0
+    for issue in issues:
+        key = issue.get("key")
+        status_name = issue.get("fields", {}).get("status", {}).get("name", "")
+        done = status_name.lower() in _DONE_STATUSES or bool(issue.get("fields", {}).get("resolution"))
+        if key:
+            matched = await update_action_jira_status(key, status_name, done, driver=driver)
+            if matched:
+                synced += 1
+                if done:
+                    completed += 1
+
+    log.info("jira_sync.batch_synced", total=len(items), synced=synced, completed=completed)
+    return {"total": len(items), "synced": synced, "completed": completed}
