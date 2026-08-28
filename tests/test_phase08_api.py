@@ -912,3 +912,35 @@ def test_the_dashboard_has_a_graph_tab() -> None:
     assert "loadGraph" in html
     # No CDN: the renderer has to be inline, like everything else here.
     assert "cdn." not in html and "unpkg" not in html
+
+
+async def test_jira_webhook_accepts_issue_update(app: Any) -> None:
+    payload = {
+        "webhookEvent": "jira:issue_updated",
+        "issue": {
+            "key": "MDP-25",
+            "fields": {
+                "status": {"name": "Done"}
+            }
+        }
+    }
+    response = await _post(app, "/webhook/jira", json=payload)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "accepted"
+    assert body["key"] == "MDP-25"
+
+
+async def test_jira_sync_endpoint(app: Any, monkeypatch: Any) -> None:
+    from meeting_notes import jira_sync
+
+    async def fake_sync(*args, **kwargs):
+        return {"total": 5, "synced": 5, "completed": 2}
+
+    monkeypatch.setattr(jira_sync, "sync_open_jira_tickets", fake_sync)
+    response = await _post(app, "/webhook/jira/sync", json={})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["total"] == 5
+    assert body["completed"] == 2
