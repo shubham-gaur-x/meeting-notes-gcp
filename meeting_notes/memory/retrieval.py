@@ -319,8 +319,9 @@ async def generate_suggested_questions(
             topics_res = await session.run(
                 """
                 MATCH (t:Topic)
-                RETURN t.name AS name
-                ORDER BY size((t)<--()) DESC
+                OPTIONAL MATCH (t)<-[r]-()
+                RETURN t.name AS name, count(r) AS degree
+                ORDER BY degree DESC
                 LIMIT 5
                 """
             )

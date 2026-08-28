@@ -526,6 +526,7 @@ async function askMemory() {
       body: JSON.stringify({question}),
     });
     if (!r.ok) throw new Error("query -> " + r.status);
+    const d = await r.json();
     const count = (d.node_ids || []).length;
     const noun = count === 1 ? "item" : "items";
     $("#ask-body").innerHTML =
