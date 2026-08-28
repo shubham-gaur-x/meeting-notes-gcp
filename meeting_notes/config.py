@@ -41,7 +41,7 @@ class Settings(BaseSettings):
     vertex_chat_model: str = ""
     vertex_embedding_model: str = "text-embedding-005"
     vertex_location: str = "us-central1"
-    gemini_embedding_model: str = "text-embedding-004"
+    gemini_embedding_model: str = "gemini-embedding-001"
     # Where the `fake` backend reads recorded fixtures from. Blank = the
     # committed sample_data/llm_fixtures/. Tests point it at a tmp_path.
     llm_fixture_dir: str = ""

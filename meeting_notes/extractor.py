@@ -16,8 +16,9 @@ only module allowed to construct a client (CLAUDE.md).
 
 from __future__ import annotations
 
+import re
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import structlog
@@ -83,6 +84,15 @@ def repair(data: dict[str, Any], context: dict[str, Any] | None = None) -> dict[
             item["is_engineering_task"] = False
         if _is_null_like(item.get("confidence")):
             item["confidence"] = 1.0
+
+        task_text = str(item.get("task", ""))
+        if re.search(r"\btimecard(s)?\b", task_text, re.I) and _is_null_like(item.get("due")):
+            try:
+                base_date = datetime.strptime(str(data.get("date", "")), "%Y-%m-%d").date() if data.get("date") else datetime.now(UTC).date()
+            except ValueError:
+                base_date = datetime.now(UTC).date()
+            friday = base_date + timedelta(days=(4 - base_date.weekday()))
+            item["due"] = friday.strftime("%Y-%m-%d")
 
     # decisions: the model's own validator coerces a plain string entry, so
     # only a null-like confidence on the dict form needs handling here.

@@ -317,11 +317,11 @@ async def _write_action_items(
         await tx.run(
             """
             MERGE (a:ActionItem {id: $id})
-            ON CREATE SET a.created_at = $now
+            ON CREATE SET a.created_at = $now, a.done = $done
             SET a.task = $task,
                 a.owner = $owner,
                 a.due = $due,
-                a.done = $done,
+                a.done = CASE WHEN coalesce(a.done, false) = true THEN true ELSE $done END,
                 a.priority = $priority,
                 a.is_engineering_task = $is_engineering_task,
                 a.confidence = $confidence,

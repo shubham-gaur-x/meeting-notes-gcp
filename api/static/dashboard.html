@@ -396,16 +396,18 @@ async function loadActions() {
   } catch (e) { fail("#actions-body", e); }
 }
 
-async function markActionDone(key) {
-  if (!confirm(`Mark ${key} as Done in Jira and update graph?`)) return;
+async function toggleActionDone(id, jiraKey, makeDone) {
+  const statusName = makeDone ? "Done" : "In Progress";
   try {
-    const r = await fetch("/webhook/jira/transition", {
-      method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({key: key, status: "Done"}),
-    });
-    if (!r.ok) throw new Error("Transition failed: " + r.status);
+    if (jiraKey) {
+      const r = await fetch("/webhook/jira/transition", {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({key: jiraKey, status: statusName}),
+      });
+      if (!r.ok) throw new Error("Transition failed: " + r.status);
+    }
     await loadActions();
-  } catch (e) { alert("Failed to transition: " + e.message); }
+  } catch (e) { alert("Failed to update status: " + e.message); }
 }
 
 function renderActions() {
@@ -442,8 +444,8 @@ function renderActions() {
       html += `<span style="${r.done ? 'text-decoration:line-through;color:var(--muted)' : 'font-weight:500'}">${esc(r.task)}</span>`;
       if (r.parent_jira_key) html += `</div>`;
       return html;
-    }, "42%"],
-    ["Owner", r => esc(r.owner), "16%"],
+    }, "38%"],
+    ["Owner", r => esc(r.owner), "15%"],
     ["Due", r => esc(r.due || "—"), "10%"],
     ["Priority", r => `<span class="${r.priority === "high" ? "pri-high" : ""}">${esc(r.priority || "—")}</span>`, "8%"],
     ["Status", r => r.done
@@ -453,12 +455,13 @@ function renderActions() {
     ],
     ["Jira Ticket", r => {
       if (!r.jira_key) return `<span class="muted">not filed</span>`;
-      const link = `<a href="https://michael-baylard.atlassian.net/browse/${esc(r.jira_key)}" target="_blank" rel="noopener" style="color:var(--accent);font-weight:600">${esc(r.jira_key)}</a>`;
-      if (!r.done) {
-        return `<div style="display:flex;align-items:center;gap:6px">${link} <button class="btn-xs" style="padding:2px 6px;font-size:10px;cursor:pointer;background:#2b6cb0;color:white;border:none;border-radius:4px" onclick="markActionDone('${esc(r.jira_key)}')">Mark Done</button></div>`;
-      }
-      return link;
-    }, "14%"],
+      return `<a href="https://michael-baylard.atlassian.net/browse/${esc(r.jira_key)}" target="_blank" rel="noopener" style="color:var(--accent);font-weight:600">${esc(r.jira_key)}</a>`;
+    }, "10%"],
+    ["Action", r => r.done
+      ? `<button class="btn-xs" style="padding:2px 8px;font-size:11px;cursor:pointer;background:#4a5568;color:white;border:none;border-radius:4px" onclick="toggleActionDone('${esc(r.id)}', '${esc(r.jira_key || '')}', false)">Mark Undone</button>`
+      : `<button class="btn-xs" style="padding:2px 8px;font-size:11px;cursor:pointer;background:#2b6cb0;color:white;border:none;border-radius:4px" onclick="toggleActionDone('${esc(r.id)}', '${esc(r.jira_key || '')}', true)">Mark Done</button>`,
+      "9%"
+    ],
   ]);
 }
 
