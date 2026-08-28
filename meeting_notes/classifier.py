@@ -58,9 +58,17 @@ _EMAIL_NOISE_PATTERNS = [
     re.compile(r"\bunsubscribe\b", re.I),
     re.compile(r"\bpromotion\b", re.I),
     re.compile(r"\bnewsletter\b", re.I),
-    re.compile(r"\bno.reply\b", re.I),
+    re.compile(r"\bno[._-]reply\b", re.I),
     re.compile(r"\bnoreply\b", re.I),
     re.compile(r"\bmarketing\b", re.I),
+    re.compile(r"\bverification code\b", re.I),
+    re.compile(r"\bone-time pass(code|word)\b", re.I),
+    re.compile(r"\bsecurity alert\b", re.I),
+    re.compile(r"\bpassword reset\b", re.I),
+    re.compile(r"\bmanage preferences\b", re.I),
+    re.compile(r"\bprivacy policy\b", re.I),
+    re.compile(r"\bautomatic reply\b", re.I),
+    re.compile(r"\bout of office\b", re.I),
 ]
 
 

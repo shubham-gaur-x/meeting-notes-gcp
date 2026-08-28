@@ -243,10 +243,10 @@ function empty(msg) { return `<div class="empty">${esc(msg)}</div>`; }
 
 function table(rows, cols, clickable) {
   if (!rows || !rows.length) return empty("Nothing here yet.");
-  const head = "<tr>" + cols.map(c => `<th>${esc(c[0])}</th>`).join("") + "</tr>";
+  const head = "<tr>" + cols.map(c => `<th${c[2] ? ` style="width:${c[2]}"` : ""}>${esc(c[0])}</th>`).join("") + "</tr>";
   const body = rows.map((r, i) =>
     `<tr class="${clickable ? "clickable" : ""}" data-i="${i}">` +
-    cols.map(c => `<td>${c[1](r)}</td>`).join("") + "</tr>").join("");
+    cols.map(c => `<td${c[2] ? ` style="width:${c[2]}"` : ""}>${c[1](r)}</td>`).join("") + "</tr>").join("");
   return `<table>${head}${body}</table>`;
 }
 function wire(sel, rows, onClick) {
@@ -442,13 +442,14 @@ function renderActions() {
       html += `<span style="${r.done ? 'text-decoration:line-through;color:var(--muted)' : 'font-weight:500'}">${esc(r.task)}</span>`;
       if (r.parent_jira_key) html += `</div>`;
       return html;
-    }],
-    ["Owner", r => esc(r.owner)],
-    ["Due", r => esc(r.due || "—")],
-    ["Priority", r => `<span class="${r.priority === "high" ? "pri-high" : ""}">${esc(r.priority || "—")}</span>`],
+    }, "42%"],
+    ["Owner", r => esc(r.owner), "16%"],
+    ["Due", r => esc(r.due || "—"), "10%"],
+    ["Priority", r => `<span class="${r.priority === "high" ? "pri-high" : ""}">${esc(r.priority || "—")}</span>`, "8%"],
     ["Status", r => r.done
       ? `<span class="pill" style="background:#134e4a;color:#2dd4bf;font-weight:600">Done</span>`
-      : `<span class="pill" style="background:#1e3a8a;color:#93c5fd">${esc(r.jira_status || "In Progress")}</span>`
+      : `<span class="pill" style="background:#1e3a8a;color:#93c5fd">${esc(r.jira_status || "In Progress")}</span>`,
+      "10%"
     ],
     ["Jira Ticket", r => {
       if (!r.jira_key) return `<span class="muted">not filed</span>`;
@@ -457,7 +458,7 @@ function renderActions() {
         return `<div style="display:flex;align-items:center;gap:6px">${link} <button class="btn-xs" style="padding:2px 6px;font-size:10px;cursor:pointer;background:#2b6cb0;color:white;border:none;border-radius:4px" onclick="markActionDone('${esc(r.jira_key)}')">Mark Done</button></div>`;
       }
       return link;
-    }],
+    }, "14%"],
   ]);
 }
 
