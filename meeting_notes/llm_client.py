@@ -372,9 +372,14 @@ async def embed(
     if backend == "gemini":
         model = settings.gemini_embedding_model
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:embedContent"
-        payload: dict[str, Any] = {"content": {"parts": [{"text": text}]}}
+        payload: dict[str, Any] = {
+            "content": {"parts": [{"text": text}]},
+            "outputDimensionality": dimension,
+        }
         body = await _post(url, payload, {"x-goog-api-key": settings.gemini_api_key}, transport)
         vector = json.loads(body)["embedding"]["values"]
+        if len(vector) > dimension:
+            vector = vector[:dimension]
     elif backend == "vertex":
         model = settings.vertex_embedding_model
         location, project = settings.vertex_location, settings.gcp_project_id
@@ -382,10 +387,12 @@ async def embed(
             f"https://{_vertex_host(location)}/v1/projects/{project}"
             f"/locations/{location}/publishers/google/models/{model}:predict"
         )
-        payload = {"instances": [{"content": text}]}
+        payload = {"instances": [{"content": text}], "parameters": {"outputDimensionality": dimension}}
         headers = _vertex_auth_header() if transport is _default_transport else {}
         body = await _post(url, payload, headers, transport)
         vector = json.loads(body)["predictions"][0]["embeddings"]["values"]
+        if len(vector) > dimension:
+            vector = vector[:dimension]
     else:
         raise ValueError(f"unknown LLM backend {backend!r}")
 
