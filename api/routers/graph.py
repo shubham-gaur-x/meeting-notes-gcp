@@ -54,7 +54,7 @@ async def topic(name: str, _: Principal = Depends(principal)) -> dict[str, Any]:
 
 @router.get("/actions/open")
 async def actions_open(
-    limit: int = Query(50, ge=1, le=200), _: Principal = Depends(principal)
+    limit: int = Query(50, ge=1, le=500), _: Principal = Depends(principal)
 ) -> dict[str, Any]:
     """Undone action items, soonest deadline first, with Jira keys where filed."""
     actions = await graph_client.get_open_actions(limit=limit)

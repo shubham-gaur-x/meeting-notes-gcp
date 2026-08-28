@@ -138,13 +138,13 @@
       <input id="asearch" placeholder="Filter tasks, owners, tickets..." style="min-width:200px" oninput="renderActions()">
       <select id="astatus" onchange="renderActions()">
         <option value="all">All Items</option>
-        <option value="open" selected>🟢 Open Deliverables</option>
-        <option value="done">✅ Completed / Done</option>
-        <option value="subtasks">📁 Projects & Sub-tasks</option>
+        <option value="open" selected>Open Deliverables</option>
+        <option value="done">Completed / Done</option>
+        <option value="subtasks">Projects & Sub-tasks</option>
       </select>
       <select id="afilter" onchange="renderActions()"><option value="">Everyone</option></select>
       <button class="action" onclick="loadActions()">Refresh</button>
-      <button class="action" style="background:#2b6cb0;color:white" onclick="syncJiraBatch(this)">🔄 Sync Jira</button>
+      <button class="action" style="background:#2b6cb0;color:white" onclick="syncJiraBatch(this)">Sync Jira</button>
     </div>
     <p class="hint">Cross-functional deliverables, parent projects, and child sub-tasks tracked with real-time Jira synchronization.</p>
     <div class="scroll" id="actions-body"></div>
@@ -156,7 +156,8 @@
       <select id="graph-labels" onchange="loadGraph()">
         <option value="">Everything</option>
         <option value="Meeting,Topic">Meetings and topics</option>
-        <option value="Meeting,Decision,ActionItem">Meetings and what came out of them</option>
+        <option value="Meeting,Decision,ActionItem">Meetings, decisions, & actions</option>
+        <option value="ActionItem">Action items & sub-tasks</option>
         <option value="Topic">Topics only</option>
         <option value="Fact">Facts only</option>
       </select>
@@ -421,7 +422,7 @@ function renderActions() {
       let html = "";
       if (r.parent_jira_key) {
         html += `<div style="padding-left:14px;border-left:2px solid var(--accent);margin-bottom:2px">` +
-                `<span class="pill" style="font-size:10px;background:#2d3748;color:#a0aec0;margin-right:4px">↳ Sub-task of ${esc(r.parent_jira_key)}</span>`;
+                `<span class="pill" style="font-size:10px;background:#2d3748;color:#a0aec0;margin-right:6px">Sub-task (${esc(r.parent_jira_key)})</span>`;
       }
       html += `<span style="${r.done ? 'text-decoration:line-through;color:var(--muted)' : 'font-weight:500'}">${esc(r.task)}</span>`;
       if (r.parent_jira_key) html += `</div>`;
@@ -431,13 +432,12 @@ function renderActions() {
     ["Due", r => esc(r.due || "—")],
     ["Priority", r => `<span class="${r.priority === "high" ? "pri-high" : ""}">${esc(r.priority || "—")}</span>`],
     ["Status", r => r.done
-      ? `<span class="pill" style="background:#134e4a;color:#2dd4bf;font-weight:600">✅ Done</span>`
+      ? `<span class="pill" style="background:#134e4a;color:#2dd4bf;font-weight:600">Done</span>`
       : `<span class="pill" style="background:#1e3a8a;color:#93c5fd">${esc(r.jira_status || "In Progress")}</span>`
     ],
     ["Jira Ticket", r => {
       if (!r.jira_key) return `<span class="muted">not filed</span>`;
-      const proj = r.jira_key.split("-")[0];
-      const link = `<a href="https://michael-baylard.atlassian.net/browse/${esc(r.jira_key)}" target="_blank" rel="noopener" style="color:var(--accent);font-weight:600">🔷 ${esc(r.jira_key)}</a>`;
+      const link = `<a href="https://michael-baylard.atlassian.net/browse/${esc(r.jira_key)}" target="_blank" rel="noopener" style="color:var(--accent);font-weight:600">${esc(r.jira_key)}</a>`;
       if (!r.done) {
         return `<div style="display:flex;align-items:center;gap:6px">${link} <button class="btn-xs" style="padding:2px 6px;font-size:10px;cursor:pointer;background:#2b6cb0;color:white;border:none;border-radius:4px" onclick="markActionDone('${esc(r.jira_key)}')">Mark Done</button></div>`;
       }
