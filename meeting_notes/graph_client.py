@@ -645,9 +645,11 @@ async def get_all_actions(
             f"""
             MATCH (a:ActionItem)
             {where_clause}
+            OPTIONAL MATCH (m:Meeting)-[:FOLLOWS_UP]->(a)
             OPTIONAL MATCH (a)-[:ASSIGNED_TO]->(p:Person)
             OPTIONAL MATCH (parent:ActionItem)-[:PARENT_OF]->(a)
             RETURN a.id AS id, a.task AS task, a.owner AS owner, a.due AS due,
+                   coalesce(substring(a.created_at, 0, 10), m.date, '') AS created_at,
                    a.priority AS priority, a.jira_key AS jira_key,
                    a.jira_status AS jira_status, coalesce(a.done, false) AS done,
                    p.email AS owner_email,
@@ -1106,12 +1108,22 @@ async def get_meeting_detail(meeting_id: str, driver: Any = None) -> dict[str, A
             MATCH (m:Meeting {id: $meeting_id})
             RETURN m.id AS id, m.title AS title, m.date AS date, m.kind AS kind,
                    m.platform AS platform, m.summary AS summary,
-                   m.duration_minutes AS duration_minutes
+                   m.duration_minutes AS duration_minutes,
+                   m.source_id AS source_id
             """,
         )
         if not base:
             return {}
         detail = base[0]
+
+        if source_id := detail.get("source_id"):
+            try:
+                from meeting_notes import db
+                staged = await db.get_staged_payload(source_id)
+                if staged:
+                    detail["original_email"] = staged
+            except Exception:
+                pass
 
         detail["attendees"] = await _rows(
             session,

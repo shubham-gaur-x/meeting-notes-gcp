@@ -330,6 +330,23 @@ async def list_staged_by_type(
     ]
 
 
+async def get_staged_payload(source_id: str, pool: asyncpg.Pool | None = None) -> dict[str, Any] | None:
+    """Retrieve raw staged payload for a given source_id."""
+    pool = pool or await get_pool()
+    row = await pool.fetchrow(
+        "SELECT payload FROM staged_records WHERE source_id = $1 LIMIT 1", source_id
+    )
+    if not row:
+        return None
+    raw = row["payload"]
+    if isinstance(raw, str):
+        try:
+            return json.loads(raw)
+        except Exception:
+            return {"text": raw}
+    return raw
+
+
 async def replace_staged_records(
     source_type: str,
     old_ids: list[str],

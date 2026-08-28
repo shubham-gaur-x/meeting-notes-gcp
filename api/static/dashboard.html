@@ -381,7 +381,14 @@ async function openMeeting(m) {
         ? `<p class="muted" style="font-size:12px;margin-top:10px">Also mentioned, not yet ` +
           `identified: ${d.unresolved_attendees.map(esc).join(", ")}</p>` : "") +
       ((d.facts && d.facts.length) ? `<h3>What this told us</h3>` +
-        d.facts.map(f => `<div class="quote">${esc(f.text)}</div>`).join("") : "");
+        d.facts.map(f => `<div class="quote">${esc(f.text)}</div>`).join("") : "") +
+      ((d.original_email || d.source_id) ? `<h3>Original Email & Source Message</h3>` +
+        `<div style="margin-bottom:10px">` +
+          (d.source_id ? `<a href="https://mail.google.com/mail/u/0/#search/rfc822msgid:${encodeURIComponent(d.source_id)}" target="_blank" rel="noopener" class="pill" style="background:#1e3a8a;color:#ffffff;font-weight:600;text-decoration:none;padding:4px 10px">Open in Gmail</a> ` : "") +
+          `<a href="https://mail.google.com/mail/u/0/#search/${encodeURIComponent(d.title || '')}" target="_blank" rel="noopener" class="pill" style="background:#2d3748;color:#ffffff;font-weight:600;text-decoration:none;padding:4px 10px">Search Gmail Thread</a>` +
+        `</div>` +
+        (d.original_email ? `<div class="quote" style="white-space:pre-wrap;max-height:220px;overflow-y:auto;background:rgba(255,255,255,0.03);padding:10px;font-size:12px">${esc(d.original_email.body || d.original_email.text || d.original_email.snippet || (typeof d.original_email === 'string' ? d.original_email : JSON.stringify(d.original_email, null, 2)))}</div>` : "")
+      : "");
   } catch (e) { $("#d-body").innerHTML = `<div class="err">${esc(e.message)}</div>`; }
 }
 
@@ -444,19 +451,20 @@ function renderActions() {
       html += `<span style="${r.done ? 'text-decoration:line-through;color:var(--muted)' : 'font-weight:500'}">${esc(r.task)}</span>`;
       if (r.parent_jira_key) html += `</div>`;
       return html;
-    }, "38%"],
-    ["Owner", r => esc(r.owner), "15%"],
+    }, "32%"],
+    ["Owner", r => esc(r.owner), "14%"],
+    ["Created", r => esc(r.created_at || "—"), "10%"],
     ["Due", r => esc(r.due || "—"), "10%"],
-    ["Priority", r => `<span class="${r.priority === "high" ? "pri-high" : ""}">${esc(r.priority || "—")}</span>`, "8%"],
+    ["Priority", r => `<span class="${r.priority === "high" ? "pri-high" : ""}">${esc(r.priority || "—")}</span>`, "7%"],
     ["Status", r => r.done
-      ? `<span class="pill" style="background:#134e4a;color:#2dd4bf;font-weight:600">Done</span>`
-      : `<span class="pill" style="background:#1e3a8a;color:#93c5fd">${esc(r.jira_status || "In Progress")}</span>`,
-      "10%"
+      ? `<span class="pill" style="background:#134e4a;color:#ffffff;font-weight:600">Done</span>`
+      : `<span class="pill" style="background:#1e3a8a;color:#ffffff;font-weight:600">${esc(r.jira_status || "In Progress")}</span>`,
+      "9%"
     ],
     ["Jira Ticket", r => {
       if (!r.jira_key) return `<span class="muted">not filed</span>`;
       return `<a href="https://michael-baylard.atlassian.net/browse/${esc(r.jira_key)}" target="_blank" rel="noopener" style="color:var(--accent);font-weight:600">${esc(r.jira_key)}</a>`;
-    }, "10%"],
+    }, "9%"],
     ["Action", r => r.done
       ? `<button class="btn-xs" style="padding:2px 8px;font-size:11px;cursor:pointer;background:#4a5568;color:white;border:none;border-radius:4px" onclick="toggleActionDone('${esc(r.id)}', '${esc(r.jira_key || '')}', false)">Mark Undone</button>`
       : `<button class="btn-xs" style="padding:2px 8px;font-size:11px;cursor:pointer;background:#2b6cb0;color:white;border:none;border-radius:4px" onclick="toggleActionDone('${esc(r.id)}', '${esc(r.jira_key || '')}', true)">Mark Done</button>`,
