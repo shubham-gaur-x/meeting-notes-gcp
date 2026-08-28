@@ -912,3 +912,21 @@ def test_the_dashboard_has_a_graph_tab() -> None:
     assert "loadGraph" in html
     # No CDN: the renderer has to be inline, like everything else here.
     assert "cdn." not in html and "unpkg" not in html
+
+
+async def test_suggested_questions_endpoint(app: Any, monkeypatch: Any) -> None:
+    from meeting_notes.memory import retrieval
+
+    async def fake_suggested(*args, **kwargs):
+        return [
+            {"category": "🎯 Project Action", "question": "What is the status of the PSA skill update?"},
+            {"category": "⏰ Upcoming Deadline", "question": "What deliverables are due this week?"},
+        ]
+
+    monkeypatch.setattr(retrieval, "generate_suggested_questions", fake_suggested)
+    response = await _get(app, "/graph/memory/suggested-questions")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["count"] == 2
+    assert len(body["questions"]) == 2
+    assert body["questions"][0]["category"] == "🎯 Project Action"

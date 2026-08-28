@@ -64,6 +64,12 @@
   .err { color:var(--warn); padding:12px; border:1px solid var(--warn); border-radius:8px; }
   .answer { background:var(--raise); border:1px solid var(--line); border-radius:9px;
             padding:15px; white-space:pre-wrap; }
+  .prompt-card { background:var(--raise); border:1px solid var(--line); border-radius:10px; padding:10px 14px; cursor:pointer; transition:all .15s ease; text-align:left; }
+  .prompt-card:hover { border-color:var(--accent); background:rgba(99,102,241,0.08); transform:translateY(-1px); }
+  .prompt-cat { font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.5px; color:var(--accent); margin-bottom:3px; }
+  .prompt-text { font-size:13px; color:var(--ink); line-height:1.4; }
+  .followup-btn { background:var(--raise); border:1px solid var(--accent); color:var(--accent); padding:6px 12px; border-radius:16px; cursor:pointer; font-size:12px; margin:4px 6px 4px 0; text-align:left; }
+  .followup-btn:hover { background:var(--accent); color:#fff; }
   .scroll { overflow-x:auto; }
   .pill { display:inline-block; background:var(--raise); border:1px solid var(--line);
           border-radius:20px; padding:2px 10px; font-size:11px; margin:0 5px 5px 0; }
@@ -428,21 +434,44 @@ async function openWorkstream(w) {
 }
 
 const EXAMPLES = [
-  "What was decided about the SOW?",
-  "What is happening with the Verizon engagement?",
-  "What are the current blockers?",
-  "What should I follow up on?",
+  "What are all of my open deliverables and high-priority commitments?",
+  "Who is currently waiting on me for deliverables or approvals?",
+  "What key architectural decisions and project milestones were established in recent syncs?",
 ];
-function renderExamples() {
-  $("#examples").innerHTML = `<p class="hint">Try one:</p>` +
-    EXAMPLES.map(q => `<button class="ghost" onclick="askExample(this)">${esc(q)}</button>`).join("");
+
+let SUGGESTED_QUESTIONS = [];
+
+async function renderExamples() {
+  const container = $("#examples");
+  if (!container) return;
+  if (!SUGGESTED_QUESTIONS.length) {
+    try {
+      const data = await get("/graph/memory/suggested-questions");
+      SUGGESTED_QUESTIONS = data.questions || [];
+    } catch {
+      SUGGESTED_QUESTIONS = EXAMPLES.map(q => ({ category: "💡 Project Suggestion", question: q }));
+    }
+  }
+
+  container.innerHTML = `<p class="hint" style="margin-bottom:8px">💡 Context-aware suggested questions based on your active project graph (Try one):</p>` +
+    `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;margin-bottom:14px">` +
+    SUGGESTED_QUESTIONS.map(q =>
+      `<div class="prompt-card" onclick="askQuestion('${esc(q.question).replace(/'/g, "\\'")}')">` +
+      `<div class="prompt-cat">${esc(q.category)}</div>` +
+      `<div class="prompt-text">${esc(q.question)}</div>` +
+      `</div>`
+    ).join("") + `</div>`;
 }
-function askExample(btn) { $("#q").value = btn.textContent; askMemory(); }
+
+function askQuestion(q) {
+  $("#q").value = q;
+  askMemory();
+}
 
 async function askMemory() {
   const question = $("#q").value.trim();
   if (!question) return;
-  $("#ask-body").innerHTML = empty("Searching your meetings…");
+  $("#ask-body").innerHTML = empty("Searching your meetings & knowledge graph…");
   try {
     const r = await fetch("/graph/memory/query", {
       method: "POST", headers: {"Content-Type": "application/json"},
@@ -450,10 +479,22 @@ async function askMemory() {
     });
     if (!r.ok) throw new Error("query -> " + r.status);
     const d = await r.json();
+
+    const followupsHtml = (d.suggested_followups && d.suggested_followups.length)
+      ? `<div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">` +
+        `<div class="muted" style="font-size:12px;font-weight:600;margin-bottom:8px">🔍 Next Questions to Explore:</div>` +
+        d.suggested_followups.map(f =>
+          `<button class="followup-btn" onclick="askQuestion('${esc(f).replace(/'/g, "\\'")}')">` +
+          `↳ ${esc(f)}</button>`
+        ).join("") + `</div>`
+      : "";
+
     $("#ask-body").innerHTML =
-      `<div class="answer">${esc(d.answer)}</div>` +
-      `<p class="muted" style="font-size:12px">Answered from ${esc((d.node_ids || []).length)} ` +
-      `item(s) in your meeting history. If it doesn't know, it says so rather than guessing.</p>`;
+      `<div class="answer" style="line-height:1.6">${esc(d.answer)}` +
+      followupsHtml +
+      `</div>` +
+      `<p class="muted" style="font-size:12px;margin-top:8px">Grounded in ${esc((d.node_ids || []).length)} ` +
+      `nodes in your graph memory. Strict second-person synthesis with zero hallucinations.</p>`;
   } catch (e) { fail("#ask-body", e); }
 }
 

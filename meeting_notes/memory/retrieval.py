@@ -212,12 +212,148 @@ async def full_memory_query(
         except Exception as exc:  # noqa: BLE001 - logging must not fail the answer
             log.warning("retrieval.session_log_failed", error=str(exc))
 
+    # Generate progressive follow-up question chips based on retrieved entities and context
+    followups: list[str] = []
+    if entities.get("topics"):
+        for top in entities["topics"][:2]:
+            followups.append(f"What key decisions and deliverables relate to {top}?")
+    if entities.get("people"):
+        for person in entities["people"][:1]:
+            followups.append(f"What action items or commitments involve {person}?")
+    if not followups:
+        followups = [
+            "What related decisions were established on this topic?",
+            "Who are the main collaborators and owners involved?",
+            "What upcoming deadlines are associated with this work?",
+        ]
+
     return {
         "question": question,
         "answer": answer,
+        "suggested_followups": followups[:3],
         "node_ids": node_ids,
         "entities": entities,
     }
+
+
+async def generate_suggested_questions(
+    *, driver: Any = None, settings: Settings | None = None
+) -> list[dict[str, str]]:
+    """Generate dynamic, context-rich questions based on the user's active graph data.
+
+    Favors active project deliverables, upcoming deadlines, stakeholder requests,
+    and progressive information gathering over time.
+    """
+    settings = settings or get_settings()
+    driver = driver or _driver()
+
+    questions: list[dict[str, str]] = []
+
+    try:
+        async with driver.session() as session:
+            # 1. Open / High-Priority Action Items
+            actions_res = await session.run(
+                """
+                MATCH (a:ActionItem)
+                WHERE coalesce(a.done, false) = false
+                RETURN a.task AS task, a.owner AS owner, a.due AS due, a.priority AS priority
+                ORDER BY CASE WHEN a.priority = 'high' THEN 0 ELSE 1 END, a.due ASC
+                LIMIT 5
+                """
+            )
+            actions = [dict(r) async for r in actions_res]
+
+            # 2. Key Topics / Workstreams
+            topics_res = await session.run(
+                """
+                MATCH (t:Topic)
+                RETURN t.name AS name
+                ORDER BY size((t)<--()) DESC
+                LIMIT 5
+                """
+            )
+            topics = [dict(r) async for r in topics_res]
+
+            # 3. Recent Decisions
+            decisions_res = await session.run(
+                """
+                MATCH (d:Decision)<-[:DECIDED]-(m:Meeting)
+                RETURN d.text AS text, m.title AS meeting_title, m.date AS date
+                ORDER BY m.date DESC
+                LIMIT 3
+                """
+            )
+            decisions = [dict(r) async for r in decisions_res]
+
+            # 4. Open Blockers
+            blockers_res = await session.run(
+                """
+                MATCH (b:Blocker)<-[:RAISES_BLOCKER]-(m:Meeting)
+                RETURN b.text AS text, m.title AS meeting_title
+                LIMIT 3
+                """
+            )
+            blockers = [dict(r) async for r in blockers_res]
+
+        for a in actions[:2]:
+            task = a.get("task") or ""
+            if task:
+                short_task = task[:70] + "..." if len(task) > 70 else task
+                if a.get("due"):
+                    questions.append({
+                        "category": "⏰ Upcoming Deadline",
+                        "question": f"What is the status and requirements for '{short_task}' (due {a['due']})?",
+                    })
+                else:
+                    questions.append({
+                        "category": "🎯 Project Action",
+                        "question": f"What are the details and next steps for '{short_task}'?",
+                    })
+
+        for t in topics[:2]:
+            name = t.get("name")
+            if name:
+                questions.append({
+                    "category": "📂 Project Workstream",
+                    "question": f"What recent updates, decisions, and action items do we have regarding {name}?",
+                })
+
+        for d in decisions[:1]:
+            text = d.get("text")
+            title = d.get("meeting_title")
+            if text and title:
+                questions.append({
+                    "category": "📋 Decision Context",
+                    "question": f"What led to the decision '{text[:60]}...' in {title}?",
+                })
+
+        for b in blockers[:1]:
+            text = b.get("text")
+            if text:
+                questions.append({
+                    "category": "⚠️ Risk & Blockers",
+                    "question": f"What is currently blocking '{text[:60]}...' and how can we resolve it?",
+                })
+    except Exception as exc:  # noqa: BLE001
+        log.warning("retrieval.suggested_questions_failed", error=str(exc))
+
+    if len(questions) < 4:
+        questions.extend([
+            {
+                "category": "🚀 Executive Overview",
+                "question": "What are all of my open deliverables, urgent deadlines, and high-priority commitments?",
+            },
+            {
+                "category": "👥 Stakeholder Tracking",
+                "question": "Who is currently waiting on me for deliverables or approvals?",
+            },
+            {
+                "category": "💡 Knowledge Discovery",
+                "question": "What key architectural decisions and project milestones were established in recent syncs?",
+            },
+        ])
+
+    return questions[:6]
 
 
 async def person_memory_profile(
