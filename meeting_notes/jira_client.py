@@ -214,46 +214,44 @@ async def move_to_sprint(
 
 
 async def create_issue(
-    *,
     summary: str,
     description: str,
     priority: str,
     sprint_id: int | None,
     is_engineering_task: bool,
+    *,
+    project_key: str | None = None,
+    issue_type: str | None = None,
+    parent_key: str | None = None,
+    labels: list[str] | None = None,
     settings: Settings | None = None,
     transport: Transport | None = None,
 ) -> str:
-    """Create one Jira issue. Returns its key.
-
-    Follow-ups the extractor raised get `meeting-action-item` so they are
-    visibly distinct from work reported through normal channels. Engineering
-    tasks get `dev-agent`, which is what `find_sprint_candidates` selects on —
-    v5 left them unlabelled, which meant the agent could never see them.
-
-    A high-priority item is moved to the active sprint. **A sprint-move
-    failure does not fail issue creation** — the issue already exists at that
-    point and is more valuable un-sprinted than lost.
-    """
+    """Create one Jira issue with multi-project and parent/sub-task support. Returns its key."""
     settings = settings or get_settings()
     transport = transport or _default_transport
+    target_project = project_key or settings.jira_project_key
+    target_issue_type = issue_type or ("Sub-task" if parent_key else settings.jira_issue_type)
 
     fields: dict[str, Any] = {
-        "project": {"key": settings.jira_project_key},
+        "project": {"key": target_project},
         "summary": summary,
         "description": {
             "type": "doc",
             "version": 1,
             "content": [{"type": "paragraph", "content": [{"type": "text", "text": description}]}],
         },
-        "issuetype": {"name": settings.jira_issue_type},
+        "issuetype": {"name": target_issue_type},
         "priority": {"name": _PRIORITY_MAP.get(priority, "Medium")},
     }
-    # The two halves have to agree on how a coding task is marked:
-    # `find_sprint_candidates` selects on DEV_AGENT_LABEL, so an engineering
-    # task created without it is invisible to the agent forever.
-    fields["labels"] = (
-        [DEV_AGENT_LABEL] if is_engineering_task else [MEETING_ACTION_ITEM_LABEL]
-    )
+
+    if parent_key:
+        fields["parent"] = {"key": parent_key}
+
+    base_labels = [DEV_AGENT_LABEL] if is_engineering_task else [MEETING_ACTION_ITEM_LABEL]
+    if labels:
+        base_labels.extend(labels)
+    fields["labels"] = list(dict.fromkeys(base_labels))
 
     status, body = await transport(
         "POST", f"{jira_base_url(settings)}/issue", jira_headers(settings), None, {"fields": fields}
@@ -262,14 +260,104 @@ async def create_issue(
         raise RuntimeError(f"Jira issue creation returned HTTP {status}")
     issue_key: str = (body or {})["key"]
 
-    if sprint_id and priority == "high":
+    if sprint_id and priority == "high" and not parent_key:
         try:
             await move_to_sprint(issue_key, sprint_id, settings=settings, transport=transport)
         except Exception as exc:  # noqa: BLE001 - reported, issue creation still succeeds
             log.warning("jira.sprint_move_failed", issue_key=issue_key, error=str(exc))
 
-    log.info("jira.issue_created", issue_key=issue_key, priority=priority)
+    log.info("jira.issue_created", issue_key=issue_key, project=target_project, priority=priority, parent_key=parent_key)
     return issue_key
+
+
+async def create_subtask(
+    parent_key: str,
+    summary: str,
+    description: str,
+    *,
+    priority: str = "Medium",
+    labels: list[str] | None = None,
+    settings: Settings | None = None,
+    transport: Transport | None = None,
+) -> str:
+    """Convenience helper to spawn a sub-task directly under a parent Jira issue."""
+    project_key = parent_key.split("-")[0] if "-" in parent_key else None
+    return await create_issue(
+        summary=summary,
+        description=description,
+        priority=priority,
+        sprint_id=None,
+        is_engineering_task=False,
+        project_key=project_key,
+        parent_key=parent_key,
+        labels=labels,
+        settings=settings,
+        transport=transport,
+    )
+
+
+@with_retry(max_attempts=3, base_delay=1.5)
+async def link_issues(
+    inward_key: str,
+    outward_key: str,
+    *,
+    link_type: str = "Relates",
+    comment: str | None = None,
+    settings: Settings | None = None,
+    transport: Transport | None = None,
+) -> bool:
+    """Link overlapping or dependent Jira issues across projects (e.g. Relates, Blocks, Duplicates)."""
+    settings = settings or get_settings()
+    transport = transport or _default_transport
+    payload: dict[str, Any] = {
+        "type": {"name": link_type},
+        "inwardIssue": {"key": inward_key},
+        "outwardIssue": {"key": outward_key},
+    }
+    if comment:
+        payload["comment"] = {
+            "body": {
+                "type": "doc",
+                "version": 1,
+                "content": [{"type": "paragraph", "content": [{"type": "text", "text": comment}]}],
+            }
+        }
+
+    status, _ = await transport(
+        "POST", f"{jira_base_url(settings)}/issueLink", jira_headers(settings), None, payload
+    )
+    if status >= 400:
+        log.warning("jira.issue_link_failed", inward=inward_key, outward=outward_key, status=status)
+        return False
+
+    log.info("jira.issues_linked", inward=inward_key, outward=outward_key, link_type=link_type)
+    return True
+
+
+@with_retry(max_attempts=3, base_delay=1.5)
+async def add_comment(
+    key: str,
+    comment_text: str,
+    *,
+    settings: Settings | None = None,
+    transport: Transport | None = None,
+) -> dict[str, Any]:
+    """Add a rich comment to an existing Jira ticket with direct links and context."""
+    settings = settings or get_settings()
+    transport = transport or _default_transport
+    url = f"{jira_base_url(settings)}/issue/{key}/comment"
+    payload = {
+        "body": {
+            "type": "doc",
+            "version": 1,
+            "content": [{"type": "paragraph", "content": [{"type": "text", "text": comment_text}]}],
+        }
+    }
+    status, body = await transport("POST", url, jira_headers(settings), None, payload)
+    if status >= 400:
+        raise RuntimeError(f"Adding Jira comment returned HTTP {status}")
+    log.info("jira.comment_added", issue_key=key)
+    return body or {}
 
 
 # ─── dev agent (Phase 11, ADR-020) ─────────────────────────────────────────────

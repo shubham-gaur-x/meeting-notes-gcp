@@ -40,9 +40,10 @@ SYNTHESIS_SYSTEM_PREFIX = (
     "Your goal is to answer the user's question directly, cleanly, and with executive polish in markdown.\n\n"
     "Formatting & Guidelines:\n"
     "- Address the user directly using natural second-person language ('you' / 'your'). Never refer to the user in the third person or leak the user's name.\n"
-    "- Structure your answer with rich, scannable formatting (e.g. bold deliverable titles, clear stakeholder headers, and inline attribute metadata)—never just a flat list of plain bullets.\n"
+    "- Distinguish accurately between completed/finished work vs open/pending deliverables based strictly on the [STATUS: ...] context.\n"
+    "- Structure your answer with rich, scannable formatting (e.g. bold deliverable titles, clear project/subtask headers, and inline attribute metadata)—never just a flat list of plain bullets.\n"
     "- ALWAYS include direct clickable markdown links (e.g. [🔷 Jira MDP-XX](...), [✉️ Gmail Thread](...), [📊 Google Slides](...), [📄 Document](...)) for every task, deliverable, or resource whenever links or URLs are available in the context, even if the user did not explicitly ask for links.\n"
-    "- For each deliverable or task, display its owner, due date (if any), and actionable details inline.\n"
+    "- For each deliverable or task, display its owner, status, due date (if any), and parent project context inline.\n"
     "- Do NOT create a separate duplicate 'Links Summary' or 'References' section at the bottom; attach links directly to each item.\n"
     "- Base your answer strictly on the context below. If specific details are not in the context, mention it briefly in one sentence.\n\n"
     'Respond ONLY with JSON of exactly this shape: {"answer": "your markdown answer here"}.\n'
@@ -107,20 +108,23 @@ async def assemble_context(
     topics = [t.lower().strip() for t in entities.get("topics", []) if isinstance(t, str)]
 
     async with driver.session() as session:
-        # 1. Action Items (always queried to surface open commitments & deliverables)
+        # 1. Action Items (surfacing open deliverables, completed work, and parent/subtask relations)
         actions_res = await session.run(
             """
             MATCH (m:Meeting)-[:FOLLOWS_UP]->(a:ActionItem)
-            WHERE coalesce(a.done, false) = false
+            OPTIONAL MATCH (parent:ActionItem)-[:PARENT_OF]->(a)
             RETURN DISTINCT a.id AS id, a.task AS task, a.owner AS owner,
                    a.due AS due, a.priority AS priority, a.jira_key AS jira_key,
+                   coalesce(a.done, false) AS done,
+                   parent.task AS parent_task, parent.jira_key AS parent_jira_key,
                    m.title AS meeting_title, m.source_id AS source_id, m.date AS date
-            ORDER BY CASE WHEN a.priority = 'high' THEN 0 ELSE 1 END, a.due ASC
-            LIMIT 15
+            ORDER BY a.done ASC, CASE WHEN a.priority = 'high' THEN 0 ELSE 1 END, a.due ASC
+            LIMIT 20
             """
         )
         async for record in actions_res:
             node_ids.append(record["id"])
+            status_tag = "[STATUS: COMPLETED / DONE (Finished)]" if record["done"] else "[STATUS: OPEN / IN PROGRESS (Not Finished)]"
             link_parts = []
             if record.get("jira_key"):
                 link_parts.append(f"[🔷 Jira {record['jira_key']}](https://michael-baylard.atlassian.net/browse/{record['jira_key']})")
@@ -128,9 +132,10 @@ async def assemble_context(
                 gmail_id = str(record["source_id"]).split(":")[-1]
                 link_parts.append(f"[✉️ Gmail Thread](https://mail.google.com/mail/u/0/#inbox/{gmail_id})")
 
+            parent_info = f" | Parent Project: {record['parent_task']} ({record['parent_jira_key']})" if record.get("parent_task") else ""
             links_str = f" | Links: {' '.join(link_parts)}" if link_parts else ""
             lines.append(
-                f"ActionItem: Task: {record['task']} | Owner: {record['owner']} | Due: {record['due'] or 'None'} | Priority: {record['priority']} | Source: {record['meeting_title']}{links_str}"
+                f"ActionItem: {status_tag} | Task: {record['task']} | Owner: {record['owner']} | Due: {record['due'] or 'None'} | Priority: {record['priority']}{parent_info} | Source: {record['meeting_title']}{links_str}"
             )
 
         # 2. People

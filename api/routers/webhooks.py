@@ -110,3 +110,91 @@ async def webhook_jira_sync() -> dict[str, Any]:
     from meeting_notes import jira_sync
     result = await jira_sync.sync_open_jira_tickets()
     return {"status": "ok", **result}
+
+
+@router.post("/jira/transition")
+async def webhook_jira_transition(request: Request) -> dict[str, Any]:
+    """Transition a Jira issue (e.g. Move to Done / In Progress) and sync graph."""
+    try:
+        body = json.loads(await request.body() or b"{}")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="bad json") from exc
+
+    key = body.get("key")
+    status_name = body.get("status")
+    if not key or not status_name:
+        raise HTTPException(status_code=422, detail="key and status required")
+
+    from meeting_notes import graph_client, jira_client
+    success = await jira_client.transition_issue(key, status_name)
+    if success:
+        done = status_name.lower() in ("done", "closed", "resolved")
+        await graph_client.update_action_jira_status(key, status_name, done)
+    return {"key": key, "status": status_name, "transitioned": success}
+
+
+@router.post("/jira/subtask")
+async def webhook_jira_subtask(request: Request) -> dict[str, Any]:
+    """Create a subtask under a parent Jira issue and link in graph."""
+    try:
+        body = json.loads(await request.body() or b"{}")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="bad json") from exc
+
+    parent_key = body.get("parent_key")
+    summary = body.get("summary")
+    description = body.get("description", "")
+    priority = body.get("priority", "Medium")
+    labels = body.get("labels", [])
+
+    if not parent_key or not summary:
+        raise HTTPException(status_code=422, detail="parent_key and summary required")
+
+    from meeting_notes import jira_client
+    subtask_key = await jira_client.create_subtask(
+        parent_key=parent_key,
+        summary=summary,
+        description=description,
+        priority=priority,
+        labels=labels,
+    )
+    return {"parent_key": parent_key, "subtask_key": subtask_key, "summary": summary}
+
+
+@router.post("/jira/link")
+async def webhook_jira_link(request: Request) -> dict[str, Any]:
+    """Link two Jira issues across projects (Relates, Blocks, etc.)."""
+    try:
+        body = json.loads(await request.body() or b"{}")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="bad json") from exc
+
+    inward = body.get("inward_key")
+    outward = body.get("outward_key")
+    link_type = body.get("link_type", "Relates")
+    comment = body.get("comment")
+
+    if not inward or not outward:
+        raise HTTPException(status_code=422, detail="inward_key and outward_key required")
+
+    from meeting_notes import jira_client
+    linked = await jira_client.link_issues(inward, outward, link_type=link_type, comment=comment)
+    return {"inward_key": inward, "outward_key": outward, "linked": linked}
+
+
+@router.post("/jira/comment")
+async def webhook_jira_comment(request: Request) -> dict[str, Any]:
+    """Add a rich comment with context to an existing Jira ticket."""
+    try:
+        body = json.loads(await request.body() or b"{}")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="bad json") from exc
+
+    key = body.get("key")
+    comment_text = body.get("comment")
+    if not key or not comment_text:
+        raise HTTPException(status_code=422, detail="key and comment required")
+
+    from meeting_notes import jira_client
+    res = await jira_client.add_comment(key, comment_text)
+    return {"key": key, "comment_id": res.get("id"), "status": "added"}

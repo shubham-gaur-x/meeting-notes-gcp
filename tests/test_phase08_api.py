@@ -962,3 +962,83 @@ async def test_suggested_questions_endpoint(app: Any, monkeypatch: Any) -> None:
     assert body["count"] == 2
     assert len(body["questions"]) == 2
     assert body["questions"][0]["category"] == "🎯 Project Action"
+
+
+async def test_actions_list_endpoint(app: Any, monkeypatch: Any) -> None:
+    from meeting_notes import graph_client
+
+    async def fake_all_actions(status_filter="all", limit=100):
+        return [
+            {"id": "a1", "task": "Parent Project", "jira_key": "MDP-25", "done": False},
+            {"id": "a2", "task": "Sub-task", "jira_key": "MDP-26", "parent_jira_key": "MDP-25", "done": True},
+        ]
+
+    monkeypatch.setattr(graph_client, "get_all_actions", fake_all_actions)
+    response = await _get(app, "/graph/actions?status=all")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["count"] == 2
+    assert body["actions"][1]["parent_jira_key"] == "MDP-25"
+
+
+async def test_jira_transition_endpoint(app: Any, monkeypatch: Any) -> None:
+    from meeting_notes import graph_client, jira_client
+
+    async def fake_transition(key, status):
+        return True
+
+    async def fake_update(key, status, done):
+        pass
+
+    monkeypatch.setattr(jira_client, "transition_issue", fake_transition)
+    monkeypatch.setattr(graph_client, "update_action_jira_status", fake_update)
+
+    response = await _post(app, "/webhook/jira/transition", json={"key": "MDP-25", "status": "Done"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["key"] == "MDP-25"
+    assert body["transitioned"] is True
+
+
+async def test_jira_subtask_endpoint(app: Any, monkeypatch: Any) -> None:
+    from meeting_notes import jira_client
+
+    async def fake_create_subtask(parent_key, summary, description, priority="Medium", labels=None):
+        return "MDP-99"
+
+    monkeypatch.setattr(jira_client, "create_subtask", fake_create_subtask)
+
+    response = await _post(app, "/webhook/jira/subtask", json={"parent_key": "MDP-25", "summary": "Frontend sub-work"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["parent_key"] == "MDP-25"
+    assert body["subtask_key"] == "MDP-99"
+
+
+async def test_jira_link_endpoint(app: Any, monkeypatch: Any) -> None:
+    from meeting_notes import jira_client
+
+    async def fake_link(inward, outward, link_type="Relates", comment=None):
+        return True
+
+    monkeypatch.setattr(jira_client, "link_issues", fake_link)
+
+    response = await _post(app, "/webhook/jira/link", json={"inward_key": "MDP-25", "outward_key": "ENG-101"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["linked"] is True
+
+
+async def test_jira_comment_endpoint(app: Any, monkeypatch: Any) -> None:
+    from meeting_notes import jira_client
+
+    async def fake_comment(key, comment_text):
+        return {"id": "10045"}
+
+    monkeypatch.setattr(jira_client, "add_comment", fake_comment)
+
+    response = await _post(app, "/webhook/jira/comment", json={"key": "MDP-25", "comment": "Update note"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["comment_id"] == "10045"
+    assert body["status"] == "added"

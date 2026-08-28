@@ -624,17 +624,35 @@ async def get_topic_graph(name: str, driver: Any = None) -> dict[str, Any]:
 
 
 async def get_open_actions(limit: int = 50, driver: Any = None) -> list[dict[str, Any]]:
+    return await get_all_actions(status_filter="open", limit=limit, driver=driver)
+
+
+async def get_all_actions(
+    status_filter: str = "all",
+    limit: int = 100,
+    driver: Any = None,
+) -> list[dict[str, Any]]:
+    """Retrieve action items with full parent/child hierarchy, project keys, and status flags."""
     driver = driver or get_driver()
+    where_clause = ""
+    if status_filter == "open":
+        where_clause = "WHERE coalesce(a.done, false) = false"
+    elif status_filter == "done":
+        where_clause = "WHERE coalesce(a.done, false) = true"
+
     async with driver.session() as session:
         result = await session.run(
-            """
+            f"""
             MATCH (a:ActionItem)
-            WHERE coalesce(a.done, false) = false
+            {where_clause}
             OPTIONAL MATCH (a)-[:ASSIGNED_TO]->(p:Person)
+            OPTIONAL MATCH (parent:ActionItem)-[:PARENT_OF]->(a)
             RETURN a.id AS id, a.task AS task, a.owner AS owner, a.due AS due,
                    a.priority AS priority, a.jira_key AS jira_key,
-                   a.jira_status AS jira_status, p.email AS owner_email
-            ORDER BY coalesce(a.due, '9999') ASC
+                   a.jira_status AS jira_status, coalesce(a.done, false) AS done,
+                   p.email AS owner_email,
+                   parent.id AS parent_id, parent.task AS parent_task, parent.jira_key AS parent_jira_key
+            ORDER BY a.done ASC, coalesce(a.due, '9999') ASC
             LIMIT $limit
             """,
             limit=limit,

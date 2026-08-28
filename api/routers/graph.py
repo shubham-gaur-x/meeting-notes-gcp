@@ -61,6 +61,17 @@ async def actions_open(
     return {"actions": actions, "count": len(actions)}
 
 
+@router.get("/actions")
+async def actions_list(
+    status: str = Query("all", pattern=r"^(all|open|done)$"),
+    limit: int = Query(100, ge=1, le=500),
+    _: Principal = Depends(principal),
+) -> dict[str, Any]:
+    """Action items with parent/child project hierarchies and done status."""
+    actions = await graph_client.get_all_actions(status_filter=status, limit=limit)
+    return {"actions": actions, "count": len(actions)}
+
+
 @router.get("/provenance/{meeting_id}")
 async def meeting_provenance(meeting_id: str, _: Principal = Depends(principal)) -> dict[str, Any]:
     """Empty until v2 — ADR-008 ships the schema in v1, the writers in v2."""
