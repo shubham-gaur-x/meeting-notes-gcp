@@ -81,21 +81,48 @@ async def get_known_people(driver: Any | None = None) -> list[dict[str, Any]]:
 
 
 def _resolve_owner_email(
-    owner: str, roster: Roster, known_people: list[dict[str, Any]]
+    owner: str,
+    roster: Roster,
+    known_people: list[dict[str, Any]],
+    attendees: list[Any] | None = None,
 ) -> str | None:
     """Canonical email for an action item's owner, or None.
 
-    This is the fix for bug #1. The extractor writes display names, so matching
-    on `"@" in owner` — which is what v5 did — resolves almost nothing and the
-    ASSIGNED_TO edge never forms. Running the owner through the same resolver
-    the attendees use turns a name into the canonical email the MERGE needs.
-
-    Returns None when the owner cannot be resolved: no email is invented, the
-    edge simply does not form, and the ActionItem still exists with its raw
-    `owner` string intact for a human to read.
+    Matches against meeting attendees first (strongest local context) for display
+    name, given name, or email match. Falls back to the global roster and known
+    people resolver.
     """
     if not owner:
         return None
+
+    # 1. Local meeting attendees match
+    if attendees:
+        norm_owner = person_resolver._norm_name(owner)
+        # Exact email match
+        for a in attendees:
+            a_email = getattr(a, "email", None)
+            if a_email and a_email.lower() == owner.lower():
+                return a_email.lower()
+        # Exact full name match
+        for a in attendees:
+            a_name = getattr(a, "name", None)
+            a_email = getattr(a, "email", None)
+            if a_name and person_resolver._norm_name(a_name) == norm_owner and a_email:
+                return a_email.lower()
+        # Given name match (if unique among attendees)
+        given_matches = [
+            a for a in attendees
+            if getattr(a, "name", None) and person_resolver._norm_name(a.name.split()[0]) == norm_owner and getattr(a, "email", None)
+        ]
+        if len(given_matches) == 1 and given_matches[0].email:
+            return given_matches[0].email.lower()
+        # Email local-part match (e.g. michael.baylard)
+        for a in attendees:
+            a_email = getattr(a, "email", None)
+            if a_email and a_email.split("@")[0].lower() == norm_owner:
+                return a_email.lower()
+
+    # 2. Global roster & known people resolution
     resolution = person_resolver.resolve(
         Attendee(name=owner, email=owner if "@" in owner else None),
         roster,
@@ -277,6 +304,7 @@ async def _write_blockers(
 async def _write_action_items(
     tx: Any, actions: Any, source_id: str, meeting_id: str, now: str,
     *, roster: Roster, known_people: list[dict[str, Any]],
+    attendees: list[Any] | None = None,
 ) -> None:
     """ActionItem + FOLLOWS_UP, and ASSIGNED_TO when the owner resolves.
 
@@ -285,6 +313,7 @@ async def _write_action_items(
     and the edge simply never appeared.
     """
     for i, action in enumerate(actions):
+        owner_email = _resolve_owner_email(action.owner, roster, known_people, attendees=attendees)
         await tx.run(
             """
             MERGE (a:ActionItem {id: $id})
@@ -317,7 +346,7 @@ async def _write_action_items(
             is_engineering_task=action.is_engineering_task,
             confidence=action.confidence,
             meeting_id=meeting_id,
-            owner_email=_resolve_owner_email(action.owner, roster, known_people),
+            owner_email=owner_email,
             now=now,
         )
 
@@ -365,6 +394,7 @@ async def upsert_meeting_graph(
             await _write_action_items(
                 tx, meeting.action_items, source_id, meeting_id, now,
                 roster=roster, known_people=known_people,
+                attendees=meeting.attendees,
             )
             await tx.commit()
 

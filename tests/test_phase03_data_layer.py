@@ -506,3 +506,26 @@ async def test_db_exposes_reading_and_replacing_staged_records() -> None:
 
     assert hasattr(db, "list_staged_by_type")
     assert hasattr(db, "replace_staged_records")
+
+
+def test_resolve_owner_email_matches_attendee_roster_first() -> None:
+    from meeting_notes.graph_client import _resolve_owner_email
+    from meeting_notes.models import Attendee
+    from meeting_notes.person_resolver import Roster
+
+    attendees = [
+        Attendee(name="Michael Baylard", email="michael.baylard@onixnet.com"),
+        Attendee(name="Katrisa Brock", email="katrisa.brock@onixnet.com"),
+    ]
+    roster = Roster([])
+
+    # 1. Full name match
+    assert _resolve_owner_email("Michael Baylard", roster, [], attendees=attendees) == "michael.baylard@onixnet.com"
+    # 2. First name / given name match
+    assert _resolve_owner_email("Katrisa", roster, [], attendees=attendees) == "katrisa.brock@onixnet.com"
+    # 3. Email local-part match
+    assert _resolve_owner_email("michael.baylard", roster, [], attendees=attendees) == "michael.baylard@onixnet.com"
+    # 4. Exact email match
+    assert _resolve_owner_email("michael.baylard@onixnet.com", roster, [], attendees=attendees) == "michael.baylard@onixnet.com"
+    # 5. Non-person / unresolvable team
+    assert _resolve_owner_email("All delivery associates", roster, [], attendees=attendees) is None
