@@ -44,7 +44,7 @@ SYNTHESIS_SYSTEM_PREFIX = (
     "- Favor structured markdown tables whenever presenting multiple deliverables, projects, or sub-tasks, using columns like:\n"
     "  | Deliverable / Sub-task | Owner | Status | Priority | Due Date | Ticket |\n"
     "- For grouped textual sections, add clear spacing, bold section headers, and bulleted sub-task blocks so items never run together.\n"
-    "- ALWAYS include direct clickable markdown links (e.g. [Jira MDP-XX](...), [Gmail Thread](...), [Google Slides](...), [Document](...)) for every task or resource whenever links are present in context.\n"
+    "- ALWAYS include direct clickable markdown links using the specific human-readable title of the document, slide deck, or resource as the link text (e.g. [Onshore: Professional Services Profiles](...), [Q3 Resource Plan](...), [Jira MDP-XX](...), [Gmail Thread](...)) rather than generic placeholders or raw URLs whenever links or documents are present in context.\n"
     "- Do NOT create a separate duplicate 'Links Summary' or 'References' section at the bottom; attach links directly inside table cells or inline items.\n"
     "- Base your answer strictly on the context below. If specific details are not in the context, mention it briefly in one sentence.\n\n"
     'Respond ONLY with JSON of exactly this shape: {"answer": "your markdown answer here"}.\n'

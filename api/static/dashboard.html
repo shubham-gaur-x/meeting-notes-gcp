@@ -354,11 +354,18 @@ function renderMeetings() {
 async function openMeeting(m) {
   const dlg = $("#detail");
   $("#d-title").textContent = m.title || "Meeting";
-  $("#d-meta").textContent = `${m.date || ""} · ${m.kind || ""}`;
+  let metaHtml = `<span>${esc(m.date || "")} · ${esc(m.kind || "")}</span>`;
+  if (m.source_id) {
+    metaHtml += `<div style="margin-top:6px"><a href="https://mail.google.com/mail/u/0/#search/rfc822msgid:${encodeURIComponent(m.source_id)}" target="_blank" rel="noopener" class="pill" style="background:#1e3a8a;color:#ffffff;font-weight:600;text-decoration:none;padding:3px 10px;font-size:11px">Open in Gmail</a></div>`;
+  }
+  $("#d-meta").innerHTML = metaHtml;
   $("#d-body").innerHTML = empty("Loading…");
   dlg.showModal();
   try {
     const d = await get("/graph/meeting/" + encodeURIComponent(m.id));
+    if (d.source_id && !$("#d-meta").querySelector("a")) {
+      $("#d-meta").innerHTML += `<div style="margin-top:6px"><a href="https://mail.google.com/mail/u/0/#search/rfc822msgid:${encodeURIComponent(d.source_id)}" target="_blank" rel="noopener" class="pill" style="background:#1e3a8a;color:#ffffff;font-weight:600;text-decoration:none;padding:3px 10px;font-size:11px">Open in Gmail</a></div>`;
+    }
     $("#d-body").innerHTML =
       (d.summary ? `<p>${esc(d.summary)}</p>` : "") +
       ((d.topics && d.topics.length) ? `<h3>Topics</h3>` +
@@ -381,10 +388,7 @@ async function openMeeting(m) {
         ? `<p class="muted" style="font-size:12px;margin-top:10px">Also mentioned, not yet ` +
           `identified: ${d.unresolved_attendees.map(esc).join(", ")}</p>` : "") +
       ((d.facts && d.facts.length) ? `<h3>What this told us</h3>` +
-        d.facts.map(f => `<div class="quote">${esc(f.text)}</div>`).join("") : "") +
-      ((d.source_id) ? `<div style="margin-top:16px">` +
-        `<a href="https://mail.google.com/mail/u/0/#search/rfc822msgid:${encodeURIComponent(d.source_id)}" target="_blank" rel="noopener" class="pill" style="background:#1e3a8a;color:#ffffff;font-weight:600;text-decoration:none;padding:5px 12px">Open in Gmail</a>` +
-        `</div>` : "");
+        d.facts.map(f => `<div class="quote">${esc(f.text)}</div>`).join("") : "");
   } catch (e) { $("#d-body").innerHTML = `<div class="err">${esc(e.message)}</div>`; }
 }
 
