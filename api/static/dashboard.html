@@ -441,6 +441,54 @@ const EXAMPLES = [
 
 let SUGGESTED_QUESTIONS = [];
 
+function renderMarkdown(md) {
+  if (!md) return "";
+  let html = esc(md);
+
+  // Headers
+  html = html.replace(/^### (.*$)/gim, '<h4 style="margin:12px 0 6px;color:var(--ink)">$1</h4>');
+  html = html.replace(/^## (.*$)/gim, '<h3 style="margin:14px 0 8px;color:var(--ink)">$1</h3>');
+  html = html.replace(/^# (.*$)/gim, '<h2 style="margin:16px 0 10px;color:var(--ink)">$1</h2>');
+
+  // Bold & Italics
+  html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/__(.*?)__/g, '<strong>$1</strong>');
+  html = html.replace(/\*(.*?)\*/g, '<em>$1</em>');
+  html = html.replace(/_([^_]+)_/g, '<em>$1</em>');
+
+  // Links [text](url)
+  html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^\s\)]+)\)/g, '<a href="$2" target="_blank" rel="noopener" style="color:var(--accent);font-weight:600;text-decoration:underline">$1</a>');
+
+  // Inline code
+  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+
+  // Unordered lists & paragraphs
+  const lines = html.split("\n");
+  let inList = false;
+  const out = [];
+
+  for (let line of lines) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith("- ") || trimmed.startsWith("* ")) {
+      if (!inList) {
+        out.push('<ul style="margin:6px 0 10px;padding-left:20px;line-height:1.6">');
+        inList = true;
+      }
+      out.push(`<li>${trimmed.slice(2)}</li>`);
+    } else {
+      if (inList) {
+        out.push('</ul>');
+        inList = false;
+      }
+      if (trimmed) {
+        out.push(`<p style="margin:6px 0">${line}</p>`);
+      }
+    }
+  }
+  if (inList) out.push('</ul>');
+  return out.join("");
+}
+
 async function renderExamples() {
   const container = $("#examples");
   if (!container) return;
@@ -453,7 +501,7 @@ async function renderExamples() {
     }
   }
 
-  container.innerHTML = `<p class="hint" style="margin-bottom:8px">💡 Context-aware suggested questions based on your active project graph (Try one):</p>` +
+  container.innerHTML = `<p class="hint" style="margin-bottom:8px">Try one:</p>` +
     `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;margin-bottom:14px">` +
     SUGGESTED_QUESTIONS.map(q =>
       `<div class="prompt-card" onclick="askQuestion('${esc(q.question).replace(/'/g, "\\'")}')">` +
@@ -490,11 +538,11 @@ async function askMemory() {
       : "";
 
     $("#ask-body").innerHTML =
-      `<div class="answer" style="line-height:1.6">${esc(d.answer)}` +
+      `<div class="answer" style="line-height:1.6">${renderMarkdown(d.answer)}` +
       followupsHtml +
       `</div>` +
-      `<p class="muted" style="font-size:12px;margin-top:8px">Grounded in ${esc((d.node_ids || []).length)} ` +
-      `nodes in your graph memory. Strict second-person synthesis with zero hallucinations.</p>`;
+      `<p class="muted" style="font-size:12px;margin-top:8px">Answered from ${esc((d.node_ids || []).length)} ` +
+      `item(s) in your meeting memory.</p>`;
   } catch (e) { fail("#ask-body", e); }
 }
 
