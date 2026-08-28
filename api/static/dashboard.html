@@ -135,6 +135,11 @@
 
   <section class="panel" id="actions">
     <div class="row" style="flex-wrap:wrap;gap:10px">
+      <select id="aview" onchange="renderActions()" style="font-weight:600">
+        <option value="mine" selected>My Work Only</option>
+        <option value="all">All Work (Org-wide)</option>
+        <option value="team">Team / Management Queues</option>
+      </select>
       <input id="asearch" placeholder="Filter tasks, owners, tickets..." style="min-width:200px" oninput="renderActions()">
       <select id="astatus" onchange="renderActions()">
         <option value="all">All Items</option>
@@ -379,7 +384,7 @@ async function openMeeting(m) {
 
 async function loadActions() {
   try {
-    const d = await get("/graph/actions/open?limit=300");
+    const d = await get("/graph/actions?status=all&limit=500").catch(() => get("/graph/actions/open?limit=500"));
     ACTIONS = d.actions || [];
     const owners = [...new Set(ACTIONS.map(a => a.owner).filter(Boolean))].sort();
     $("#afilter").innerHTML = `<option value="">Everyone</option>` +
@@ -402,10 +407,17 @@ async function markActionDone(key) {
 
 function renderActions() {
   const who = $("#afilter") ? $("#afilter").value : "";
-  const statusFilter = $("#astatus") ? $("#astatus").value : "all";
+  const statusFilter = $("#astatus") ? $("#astatus").value : "open";
+  const viewFilter = $("#aview") ? $("#aview").value : "mine";
   const search = $("#asearch") ? $("#asearch").value.toLowerCase().trim() : "";
+  const TEAM_QUEUES = ["l1 managers", "l&d team", "bizops", "delivery excellence", "sales", "executive", "rmg & l&d", "pending technical associates"];
 
   let rows = ACTIONS.filter(a => {
+    const ownerLower = (a.owner || "").toLowerCase().trim();
+    const isTeamQueue = TEAM_QUEUES.some(t => ownerLower.includes(t));
+
+    if (viewFilter === "mine" && isTeamQueue) return false;
+    if (viewFilter === "team" && !isTeamQueue) return false;
     if (who && a.owner !== who) return false;
     if (statusFilter === "open" && a.done) return false;
     if (statusFilter === "done" && !a.done) return false;
