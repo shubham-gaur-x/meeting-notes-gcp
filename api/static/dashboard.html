@@ -52,8 +52,8 @@
   .card .n { font-size:23px; font-weight:650; line-height:1.15; }
   .card .l { color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.6px; }
   .card.hot .n { color:var(--hot); }
-  table { width:100%; border-collapse:collapse; font-size:13px; }
-  th, td { text-align:left; padding:9px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
+  table { width:100%; border-collapse:collapse; font-size:13px; table-layout:auto; }
+  th, td { text-align:left; padding:9px 10px; border-bottom:1px solid var(--line); vertical-align:top; white-space:normal; word-break:break-word; overflow-wrap:anywhere; }
   th { color:var(--muted); font-weight:500; font-size:11px;
        text-transform:uppercase; letter-spacing:.6px; }
   tr.clickable { cursor:pointer; }
@@ -63,7 +63,10 @@
   .empty { color:var(--muted); padding:20px; text-align:center; }
   .err { color:var(--warn); padding:12px; border:1px solid var(--warn); border-radius:8px; }
   .answer { background:var(--raise); border:1px solid var(--line); border-radius:9px;
-            padding:15px; white-space:pre-wrap; }
+            padding:15px; word-break:break-word; overflow-wrap:break-word; }
+  .answer table { margin:14px 0; width:100%; border:1px solid var(--line); border-radius:6px; overflow:hidden; }
+  .answer table th { background:rgba(255,255,255,0.04); font-weight:600; }
+  .answer table tr:nth-child(even) td { background:rgba(255,255,255,0.02); }
   .prompt-card { background:var(--raise); border:1px solid var(--line); border-radius:10px; padding:10px 14px; cursor:pointer; transition:all .15s ease; text-align:left; }
   .prompt-card:hover { border-color:var(--accent); background:rgba(99,102,241,0.08); transform:translateY(-1px); }
   .prompt-cat { font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.5px; color:var(--accent); margin-bottom:3px; }
