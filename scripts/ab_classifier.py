@@ -129,6 +129,13 @@ def score_records(
     return scored
 
 
+def select_records(records: list[StagedRecord], unprocessed_only: bool) -> list[StagedRecord]:
+    """Narrow the corpus. Split out from `main` so it is testable without a database."""
+    if not unprocessed_only:
+        return records
+    return [r for r in records if not r.processed]
+
+
 def label(item: Scored, show_subjects: bool) -> str:
     """Identify a record without leaking mail contents by default."""
     return item.title[:58] if show_subjects else item.source_id
@@ -140,11 +147,16 @@ def render(scored: list[Scored], *, base: str, threshold: float, show_subjects: 
     kept = sum(1 for s in scored if s.head_passes and not s.flipped)
     dropped = sum(1 for s in scored if not s.head_passes and not s.flipped)
 
+    # These three are disjoint and sum to the corpus. `moved` deliberately is
+    # not a fourth bucket -- it is a subset of the two unchanged rows above,
+    # and printing it alongside them as a peer made the numbers stop adding up.
     print(f"records: {len(scored)}   base: {base}   threshold: {threshold}\n")
-    print(f"  extracted by both (unchanged):   {kept}")
-    print(f"  dropped by both (unchanged):     {dropped}")
-    print(f"  GATE DECISION CHANGED:           {len(flipped)}")
-    print(f"  score moved, decision unchanged: {len(moved)}\n")
+    print(f"  extracted by both:      {kept}")
+    print(f"  dropped by both:        {dropped}")
+    print(f"  GATE DECISION CHANGED:  {len(flipped)}")
+    print(f"  {'':22}  {'-' * len(str(len(scored)))}")
+    print(f"  {'':22}  {len(scored)}\n")
+    print(f"  of the unchanged, {len(moved)} scored differently without crossing the gate\n")
 
     for item in sorted(flipped, key=lambda s: -s.base_score):
         direction = (
@@ -211,8 +223,7 @@ def main(argv: list[str] | None = None) -> int:
         finally:
             await db.close_pool()
 
-        if args.unprocessed_only:
-            records = [r for r in records if not r.processed]
+        records = select_records(records, args.unprocessed_only)
         if not records:
             print(f"no staged {args.source} records to score")
             return 1

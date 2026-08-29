@@ -1,7 +1,7 @@
 .PHONY: help doctor demo demo-up demo-down auth-spike tf-bootstrap tf-init tf-plan \
         tf-apply tf-destroy tf-validate sync-up sync-down \
         secrets-put build push deploy-api deploy-jobs run-job migrate setup-memgraph \
-        test lint typecheck logs cypher psql health graphify
+        test lint typecheck ab-classifier logs cypher psql health graphify
 
 ENV ?= personal
 TFVARS := terraform/envs/$(ENV).tfvars
@@ -26,6 +26,9 @@ help:
 # Tier 0 by default. `make doctor TIER=1` adds the LLM check; `make doctor TIER=2
 # ENV=personal` adds GCP, Workspace and Jira. Start here on a fresh clone.
 TIER ?= 0
+
+# Baseline revision for `make ab-classifier`.
+BASE ?= master
 
 # Exit 2 means warnings only — not a failure, so don't let make report one.
 # Exit 1 (a real FAIL) still propagates and stops the build.
@@ -128,6 +131,12 @@ lint:  ## ruff over the source trees that exist
 
 typecheck:  ## mypy over the source trees that exist
 	$(PYTHON) -m mypy meeting_notes api jobs scripts
+
+# Reviewing a classifier change? Unit tests prove a rule fires; this proves it
+# changes an outcome on records already staged. Reads only — no LLM, no writes.
+# Subjects are withheld unless you pass ARGS=--show-subjects.
+ab-classifier:  ## A/B a classifier change against real staged records (BASE=master)
+	$(PYTHON) -m scripts.ab_classifier --base $(BASE) $(ARGS)
 
 logs:  ## Tail Cloud Run logs (SERVICE=api)
 	gcloud run services logs tail $(SERVICE) --region $$GCP_REGION
