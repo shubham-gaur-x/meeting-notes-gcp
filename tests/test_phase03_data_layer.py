@@ -506,3 +506,19 @@ async def test_db_exposes_reading_and_replacing_staged_records() -> None:
 
     assert hasattr(db, "list_staged_by_type")
     assert hasattr(db, "replace_staged_records")
+
+
+async def test_cross_source_meeting_deduplication_links_recap() -> None:
+    """Verifies that follow-up recaps link to matching meetings on same date."""
+    from meeting_notes import graph_client
+
+    tx = FakeTx()
+    await graph_client.upsert_meeting_graph(
+        _meeting(title="Recap: Architecture & API Design Sync", date="2026-08-28"),
+        "email-src-101",
+        driver=FakeDriver(tx),
+        known_people=[],
+    )
+    cypher_calls = tx.cypher()
+    assert "RECAP_OF" in cypher_calls
+    assert "HAS_RECAP" in cypher_calls

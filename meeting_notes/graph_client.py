@@ -23,6 +23,7 @@ Two changes from v5:
 from __future__ import annotations
 
 import json
+import re
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -322,6 +323,42 @@ async def _write_action_items(
         )
 
 
+def _normalize_title_tokens(title: str) -> str:
+    cleaned = re.sub(
+        r"^(re:\s*|fwd:\s*|fw:\s*|recap:\s*|notes:\s*|minutes:\s*|follow-up:\s*|urgent:\s*|action required:\s*)+",
+        "",
+        title,
+        flags=re.IGNORECASE,
+    )
+    cleaned = re.sub(r"[^\w\s]", " ", cleaned).lower()
+    return " ".join(cleaned.split())
+
+
+async def _link_cross_source_duplicates(
+    tx: Any, meeting_id: str, title: str, date: str, now: str
+) -> None:
+    norm = _normalize_title_tokens(title)
+    if not norm or not date:
+        return
+    await tx.run(
+        """
+        MATCH (m1:Meeting {id: $meeting_id})
+        MATCH (m2:Meeting)
+        WHERE m2.id <> $meeting_id AND m2.date = $date
+        WITH m1, m2, $norm AS norm
+        WHERE toLower(m2.title) CONTAINS norm OR norm CONTAINS toLower(m2.title)
+        MERGE (m1)-[r:RECAP_OF]->(m2)
+        ON CREATE SET r.created_at = $now, r.confidence = 0.95
+        MERGE (m2)-[r2:HAS_RECAP]->(m1)
+        ON CREATE SET r2.created_at = $now, r2.confidence = 0.95
+        """,
+        meeting_id=meeting_id,
+        norm=norm,
+        date=str(date),
+        now=now,
+    )
+
+
 async def upsert_meeting_graph(
     meeting: ExtractedMeeting,
     source_id: str,
@@ -357,6 +394,7 @@ async def upsert_meeting_graph(
     async with driver.session() as session:
         async with await session.begin_transaction() as tx:
             await _write_meeting(tx, meeting, meeting_id, source_id, now)
+            await _link_cross_source_duplicates(tx, meeting_id, meeting.title, str(meeting.date), now)
             await _write_attendees(tx, resolved, meeting_id, now)
             await _write_person_reviews(tx, reviews, source_id, meeting_id, now)
             await _write_topics(tx, meeting.topics, meeting_id, now)
