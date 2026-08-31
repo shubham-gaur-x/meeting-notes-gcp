@@ -439,25 +439,28 @@ async def update_action_jira_key(action_id: str, jira_key: str, driver: Any | No
 
 
 async def get_open_actions_for_owner(
-    owner_email: str, *, exclude_id: str, driver: Any | None = None
+    owner_email: str | None = None,
+    *,
+    exclude_id: str,
+    meeting_id: str | None = None,
+    driver: Any | None = None,
 ) -> list[dict[str, Any]]:
-    """Same-owner open items, the dedup candidate set jira_pusher scores against.
-
-    `exclude_id` matters: by the time jira_pusher runs, upsert_meeting_graph
-    has already written every action item in the meeting, including the one
-    currently being evaluated. Without excluding it, an item can match itself
-    at similarity 1.0 and link MENTIONED_IN to its own node (v5 excluded this
-    for the same reason, via a.id <> $exclude_id).
-    """
+    """Same-owner or same-meeting open items, the dedup candidate set jira_pusher scores against."""
     driver = driver or get_driver()
     async with driver.session() as session:
         result = await session.run(
             """
-            MATCH (a:ActionItem)-[:ASSIGNED_TO]->(p:Person {email: $email})
+            MATCH (a:ActionItem)
             WHERE coalesce(a.done, false) = false AND a.id <> $exclude_id
+              AND (
+                ($email IS NOT NULL AND (a)-[:ASSIGNED_TO]->(:Person {email: $email}))
+                OR ($meeting_id IS NOT NULL AND (a)<-[:CREATED_FROM|DISCUSSED*0..1]-(:Meeting {id: $meeting_id}))
+                OR a.jira_key IS NOT NULL
+              )
             RETURN a.id AS id, a.task AS task, a.jira_key AS jira_key, a.embedding AS embedding
             """,
             email=owner_email,
+            meeting_id=meeting_id,
             exclude_id=exclude_id,
         )
         return [dict(r) async for r in result]
