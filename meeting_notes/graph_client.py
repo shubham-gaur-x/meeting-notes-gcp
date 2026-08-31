@@ -182,6 +182,16 @@ async def _write_person_reviews(
     tx: Any, reviews: Any, source_id: str, meeting_id: str, now: str
 ) -> None:
     """Attendees that could not be resolved are HELD for review, never dropped."""
+    if not reviews:
+        await tx.run(
+            """
+            MATCH (m:Meeting {id: $meeting_id})-[rel:NEEDS_REVIEW]->(r:PersonReview)
+            DELETE rel, r
+            """,
+            meeting_id=meeting_id,
+        )
+        return
+
     for rev in reviews:
         await tx.run(
             """
