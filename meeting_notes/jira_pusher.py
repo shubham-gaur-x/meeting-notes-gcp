@@ -132,7 +132,7 @@ async def push_action_items(
             continue
 
         jira_key = await _create_ticket(
-            action, action_id, meeting, sprint_id,
+            action, action_id, meeting, source_id, sprint_id,
             create_issue=create_issue, update_jira_key=update_jira_key,
         )
         if jira_key:
@@ -190,6 +190,7 @@ async def _create_ticket(
     action: ActionItem,
     action_id: str,
     meeting: ExtractedMeeting,
+    source_id: str,
     sprint_id: int | None,
     *,
     create_issue: Any,
@@ -200,8 +201,14 @@ async def _create_ticket(
     A failure here is logged and swallowed on purpose: one unbuildable item
     must not cost the rest of the batch its tickets.
     """
+    source_url = (
+        f"https://mail.google.com/mail/u/0/#search/rfc822msgid:{source_id}"
+        if getattr(meeting, "platform", "") == "email" or "email" in str(source_id)
+        else f"https://mail.google.com/mail/u/0/#search/{meeting.title}"
+    )
     description = (
         f"From meeting: {meeting.title} ({meeting.date})\n"
+        f"Original Source: {source_url}\n"
         f"Owner: {action.owner}\nDue: {action.due or 'not specified'}"
     )
     try:
@@ -231,9 +238,10 @@ async def _find_duplicate(
     link_mentioned_in: Any,
     add_comment: Any,
     threshold: float,
+    update_jira_key: Any = None,
 ) -> dict[str, Any] | None:
     """Link and comment on an existing item this one duplicates, or None."""
-    candidates = await get_open_actions(action.owner, exclude_id=action_id)
+    candidates = await get_open_actions(action.owner, exclude_id=action_id, meeting_id=meeting_id)
     if not candidates:
         return None
 
@@ -244,6 +252,8 @@ async def _find_duplicate(
 
     await link_mentioned_in(match["id"], meeting_id)
     if match.get("jira_key"):
+        if update_jira_key:
+            await update_jira_key(action_id, match["jira_key"])
         try:
             await add_comment(
                 match["jira_key"],
