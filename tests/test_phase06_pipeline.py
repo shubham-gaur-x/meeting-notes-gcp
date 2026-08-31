@@ -874,3 +874,27 @@ def test_a_mapping_attendee_still_resolves_by_email() -> None:
     r = resolve({"name": "Matteo Vaiente", "email": "matteo@onixnet.com"}, Roster([]))
     assert r.email == "matteo@onixnet.com", f"a mapping was dropped: {r.reason}"
     assert r.status == "resolved"
+
+
+def test_email_adapter_resolves_first_name_against_header_recipients() -> None:
+    """EmailAdapter extracts header recipients and enriches first-name mentions."""
+    from meeting_notes.pipeline import EmailAdapter, apply_source_overrides
+
+    adapter = EmailAdapter()
+    payload = {
+        "from": "Mallory Webber <mallory.webber@onixnet.com>",
+        "to": "Michael Baylard <michael.baylard@onixnet.com>, Natalie Miller <natalie.miller@onixnet.com>",
+        "body": "Best, Mallory & Natalie",
+    }
+    overrides = adapter.extract_overrides(payload)
+    assert "_header_recipients" in overrides
+    assert any(r["email"] == "natalie.miller@onixnet.com" for r in overrides["_header_recipients"])
+
+    extracted_meeting = _meeting(attendees=[
+        {"name": "Mallory Webber", "email": "mallory.webber@onixnet.com", "role": "organizer"},
+        {"name": "Natalie", "role": "organizer"},  # no email in extracted body
+    ])
+    enriched = apply_source_overrides(extracted_meeting, overrides)
+    natalie = next(a for a in enriched.attendees if "Natalie" in a.name)
+    assert natalie.email == "natalie.miller@onixnet.com"
+    assert natalie.name == "Natalie Miller"

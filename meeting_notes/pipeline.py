@@ -139,10 +139,47 @@ class EmailAdapter:
         return {"date": date, "platform": "email"}
 
     def extract_overrides(self, payload: dict[str, Any]) -> dict[str, Any]:
-        """Nothing. A mail header date is when the MESSAGE was sent, which is
-        often not when the meeting it discusses happened -- so here the model
-        reading the thread genuinely can do better."""
-        return {}
+        """Enrich extracted attendees with verified RFC-2822 header email addresses."""
+        recipients = self._attendees(payload)
+        return {"_header_recipients": recipients} if recipients else {}
+
+    @staticmethod
+    def _attendees(payload: dict[str, Any]) -> list[dict[str, str]]:
+        from email.utils import getaddresses
+
+        raw_headers: list[str] = []
+        for field in ("from", "to", "cc"):
+            val = payload.get(field)
+            if val:
+                raw_headers.append(str(val))
+        for m in payload.get("messages") or []:
+            for field in ("from", "to", "cc"):
+                val = m.get(field)
+                if val:
+                    raw_headers.append(str(val))
+
+        parsed = getaddresses(raw_headers)
+        seen_emails: set[str] = set()
+        attendees: list[dict[str, str]] = []
+        from_str = str(payload.get("from") or "").lower()
+
+        for display_name, email in parsed:
+            clean_email = email.strip().lower()
+            if not clean_email or "@" not in clean_email or clean_email in seen_emails:
+                continue
+            if any(bot in clean_email for bot in ("no-reply", "noreply", "notifications@", "mailer-daemon")):
+                continue
+            seen_emails.add(clean_email)
+            clean_name = display_name.strip()
+            if not clean_name:
+                clean_name = clean_email.split("@")[0].replace(".", " ").replace("_", " ").title()
+            is_sender = clean_email in from_str
+            attendees.append({
+                "name": clean_name,
+                "email": clean_email,
+                "role": "organizer" if is_sender else "attendee",
+            })
+        return attendees
 
     def skip_score_gate(self, payload: dict[str, Any]) -> bool:
         return False
@@ -331,7 +368,25 @@ def apply_source_overrides(
     """
     if not overrides:
         return meeting
-    return ExtractedMeeting.model_validate({**meeting.model_dump(), **overrides})
+
+    overrides_copy = dict(overrides)
+    header_recipients = overrides_copy.pop("_header_recipients", None)
+    data = meeting.model_dump()
+
+    if header_recipients:
+        current_attendees = data.get("attendees", [])
+        for att in current_attendees:
+            if not att.get("email"):
+                att_name = (att.get("name") or "").strip().lower()
+                for hr in header_recipients:
+                    hr_name = (hr.get("name") or "").strip().lower()
+                    hr_given = hr_name.split()[0] if hr_name else ""
+                    if att_name == hr_name or (att_name == hr_given and len(att_name) >= 3):
+                        att["email"] = hr.get("email")
+                        att["name"] = hr.get("name")
+                        break
+
+    return ExtractedMeeting.model_validate({**data, **overrides_copy})
 
 
 async def enrich(
