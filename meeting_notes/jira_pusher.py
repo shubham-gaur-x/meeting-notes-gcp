@@ -201,11 +201,10 @@ async def _create_ticket(
     A failure here is logged and swallowed on purpose: one unbuildable item
     must not cost the rest of the batch its tickets.
     """
-    source_url = (
-        f"https://mail.google.com/mail/u/0/#search/rfc822msgid:{source_id}"
-        if getattr(meeting, "platform", "") == "email" or "email" in str(source_id)
-        else f"https://mail.google.com/mail/u/0/#search/{meeting.title}"
-    )
+    import urllib.parse
+
+    clean_search = urllib.parse.quote(meeting.title)
+    source_url = f"https://mail.google.com/mail/#search/{clean_search}"
     description = (
         f"From meeting: {meeting.title} ({meeting.date})\n"
         f"Original Source: {source_url}\n"

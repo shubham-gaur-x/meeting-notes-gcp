@@ -445,24 +445,38 @@ async def get_open_actions_for_owner(
     meeting_id: str | None = None,
     driver: Any | None = None,
 ) -> list[dict[str, Any]]:
-    """Same-owner or same-meeting open items, the dedup candidate set jira_pusher scores against."""
+    """Same-owner open items, the dedup candidate set jira_pusher scores against.
+
+    `exclude_id` matters: by the time jira_pusher runs, upsert_meeting_graph
+    has already written every action item in the meeting, including the one
+    currently being evaluated. Without excluding it, an item can match itself
+    at similarity 1.0 and link MENTIONED_IN to its own node (v5 excluded this
+    for the same reason, via a.id <> $exclude_id).
+    """
     driver = driver or get_driver()
     async with driver.session() as session:
-        result = await session.run(
-            """
-            MATCH (a:ActionItem)
-            WHERE coalesce(a.done, false) = false AND a.id <> $exclude_id
-              AND (
-                ($email IS NOT NULL AND (a)-[:ASSIGNED_TO]->(:Person {email: $email}))
-                OR ($meeting_id IS NOT NULL AND (a)<-[:CREATED_FROM|DISCUSSED*0..1]-(:Meeting {id: $meeting_id}))
-                OR a.jira_key IS NOT NULL
-              )
-            RETURN a.id AS id, a.task AS task, a.jira_key AS jira_key, a.embedding AS embedding
-            """,
-            email=owner_email,
-            meeting_id=meeting_id,
-            exclude_id=exclude_id,
-        )
+        if owner_email:
+            result = await session.run(
+                """
+                MATCH (a:ActionItem)-[:ASSIGNED_TO]->(p:Person {email: $email})
+                WHERE coalesce(a.done, false) = false AND a.id <> $exclude_id
+                RETURN a.id AS id, a.task AS task, a.jira_key AS jira_key, a.embedding AS embedding
+                """,
+                email=owner_email,
+                exclude_id=exclude_id,
+            )
+        elif meeting_id:
+            result = await session.run(
+                """
+                MATCH (m:Meeting {id: $meeting_id})-[:DISCUSSED*0..1]->(a:ActionItem)
+                WHERE coalesce(a.done, false) = false AND a.id <> $exclude_id
+                RETURN a.id AS id, a.task AS task, a.jira_key AS jira_key, a.embedding AS embedding
+                """,
+                meeting_id=meeting_id,
+                exclude_id=exclude_id,
+            )
+        else:
+            return []
         return [dict(r) async for r in result]
 
 
