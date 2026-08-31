@@ -394,17 +394,31 @@ async function openMeeting(m) {
 
 async function loadActions() {
   try {
+    const currentOwner = $("#afilter") ? $("#afilter").value : "";
     const d = await get("/graph/actions?status=all&limit=500").catch(() => get("/graph/actions/open?limit=500"));
     ACTIONS = d.actions || [];
     const owners = [...new Set(ACTIONS.map(a => a.owner).filter(Boolean))].sort();
-    $("#afilter").innerHTML = `<option value="">Everyone</option>` +
-      owners.map(o => `<option value="${esc(o)}">${esc(o)}</option>`).join("");
+    if ($("#afilter")) {
+      $("#afilter").innerHTML = `<option value="">Everyone</option>` +
+        owners.map(o => `<option value="${esc(o)}"${o === currentOwner ? ' selected' : ''}>${esc(o)}</option>`).join("");
+      if (currentOwner && owners.includes(currentOwner)) {
+        $("#afilter").value = currentOwner;
+      }
+    }
     renderActions();
   } catch (e) { fail("#actions-body", e); }
 }
 
 async function toggleActionDone(id, jiraKey, makeDone) {
   const statusName = makeDone ? "Done" : "In Progress";
+  // Optimistically update local state so filter view remains smooth
+  const item = ACTIONS.find(a => a.id === id || (jiraKey && a.jira_key === jiraKey));
+  if (item) {
+    item.done = makeDone;
+    item.jira_status = statusName;
+    renderActions();
+  }
+
   try {
     if (jiraKey) {
       const r = await fetch("/webhook/jira/transition", {
@@ -414,7 +428,10 @@ async function toggleActionDone(id, jiraKey, makeDone) {
       if (!r.ok) throw new Error("Transition failed: " + r.status);
     }
     await loadActions();
-  } catch (e) { alert("Failed to update status: " + e.message); }
+  } catch (e) {
+    alert("Failed to update status: " + e.message);
+    await loadActions();
+  }
 }
 
 function renderActions() {
