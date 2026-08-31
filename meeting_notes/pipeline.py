@@ -139,7 +139,12 @@ class EmailAdapter:
         return {"date": date, "platform": "email"}
 
     def extract_overrides(self, payload: dict[str, Any]) -> dict[str, Any]:
-        """Enrich extracted attendees with verified RFC-2822 header email addresses."""
+        """Enrich extracted attendees with verified RFC-2822 header recipient addresses.
+
+        Note on dates: We deliberately do NOT override `date`. A mail header date
+        is when the message was sent, which is often not when the meeting it discusses
+        happened -- so the model reading the thread body genuinely does better for dates.
+        """
         recipients = self._attendees(payload)
         return {"_header_recipients": recipients} if recipients else {}
 
