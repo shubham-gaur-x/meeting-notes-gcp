@@ -348,6 +348,29 @@ def parse_diff(diff: str) -> DiffFacts:
     )
 
 
+def gate_scope_affinity(
+    changed_files: Sequence[str], ticket_description: str = ""
+) -> GateResult:
+    """Flag changes to completely unrelated tests or files outside the task scope."""
+    violations: list[str] = []
+    test_files = [f for f in changed_files if "test" in f.lower()]
+    src_files = [f for f in changed_files if "test" not in f.lower() and f.endswith(".py")]
+
+    for tf in test_files:
+        norm_t = tf.split("/")[-1].replace("test_", "").replace(".py", "").replace("phase", "").strip("0123456789_")
+        matches_src = any(norm_t in sf or sf.split("/")[-1].replace(".py", "") in tf for sf in src_files)
+        matches_desc = bool(norm_t and norm_t.lower() in ticket_description.lower())
+        is_integration = any(k in tf.lower() for k in ("pipeline", "doctor", "api", "dev_agent", "sync", "data_layer", "pure_core", "llm_seam"))
+        if src_files and not matches_src and not matches_desc and not is_integration and len(norm_t) > 3:
+            violations.append(f"unrelated test modified outside task scope: {tf}")
+
+    return GateResult(
+        name="scope_affinity",
+        passed=not violations,
+        evidence="clean" if not violations else "; ".join(violations),
+    )
+
+
 # ─── aggregate ────────────────────────────────────────────────────────────────
 
 
@@ -365,7 +388,7 @@ def evaluate_gates(
     max_files: int = 10,
     max_lines: int = 600,
 ) -> list[GateResult]:
-    """Run all seven gates over one PR.
+    """Run all eight gates over one PR.
 
     Pure: the caller runs the test/lint/typecheck commands and reads the
     changed files, then hands the results in. That keeps every gate — and this
@@ -380,6 +403,7 @@ def evaluate_gates(
         gate_no_new_deps(facts.changed_files, ticket_description, facts.added_dependency_lines),
         gate_secret_scan(facts.added_lines),
         gate_module_boundaries(file_contents),
+        gate_scope_affinity(facts.changed_files, ticket_description),
     ]
 
 

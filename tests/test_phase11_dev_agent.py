@@ -1181,7 +1181,7 @@ def test_evaluate_gates_returns_every_gate() -> None:
     )
     assert {r.name for r in results} == {
         "tests_green", "lint_type_clean", "diff_budget",
-        "protected_paths", "no_new_deps", "secret_scan", "module_boundaries",
+        "protected_paths", "no_new_deps", "secret_scan", "module_boundaries", "scope_affinity",
     }
 
 
@@ -1303,6 +1303,19 @@ async def test_a_planted_secret_in_the_diff_blocks_the_ship_through_the_real_gat
     calls = await _process({"key": "SCRUM-6", "summary": "s"}, diff=leaked, run_gates=real_gates)
     assert calls["finishes"][0][0] == lifecycle.NEEDS_HUMAN
     assert "secret_scan" in "\n".join(calls["comments"])
+
+
+def test_gate_scope_affinity_blocks_unrelated_test_suite_edits() -> None:
+    """Blocks an edit where an unrelated test was modified outside ticket scope."""
+    unrelated_diff_files = ["meeting_notes/jira_client.py", "tests/test_unrelated_billing.py"]
+    res = gr.gate_scope_affinity(unrelated_diff_files, ticket_description="Fix Jira ticket formatting")
+    assert res.passed is False
+    assert "unrelated test" in res.evidence
+
+    # Related test passes
+    related_diff_files = ["meeting_notes/jira_client.py", "tests/test_jira_client.py"]
+    res_ok = gr.gate_scope_affinity(related_diff_files, ticket_description="Fix Jira ticket formatting")
+    assert res_ok.passed is True
 
 
 async def test_gate_failure_is_not_fatal_to_the_run_bookkeeping() -> None:
