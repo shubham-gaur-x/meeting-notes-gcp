@@ -34,10 +34,16 @@ async def _default_mark_needs_review(action_id: str, reason: str) -> None:
     await mark_action_needs_review(action_id, reason)
 
 
-async def _default_get_open_actions(owner_email: str, *, exclude_id: str) -> list[dict[str, Any]]:
+async def _default_get_open_actions(
+    owner_email: str | None = None,
+    *,
+    exclude_id: str,
+    meeting_id: str | None = None,
+    **kwargs: Any,
+) -> list[dict[str, Any]]:
     from meeting_notes.graph_client import get_open_actions_for_owner
 
-    return await get_open_actions_for_owner(owner_email, exclude_id=exclude_id)
+    return await get_open_actions_for_owner(owner_email, exclude_id=exclude_id, meeting_id=meeting_id)
 
 
 async def _default_update_jira_key(action_id: str, jira_key: str) -> None:
