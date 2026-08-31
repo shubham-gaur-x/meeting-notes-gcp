@@ -175,8 +175,8 @@ class EmailAdapter:
             if any(bot in clean_email for bot in ("no-reply", "noreply", "notifications@", "mailer-daemon")):
                 continue
             seen_emails.add(clean_email)
-            clean_name = display_name.strip()
-            if not clean_name:
+            clean_name = display_name.strip().strip('"').strip("'")
+            if not clean_name or "@" in clean_name:
                 clean_name = clean_email.split("@")[0].replace(".", " ").replace("_", " ").title()
             is_sender = clean_email in from_str
             attendees.append({
@@ -385,10 +385,12 @@ def apply_source_overrides(
                 att_name = (att.get("name") or "").strip().lower()
                 for hr in header_recipients:
                     hr_name = (hr.get("name") or "").strip().lower()
+                    hr_email = (hr.get("email") or "").strip().lower()
+                    hr_local = hr_email.split("@")[0].replace(".", " ").replace("_", " ").lower()
                     hr_given = hr_name.split()[0] if hr_name else ""
-                    if att_name == hr_name or (att_name == hr_given and len(att_name) >= 3):
+                    if att_name == hr_name or att_name == hr_local or (att_name == hr_given and len(att_name) >= 3):
                         att["email"] = hr.get("email")
-                        att["name"] = hr.get("name")
+                        att["name"] = hr.get("name") if "@" not in str(hr.get("name")) else hr_local.title()
                         break
 
     return ExtractedMeeting.model_validate({**data, **overrides_copy})
