@@ -23,13 +23,15 @@ Two changes from v5:
 from __future__ import annotations
 
 import json
+import re
 from datetime import UTC, datetime, timedelta
+from difflib import SequenceMatcher
 from typing import Any
 
 import structlog
 from neo4j import AsyncDriver, AsyncGraphDatabase
 
-from meeting_notes import person_resolver
+from meeting_notes import dedup, person_resolver
 from meeting_notes.config import Settings, get_settings
 from meeting_notes.models import Attendee, ExtractedMeeting
 from meeting_notes.person_resolver import Roster
@@ -151,8 +153,9 @@ async def _write_attendees(tx: Any, resolved: Any, meeting_id: str, now: str) ->
         await tx.run(
             """
             MERGE (p:Person {email: $email})
-            ON CREATE SET p.created_at = $now, p.tracked = $tracked
-            SET p.name = $name, p.id = $person_id, p.updated_at = $now,
+            ON CREATE SET p.created_at = $now, p.name = $name, p.tracked = $tracked
+            SET p.name = CASE WHEN size(coalesce($name, '')) > size(coalesce(p.name, '')) THEN $name ELSE p.name END,
+                p.id = $person_id, p.updated_at = $now,
                 p.tracked = CASE WHEN $tracked THEN true ELSE coalesce(p.tracked, false) END
 
             MERGE (o:Organization {domain: $domain})
@@ -280,22 +283,65 @@ async def _write_action_items(
 ) -> None:
     """ActionItem + FOLLOWS_UP, and ASSIGNED_TO when the owner resolves.
 
-    The owner is resolved to an email rather than checked for an "@": a naive
-    check left ASSIGNED_TO unformed for every owner written as a display name,
-    and the edge simply never appeared.
+    Deduplicates semantically near-identical action items across repeat emails/meetings
+    and canonicalizes owner names to unified Person entities.
     """
     for i, action in enumerate(actions):
+        owner_email = _resolve_owner_email(action.owner, roster, known_people, attendees=attendees)
+        canonical_owner = action.owner
+        if owner_email:
+            matched_person = next((p for p in known_people if p.get("email") == owner_email), None)
+            if matched_person and matched_person.get("name"):
+                canonical_owner = matched_person["name"]
+            elif "@" in str(action.owner):
+                canonical_owner = str(action.owner).split("@")[0].replace(".", " ").replace("_", " ").title()
+
+        # Check for semantically duplicate open action items
+        existing_action_id = None
+        norm_task = re.sub(r"\s+", " ", (action.task or "").strip().lower())
+
+        if owner_email:
+            res = await tx.run(
+                """
+                MATCH (a:ActionItem)-[:ASSIGNED_TO]->(p:Person {email: $owner_email})
+                WHERE coalesce(a.done, false) = false
+                RETURN a.id AS id, a.task AS task
+                """,
+                owner_email=owner_email,
+            )
+            candidates = [dict(r) async for r in res] if hasattr(res, "__aiter__") else []
+            for cand in candidates:
+                cand_task = cand.get("task", "")
+                if dedup._token_jaccard(norm_task, cand_task) >= 0.65 or SequenceMatcher(None, norm_task, re.sub(r"\s+", " ", cand_task.lower())).ratio() >= 0.70:
+                    existing_action_id = cand["id"]
+                    break
+        else:
+            res = await tx.run(
+                """
+                MATCH (a:ActionItem)
+                WHERE coalesce(a.done, false) = false AND NOT (a)-[:ASSIGNED_TO]->(:Person)
+                RETURN a.id AS id, a.task AS task
+                """,
+                owner_email=None,
+            )
+            candidates = [dict(r) async for r in res] if hasattr(res, "__aiter__") else []
+            for cand in candidates:
+                cand_task = cand.get("task", "")
+                if dedup._token_jaccard(norm_task, cand_task) >= 0.70:
+                    existing_action_id = cand["id"]
+                    break
+
+        action_id = existing_action_id or uuid5_id("action", f"{source_id}:{i}:{action.task}")
+
         await tx.run(
             """
             MERGE (a:ActionItem {id: $id})
-            ON CREATE SET a.created_at = $now
-            SET a.task = $task,
-                a.owner = $owner,
-                a.due = $due,
-                a.done = $done,
+            ON CREATE SET a.created_at = $now, a.done = $done, a.task = $task, a.owner = $owner
+            SET a.due = coalesce($due, a.due),
+                a.done = CASE WHEN coalesce(a.done, false) = true THEN true ELSE $done END,
                 a.priority = $priority,
                 a.is_engineering_task = $is_engineering_task,
-                a.confidence = $confidence,
+                a.confidence = CASE WHEN $confidence > coalesce(a.confidence, 0.0) THEN $confidence ELSE a.confidence END,
                 a.updated_at = $now
 
             WITH a
@@ -308,9 +354,9 @@ async def _write_action_items(
                 MERGE (a)-[:ASSIGNED_TO]->(p)
             )
             """,
-            id=uuid5_id("action", f"{source_id}:{i}:{action.task}"),
+            id=action_id,
             task=action.task,
-            owner=action.owner,
+            owner=canonical_owner,
             due=str(action.due) if action.due else None,
             done=action.done,
             priority=action.priority,
@@ -618,7 +664,7 @@ async def get_open_actions(limit: int = 50, driver: Any = None) -> list[dict[str
             MATCH (a:ActionItem)
             WHERE coalesce(a.done, false) = false
             OPTIONAL MATCH (a)-[:ASSIGNED_TO]->(p:Person)
-            RETURN a.id AS id, a.task AS task, a.owner AS owner, a.due AS due,
+            RETURN a.id AS id, a.task AS task, coalesce(p.name, a.owner) AS owner, a.due AS due,
                    a.priority AS priority, a.jira_key AS jira_key,
                    a.jira_status AS jira_status, p.email AS owner_email
             ORDER BY coalesce(a.due, '9999') ASC
