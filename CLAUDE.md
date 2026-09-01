@@ -170,7 +170,7 @@ meeting-notes-gcp/
 │   ├── sources/{base,gmail,calendar,meet,jira}.py
 │   └── dev_agent/              Phase 11, ADR-020 — autonomous ticket implementer
 │       ├── lifecycle.py        state machine; SHIPPED is terminal
-│       ├── guardrails.py       7 deterministic gates (pure)
+│       ├── guardrails.py       8 deterministic gates (pure) — ADR-025
 │       ├── gate_runner.py      runs those gates in the worktree
 │       ├── reviewer.py        independent LLM reviewer (layer 2)
 │       ├── self_verify.py      cheap diff-vs-ticket scoring, never blocks review
@@ -249,6 +249,11 @@ If a job file grows past ~50 lines, the logic belongs in the package.
   open for a person rather than closed. `guardrails.py` stays pure — every gate is a function
   over data, so a planted violation is a unit test — and all subprocess/file I/O lives in
   `gate_runner.py`. A gate that cannot run is a FAILURE, never a skip.
+- DO NOT exempt files from a gate by name (ADR-025). A gate must be judged against the repo's
+  real filenames, not invented ones: the first scope-affinity gate exempted anything matching
+  `pipeline|doctor|api|sync|data_layer|pure_core|llm_seam`, which silenced it on 8 of 12 actual
+  test files while its unit test passed against a filename the repo does not contain. Gates
+  decide on evidence — file contents, diff facts — and their tests enumerate `tests/`.
 - DO NOT let `dev_agent`'s coding-model selection go through `meeting_notes/llm_client.py`.
   That seam's contract (`chat_json`/`embed`, temperature 0, extraction-shaped) is for meeting
   data; invoking a headless coding agent is a different kind of call entirely — a subprocess

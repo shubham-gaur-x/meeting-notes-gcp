@@ -348,6 +348,69 @@ def parse_diff(diff: str) -> DiffFacts:
     )
 
 
+def _is_test_path(path: str) -> bool:
+    p = path.replace("\\", "/")
+    return p.startswith("tests/") or p.split("/")[-1].startswith("test_")
+
+
+# A ticket that is itself about tests legitimately touches only tests.
+_TEST_TICKET_RE = re.compile(r"\btests?\b|\bcoverage\b", re.IGNORECASE)
+
+_ASSERTION_MARKERS = ("assert", "pytest.raises", "pytest.warns", "self.assert")
+
+
+def gate_scope_affinity(
+    changed_files: Sequence[str],
+    file_contents: dict[str, str],
+    ticket_description: str = "",
+) -> GateResult:
+    """Catch the agent making the suite green by editing the suite.
+
+    Two rules, both chosen because a failed gate escalates to NEEDS_HUMAN and
+    that is terminal -- a gate that cries wolf permanently stops good runs, so
+    precision matters more than recall here.
+
+    1. Tests changed and no implementation file changed at all. An agent that
+       has implemented a ticket has, by definition, touched something other
+       than a test.
+    2. A changed test file that no longer asserts anything. A test with no
+       assertion cannot fail, which is the most direct way to turn a red suite
+       green without fixing the code.
+
+    Filename affinity -- pairing `tests/test_foo.py` with `foo.py` -- was tried
+    first and removed. This repo's tests are `test_phaseNN_<area>.py` and
+    deliberately do not map one-to-one onto modules, so the pairing never held
+    and needed a keyword exemption list to stay quiet. That list ("sync",
+    "api", "pipeline", "data_layer", "pure_core", "llm_seam", "doctor",
+    "dev_agent") happened to spell out most of the suite: it exempted 8 of 12
+    real test files, leaving a gate that fired only on filenames the repo does
+    not contain. Its unit test passed because it invented one.
+    """
+    violations: list[str] = []
+    test_files = [f for f in changed_files if _is_test_path(f)]
+    impl_files = [f for f in changed_files if not _is_test_path(f)]
+
+    if test_files and not impl_files and not _TEST_TICKET_RE.search(ticket_description):
+        violations.append(
+            "tests changed with no implementation change: " + ", ".join(sorted(test_files))
+        )
+
+    for path in sorted(test_files):
+        content = file_contents.get(path)
+        if content is None:
+            # Cannot be judged, so it is not waved through: a gate that cannot
+            # run is a failure, never a skip (CLAUDE.md).
+            violations.append(f"no content supplied to verify assertions in {path}")
+        elif not any(marker in content for marker in _ASSERTION_MARKERS):
+            violations.append(f"test file asserts nothing after the change: {path}")
+
+    return GateResult(
+        name="scope_affinity",
+        passed=not violations,
+        evidence="clean" if not violations else "; ".join(violations),
+    )
+
+
 # ─── aggregate ────────────────────────────────────────────────────────────────
 
 
@@ -365,7 +428,7 @@ def evaluate_gates(
     max_files: int = 10,
     max_lines: int = 600,
 ) -> list[GateResult]:
-    """Run all seven gates over one PR.
+    """Run all eight gates over one PR.
 
     Pure: the caller runs the test/lint/typecheck commands and reads the
     changed files, then hands the results in. That keeps every gate — and this
@@ -380,6 +443,7 @@ def evaluate_gates(
         gate_no_new_deps(facts.changed_files, ticket_description, facts.added_dependency_lines),
         gate_secret_scan(facts.added_lines),
         gate_module_boundaries(file_contents),
+        gate_scope_affinity(facts.changed_files, file_contents, ticket_description),
     ]
 
 

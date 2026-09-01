@@ -1181,7 +1181,7 @@ def test_evaluate_gates_returns_every_gate() -> None:
     )
     assert {r.name for r in results} == {
         "tests_green", "lint_type_clean", "diff_budget",
-        "protected_paths", "no_new_deps", "secret_scan", "module_boundaries",
+        "protected_paths", "no_new_deps", "secret_scan", "module_boundaries", "scope_affinity",
     }
 
 
@@ -1303,6 +1303,82 @@ async def test_a_planted_secret_in_the_diff_blocks_the_ship_through_the_real_gat
     calls = await _process({"key": "SCRUM-6", "summary": "s"}, diff=leaked, run_gates=real_gates)
     assert calls["finishes"][0][0] == lifecycle.NEEDS_HUMAN
     assert "secret_scan" in "\n".join(calls["comments"])
+
+
+_REAL_TEST = "tests/test_phase08_api.py"
+_ASSERTING = "def test_x() -> None:\n    assert 1 == 1\n"
+
+
+def test_gate_scope_affinity_blocks_a_test_only_change() -> None:
+    """Implementing a ticket touches something other than a test."""
+    res = gr.gate_scope_affinity(
+        [_REAL_TEST],
+        {_REAL_TEST: _ASSERTING},
+        ticket_description="Fix Jira ticket formatting",
+    )
+    assert res.passed is False
+    assert "no implementation change" in res.evidence
+
+
+def test_gate_scope_affinity_blocks_a_test_stripped_of_assertions() -> None:
+    """A test that asserts nothing cannot fail, which is the cheapest way to
+    turn a red suite green without touching the code."""
+    res = gr.gate_scope_affinity(
+        ["meeting_notes/jira_client.py", _REAL_TEST],
+        {_REAL_TEST: "def test_x() -> None:\n    pass\n"},
+        ticket_description="Fix Jira ticket formatting",
+    )
+    assert res.passed is False
+    assert "asserts nothing" in res.evidence
+
+
+def test_gate_scope_affinity_passes_a_normal_change() -> None:
+    res = gr.gate_scope_affinity(
+        ["meeting_notes/jira_client.py", _REAL_TEST],
+        {_REAL_TEST: _ASSERTING},
+        ticket_description="Fix Jira ticket formatting",
+    )
+    assert res.passed is True
+
+
+def test_gate_scope_affinity_allows_a_ticket_that_is_about_tests() -> None:
+    res = gr.gate_scope_affinity(
+        [_REAL_TEST],
+        {_REAL_TEST: _ASSERTING},
+        ticket_description="Add missing test coverage for the dedup threshold",
+    )
+    assert res.passed is True
+
+
+def test_gate_scope_affinity_cannot_be_silenced_by_withholding_content() -> None:
+    """A gate that cannot run is a failure, never a skip (CLAUDE.md)."""
+    res = gr.gate_scope_affinity(
+        ["meeting_notes/jira_client.py", _REAL_TEST],
+        {},
+        ticket_description="Fix Jira ticket formatting",
+    )
+    assert res.passed is False
+    assert "no content supplied" in res.evidence
+
+
+def test_gate_scope_affinity_sees_the_repos_real_test_filenames() -> None:
+    """The rejected filename-affinity version exempted 8 of these 12 by keyword.
+
+    Every real test file must be judged on evidence, not on whether its name
+    happens to contain "sync", "api", "pipeline" or "data_layer".
+    """
+    from pathlib import Path
+
+    real = sorted(str(p).replace("\\", "/") for p in Path("tests").glob("test_*.py"))
+    assert len(real) >= 10, "expected the full phase suite to be present"
+
+    for path in real:
+        gutted = gr.gate_scope_affinity(
+            ["meeting_notes/jira_client.py", path],
+            {path: "def test_x() -> None:\n    pass\n"},
+            ticket_description="Fix Jira ticket formatting",
+        )
+        assert gutted.passed is False, f"{path} was waved through"
 
 
 async def test_gate_failure_is_not_fatal_to_the_run_bookkeeping() -> None:
