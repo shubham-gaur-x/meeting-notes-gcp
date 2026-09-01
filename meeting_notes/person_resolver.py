@@ -40,8 +40,19 @@ def normalize_email(email: str | None) -> str:
     return f"{local}@{domain}"
 
 
-def _norm_name(n: str | None) -> str:
+def normalize_name(n: str | None) -> str:
+    """Lowercase, trim, and collapse internal whitespace.
+
+    Public because `graph_client` resolves action-item owners against a
+    meeting's attendee roster and has to normalise names the same way this
+    module does. Two spellings of "normalise" is how the two ends of a match
+    drift apart, so there is one implementation and callers import it.
+    """
     return re.sub(r"\s+", " ", (n or "").strip().lower())
+
+
+# Retained: this module refers to it by the private name throughout.
+_norm_name = normalize_name
 
 
 def _name_sim(a: str, b: str) -> float:
