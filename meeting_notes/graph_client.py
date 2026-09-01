@@ -227,10 +227,39 @@ async def _write_attendees(tx: Any, resolved: Any, meeting_id: str, now: str) ->
 
 
 async def _write_person_reviews(
-    tx: Any, reviews: Any, source_id: str, meeting_id: str, now: str
+    tx: Any,
+    reviews: Any,
+    source_id: str,
+    meeting_id: str,
+    now: str,
+    *,
+    attendees_resolved: int = 0,
 ) -> None:
-    """Attendees that could not be resolved are HELD for review, never dropped."""
-    for rev in reviews:
+    """Attendees that could not be resolved are HELD for review, never dropped.
+
+    Stale *pending* reviews are pruned, so a name the extractor no longer
+    produces stops sitting in the queue. Three things this deliberately does
+    not do, each of which the first version did:
+
+    - It does not delete resolved reviews. `r.status = 'resolved'` and
+      `r.resolved_to` are the only record that a person judged the case, and
+      every reader (`get_pending_person_reviews`, the meeting detail query)
+      already filters on `pending`, so a resolved node costs nothing and
+      deleting it destroys the audit trail for no gain.
+    - It does not prune when the extraction produced nobody at all. Emptiness
+      is ambiguous: "everyone resolved" and "the model returned nothing this
+      run" look identical here, and only one of them means the queue is stale.
+      Pruning on both wipes a human's review queue on a transient bad
+      extraction, silently.
+    - It prunes on every write, not only when `reviews` is empty. Pruning only
+      in the empty case is backwards -- it left stale entries behind in exactly
+      the runs that produced a new set to compare against.
+    """
+    keep_ids = [
+        uuid5_id("person-review", f"{source_id}:{rev.name}:{rev.role}") for rev in reviews
+    ]
+
+    for rev, review_id in zip(reviews, keep_ids, strict=True):
         await tx.run(
             """
             MERGE (r:PersonReview {id: $id})
@@ -241,13 +270,26 @@ async def _write_person_reviews(
             MATCH (m:Meeting {id: $meeting_id})
             MERGE (m)-[:NEEDS_REVIEW]->(r)
             """,
-            id=uuid5_id("person-review", f"{source_id}:{rev.name}:{rev.role}"),
+            id=review_id,
             name=rev.name,
             role=rev.role,
             reason=rev.reason,
             meeting_id=meeting_id,
             now=now,
         )
+
+    if not (reviews or attendees_resolved):
+        return
+
+    await tx.run(
+        """
+        MATCH (m:Meeting {id: $meeting_id})-[:NEEDS_REVIEW]->(r:PersonReview)
+        WHERE coalesce(r.status, 'pending') = 'pending' AND NOT r.id IN $keep_ids
+        DETACH DELETE r
+        """,
+        meeting_id=meeting_id,
+        keep_ids=keep_ids,
+    )
 
 
 async def _write_topics(tx: Any, topics: list[str], meeting_id: str, now: str) -> None:
@@ -514,7 +556,9 @@ async def upsert_meeting_graph(
             await _write_meeting(tx, meeting, meeting_id, source_id, now)
             await _link_cross_source_duplicates(tx, meeting_id, meeting.title, str(meeting.date), now)
             await _write_attendees(tx, resolved, meeting_id, now)
-            await _write_person_reviews(tx, reviews, source_id, meeting_id, now)
+            await _write_person_reviews(
+                tx, reviews, source_id, meeting_id, now, attendees_resolved=len(resolved)
+            )
             await _write_topics(tx, meeting.topics, meeting_id, now)
             await _write_decisions(tx, meeting.decisions, source_id, meeting_id, now)
             await _write_blockers(tx, meeting.blockers, source_id, meeting_id, now)
