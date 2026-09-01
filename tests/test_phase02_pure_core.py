@@ -299,9 +299,141 @@ def test_marketing_noise_short_circuits_to_zero() -> None:
 
 
 def test_a_single_noise_marker_does_not_short_circuit() -> None:
-    """The gate is >= 2. One stray 'unsubscribe' in a genuine thread is not
+    """The gate is >= 2 unless from an automated sender. One stray 'unsubscribe' in a genuine thread is not
     enough to discard it."""
     assert classify("Standup agenda. Unsubscribe link at the bottom.", {}) > 0.0
+
+
+def test_otp_and_verification_emails_score_zero() -> None:
+    """2FA codes and sign-in alerts must score 0.0 even when meeting-like
+    signal is present in the same text.
+
+    On master these strings score > 0.40 (they contain attendees, action verbs,
+    and scheduling language). This branch's rules must drop them to 0.0.
+    """
+    # verification code + meeting-like body (action item, attendees metadata)
+    text = (
+        "Your verification code is 6TV-QF8. Enter this security code to continue. "
+        "This is your sign-in notification for the weekly sync meeting."
+    )
+    assert classify(text, {"attendees": ["alice@corp.com"], "start_time": "10:00"}) == 0.0
+
+    # one-time passcode alongside scheduling language
+    otp_text = (
+        "Your one-time passcode for Databricks SSO is 849201. "
+        "Action required: submit your review by Thursday. Meeting prep enclosed."
+    )
+    assert classify(otp_text, {"attendees": ["bob@corp.com"]}) == 0.0
+
+
+def test_no_reply_senders_with_noise_score_zero() -> None:
+    """A single weak-tier noise hit from an automated (no-reply) sender must
+    score 0.0. The same text from a human sender must NOT be blocked by
+    the automated-sender short-circuit alone.
+
+    High-confidence patterns (timecard, OTP, OOF) always score 0.0 regardless
+    of sender — those are tested in test_otp_and_verification_emails_score_zero
+    and test_enterprise_noise_patterns_score_zero above.
+    """
+    # Weak noise hit ("unsubscribe") + no-reply sender → 0.0
+    footer_text = "Standup agenda recap. Unsubscribe from this list."
+    assert classify(footer_text, {"from": "no-reply@notify.docker.com"}) == 0.0
+    assert classify(footer_text, {"from": "notifications@updates.acme.com"}) == 0.0
+    # Same weak noise hit from a human sender → still scores (only 1 weak hit, not automated)
+    assert classify(footer_text, {"from": "manager@acme.com"}) > 0.0
+
+
+
+def test_enterprise_noise_patterns_score_zero() -> None:
+    """Out of office, password resets, and invoices must score 0.0 even when
+    the body contains meeting-like language that would score > 0.40 on master.
+    """
+    # Out-of-office with meeting scheduling language (would score on master)
+    oof = (
+        "Automatic reply: I am out of office until Monday. "
+        "For our weekly sync meeting agenda please contact alice@corp.com."
+    )
+    assert classify(oof, {"attendees": ["alice@corp.com"], "start_time": "10:00"}) == 0.0
+
+    # Password reset with action-item language (would score on master)
+    pwd = (
+        "Click here to reset your password. Temporary password enclosed. "
+        "Action required: complete this step by EOD. Meeting credentials attached."
+    )
+    assert classify(pwd, {"attendees": ["bob@corp.com"]}) == 0.0
+
+    # Billing statement with scheduling context (would score on master)
+    bill = (
+        "Your payment received. Order R-44Z confirmed with billing statement. "
+        "Quarterly review meeting scheduled. Duration 60 minutes."
+    )
+    assert classify(bill, {"attendees": ["finance@corp.com"], "start_time": "14:00"}) == 0.0
+
+
+
+def test_operational_words_do_not_discard_a_genuine_meeting() -> None:
+    """The mirror of the noise tests above, and the one they were missing.
+
+    Every noise test asserts that junk scores 0.0. None asserted that a real
+    thread mentioning the same word SURVIVES -- so `timecard`, `invoice #`,
+    `reset your password` and an unanchored `order .* confirmed` all sat in the
+    tier that discards on a single match, and each of the threads below scored
+    0.0 before extraction ever saw them. Nothing reports that loss, which is
+    why it has to be a test rather than something noticed in the graph.
+    """
+    human = {"from": "katrisa.brock@onixnet.com", "attendees": ["a@b.c"], "start_time": "10:00"}
+
+    # A payroll nag is noise; a project ABOUT payroll is the work itself.
+    assert classify(
+        "Weekly sync agenda: timecard system migration kickoff. "
+        "Action item: Michael to confirm the rollout deadline.",
+        human,
+    ) > 0.0
+
+    # `order .* confirmed` used to span the whole body and join these two
+    # ordinary words across a sentence.
+    assert classify(
+        "In order to move forward we need the design confirmed by Friday. "
+        "Meeting agenda attached, action items for each attendee.",
+        human,
+    ) > 0.0
+
+    assert classify(
+        "Discussed the invoice #443 dispute in the ops meeting. "
+        "Decision: escalate to finance. Action item due next week.",
+        human,
+    ) > 0.0
+
+    assert classify(
+        "Reviewed the reset your password flow spec for the portal. "
+        "Meeting notes: agenda, decision, and action items recorded.",
+        human,
+    ) > 0.0
+
+
+def test_operational_noise_still_drops_with_corroboration() -> None:
+    """Softening the tier must not reopen the hole it was added to close.
+
+    A real HR or billing notification either says two of these things or comes
+    from a machine address, so both routes still score 0.0.
+    """
+    # Two operational hits, human-looking sender: still noise.
+    assert classify(
+        "Your timecard is missing time for the week ending Friday.",
+        {"from": "workday@onixnet.com"},
+    ) == 0.0
+
+    # One operational hit, but nobody is home at the sender.
+    assert classify(
+        "Reminder: submit your timecard.",
+        {"from": "no-reply@workday.com"},
+    ) == 0.0
+
+    # A genuine order confirmation still matches the bounded pattern.
+    assert classify(
+        "Your order #R44Z has been confirmed. Payment received.",
+        {"from": "receipts@shop.com"},
+    ) == 0.0
 
 
 def test_a_real_meeting_scores_above_the_default_threshold() -> None:
