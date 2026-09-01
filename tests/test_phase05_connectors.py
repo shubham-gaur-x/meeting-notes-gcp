@@ -721,7 +721,7 @@ def test_job_entrypoints_stay_thin() -> None:
     belongs in the package. That rule erodes silently, so it gets a test."""
     jobs_dir = _Path(__file__).resolve().parent.parent / "jobs"
     for job in jobs_dir.glob("*.py"):
-        lines = [ln for ln in job.read_text().splitlines() if ln.strip()]
+        lines = [ln for ln in job.read_text(encoding="utf-8").splitlines() if ln.strip()]
         assert len(lines) <= 50, f"{job.name} has {len(lines)} lines — move logic into the package"
 
 
@@ -730,7 +730,7 @@ def test_job_entrypoints_do_not_contain_business_logic() -> None:
     jobs_dir = _Path(__file__).resolve().parent.parent / "jobs"
     banned = ("httpx", "asyncpg", "SELECT ", "MERGE ", "for ", "while ")
     for job in jobs_dir.glob("*.py"):
-        body = job.read_text()
+        body = job.read_text(encoding="utf-8")
         for token in banned:
             assert token not in body, f"{job.name} contains {token!r} — that belongs in the package"
 

@@ -549,7 +549,7 @@ def test_gemini_backend_uses_its_own_cli_home(tmp_path) -> None:
     home = tmp_path / "gemini-home"
     env = dab.resolve_backend_env("gemini", _settings(DEV_AGENT_GEMINI_CLI_HOME=str(home)))
     assert env["GEMINI_CLI_HOME"] == str(home)
-    written = json.loads((home / ".gemini" / "settings.json").read_text())
+    written = json.loads((home / ".gemini" / "settings.json").read_text(encoding="utf-8"))
     assert written["security"]["auth"]["selectedType"] == "vertex-ai"
 
 
@@ -560,7 +560,7 @@ def test_ensure_cli_home_overwrites_a_stale_auth_selection(tmp_path) -> None:
         json.dumps({"security": {"auth": {"selectedType": "oauth-personal"}}})
     )
     dab.ensure_cli_home(_settings(DEV_AGENT_GEMINI_CLI_HOME=str(home)))
-    written = json.loads((home / ".gemini" / "settings.json").read_text())
+    written = json.loads((home / ".gemini" / "settings.json").read_text(encoding="utf-8"))
     assert written["security"]["auth"]["selectedType"] == "vertex-ai"
 
 
@@ -616,7 +616,7 @@ def test_dev_agent_never_imports_llm_client() -> None:
     import re
     from pathlib import Path
 
-    source = Path(dab.__file__).read_text()
+    source = Path(dab.__file__).read_text(encoding="utf-8")
     importing = re.compile(r"^\s*(from\s+\S*llm_client\S*\s+import|import\s+\S*llm_client)", re.M)
     assert not importing.search(source)
 
@@ -1493,7 +1493,7 @@ def test_the_cli_home_settings_land_where_the_cli_actually_reads_them(tmp_path) 
     target = home / ".gemini" / "settings.json"
     assert target.exists(), f"settings.json must be at {target}, the path the CLI reads"
     assert (
-        _json.loads(target.read_text())["security"]["auth"]["selectedType"] == "vertex-ai"
+        _json.loads(target.read_text(encoding="utf-8"))["security"]["auth"]["selectedType"] == "vertex-ai"
     )
 
 

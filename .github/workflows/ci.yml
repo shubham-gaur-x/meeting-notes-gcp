@@ -1,0 +1,45 @@
+name: CI
+
+# Every check here must pass with no live GCP, no database and no LLM
+# (CLAUDE.md). The runner has no credentials, so a test that needs them fails
+# here rather than passing quietly on someone's laptop.
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      # Each step runs even when an earlier one fails, so a PR with a lint
+      # error and a test failure reports both at once instead of making the
+      # author discover them over two pushes.
+      - name: ruff
+        if: ${{ !cancelled() }}
+        run: python -m ruff check meeting_notes api jobs scripts tests
+
+      - name: mypy
+        if: ${{ !cancelled() }}
+        run: python -m mypy meeting_notes api jobs scripts
+
+      - name: pytest
+        if: ${{ !cancelled() }}
+        run: python -m pytest tests/ -q

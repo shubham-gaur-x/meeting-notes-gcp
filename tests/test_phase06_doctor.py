@@ -148,7 +148,8 @@ def test_required_ports_match_what_compose_actually_publishes() -> None:
     """
     import re
 
-    compose = (Path(__file__).resolve().parent.parent / "docker-compose.local.yml").read_text()
+    compose_path = Path(__file__).resolve().parent.parent / "docker-compose.local.yml"
+    compose = compose_path.read_text(encoding="utf-8")
     published = {int(m) for m in re.findall(r'^\s+-\s+"(\d+):\d+"', compose, re.M)}
 
     # The API is not in compose -- it runs on the host during Phases 3-8 -- so
