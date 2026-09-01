@@ -23,6 +23,7 @@ Two changes from v5:
 from __future__ import annotations
 
 import json
+import re
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -157,6 +158,8 @@ async def _write_meeting(
         MERGE (m:Meeting {id: $id})
         ON CREATE SET m.created_at = $now, m.relevance_weight = 1.0
         SET m.title = $title,
+            m.title_norm = $title_norm,
+            m.is_recap = $is_recap,
             m.kind = $kind,
             m.platform = $platform,
             m.date = $date,
@@ -170,6 +173,8 @@ async def _write_meeting(
         """,
         id=meeting_id,
         title=meeting.title,
+        title_norm=normalize_meeting_title(meeting.title),
+        is_recap=is_recap_title(meeting.title),
         kind=meeting.kind,
         platform=meeting.platform,
         date=str(meeting.date),
@@ -181,7 +186,6 @@ async def _write_meeting(
         source_id=source_id,
         now=now,
     )
-
 
 async def _write_attendees(tx: Any, resolved: Any, meeting_id: str, now: str) -> None:
     """Person + Organization + ATTENDED, one statement per attendee.
@@ -368,6 +372,111 @@ async def _write_action_items(
         )
 
 
+_RECAP_PREFIX_RE = re.compile(
+    r"^\s*(re:|fwd?:)?\s*(recap|notes|minutes|summary|follow[- ]?up|transcript)\b\s*[:\-–]?",
+    re.IGNORECASE,
+)
+
+# Routing noise with no bearing on which meeting a title refers to.
+_TITLE_PREFIX_RE = re.compile(
+    r"^\s*(re:|fwd:|fw:|recap:|notes:|minutes:|summary:|follow[- ]?up:|urgent:|action required:)\s*",
+    re.IGNORECASE,
+)
+
+
+def normalize_meeting_title(title: str) -> str:
+    """Strip routing prefixes and punctuation, lowercase, collapse whitespace.
+
+    Both sides of a title comparison run through this and the result is stored
+    on the node as `title_norm`. The original of this compared a normalised
+    string against `toLower(m2.title)`, which is not normalised -- an ampersand
+    on one side and not the other, so "Recap: Architecture & API Design Sync"
+    never matched "Architecture & API Design Sync" and the feature never fired.
+    Normalising one side of an equality is the whole bug, so there is one
+    function and the graph stores what it returns.
+    """
+    cleaned = title or ""
+    # Prefixes stack: "Re: Fwd: Recap: ...". Strip until none is left.
+    while True:
+        stripped = _TITLE_PREFIX_RE.sub("", cleaned, count=1)
+        if stripped == cleaned:
+            break
+        cleaned = stripped
+    cleaned = re.sub(r"[^\w\s]", " ", cleaned).lower()
+    return " ".join(cleaned.split())
+
+
+def is_recap_title(title: str) -> bool:
+    """Whether a title announces itself as a recap of some other meeting."""
+    return bool(_RECAP_PREFIX_RE.match(title or ""))
+
+
+def _adjacent_dates(date: str) -> list[str]:
+    """The date and its two neighbours, ISO, for the recap match window.
+
+    A recap is normally written the morning after. Matching only on an exact
+    date -- which is what this did -- misses the ordinary case and catches
+    mainly same-day duplicates.
+    """
+    try:
+        d = datetime.fromisoformat(str(date)).date()
+    except ValueError:
+        return [str(date)]
+    return [(d + timedelta(days=n)).isoformat() for n in (-1, 0, 1)]
+
+
+# Chosen in Python from `is_recap`, never interpolated from data: whichever
+# side announced itself as a recap points at the other.
+_MERGE_M1_IS_RECAP = "MERGE (m1)-[r:RECAP_OF]->(m2)"
+_MERGE_M2_IS_RECAP = "MERGE (m2)-[r:RECAP_OF]->(m1)"
+
+
+async def _link_cross_source_duplicates(
+    tx: Any, meeting_id: str, title: str, date: str, now: str
+) -> None:
+    """Link a recap to the meeting it recaps, when that is unambiguous.
+
+    Deliberately narrow, on exact equality of the normalised titles. The
+    original matched with `CONTAINS` in both directions, which links any
+    meeting whose title is a substring of another's -- one meeting called
+    "Sync" would attach itself to every other meeting that day. A missed link
+    costs a little context; a wrong RECAP_OF feeds a false claim to the LLM
+    and to anyone reading the graph, so this errs toward missing.
+
+    Only one direction is stored. RECAP_OF and its inverse HAS_RECAP were both
+    written, which is two rows to keep in agreement for no gain -- the
+    traversal is equally cheap either way.
+
+    Nothing links unless exactly one side is a recap. Two same-titled meetings
+    on one day with neither marked are a genuine cross-source duplicate, which
+    wants the nodes merged rather than related, and that is not this change.
+    """
+    norm = normalize_meeting_title(title)
+    if not norm or not date:
+        return
+
+    merge_clause = _MERGE_M1_IS_RECAP if is_recap_title(title) else _MERGE_M2_IS_RECAP
+    await tx.run(
+        f"""
+        MATCH (m1:Meeting {{id: $meeting_id}})
+        MATCH (m2:Meeting)
+        WHERE m2.id <> $meeting_id
+          AND m2.date IN $dates
+          AND m2.title_norm = $norm
+          AND coalesce(m2.is_recap, false) = $other_is_recap
+        {merge_clause}
+        ON CREATE SET r.created_at = $now,
+                      r.confidence = CASE WHEN m2.date = $date THEN 0.9 ELSE 0.75 END
+        """,
+        meeting_id=meeting_id,
+        norm=norm,
+        date=str(date),
+        dates=_adjacent_dates(date),
+        other_is_recap=not is_recap_title(title),
+        now=now,
+    )
+
+
 async def upsert_meeting_graph(
     meeting: ExtractedMeeting,
     source_id: str,
@@ -403,6 +512,7 @@ async def upsert_meeting_graph(
     async with driver.session() as session:
         async with await session.begin_transaction() as tx:
             await _write_meeting(tx, meeting, meeting_id, source_id, now)
+            await _link_cross_source_duplicates(tx, meeting_id, meeting.title, str(meeting.date), now)
             await _write_attendees(tx, resolved, meeting_id, now)
             await _write_person_reviews(tx, reviews, source_id, meeting_id, now)
             await _write_topics(tx, meeting.topics, meeting_id, now)
