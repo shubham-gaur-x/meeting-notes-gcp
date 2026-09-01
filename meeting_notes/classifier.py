@@ -54,16 +54,15 @@ _TIME_PATTERNS = [
     re.compile(r"\bminute(s)?\b", re.I),
 ]
 
-_EMAIL_NOISE_PATTERNS = [
-    re.compile(r"\bunsubscribe\b", re.I),
-    re.compile(r"\bpromotion\b", re.I),
-    re.compile(r"\bnewsletter\b", re.I),
-    re.compile(r"\bno[-.]?reply\b", re.I),
-    re.compile(r"\bdonotreply\b", re.I),
-    re.compile(r"\bmarketing\b", re.I),
+# High-confidence automated-noise patterns: a single match is enough to
+# discard the email regardless of sender. These patterns are unambiguous —
+# no genuine meeting thread contains a one-time passcode or out-of-office
+# header. Contrast with _EMAIL_NOISE_PATTERNS_WEAK below, which need >= 2
+# hits (or a no-reply sender) to avoid false positives.
+_EMAIL_NOISE_PATTERNS_HIGH = [
     # 2FA / OTP / Sign-in alerts
-    re.compile(r"\bverification code\b", re.I),
     re.compile(r"\bone-time (code|passcode|password)\b", re.I),
+    re.compile(r"\bverification code\b", re.I),
     re.compile(r"\bsecurity code\b", re.I),
     re.compile(r"\bsign-on notification\b", re.I),
     re.compile(r"\bnew login to\b", re.I),
@@ -80,19 +79,42 @@ _EMAIL_NOISE_PATTERNS = [
     re.compile(r"\b(phishing simulation|security awareness)\b", re.I),
 ]
 
+# Weak patterns: common in automated emails but also appear in legitimate
+# threads. Require >= 2 matches (or a no-reply sender + >= 1 match) to drop.
+_EMAIL_NOISE_PATTERNS_WEAK = [
+    re.compile(r"\bunsubscribe\b", re.I),
+    re.compile(r"\bpromotion\b", re.I),
+    re.compile(r"\bnewsletter\b", re.I),
+    re.compile(r"\bno[-.]?reply\b", re.I),
+    re.compile(r"\bdonotreply\b", re.I),
+    re.compile(r"\bmarketing\b", re.I),
+]
+
+# Keep the old name as a combined alias for backwards compatibility with any
+# direct imports in tests; classify() now uses the split lists above.
+_EMAIL_NOISE_PATTERNS = _EMAIL_NOISE_PATTERNS_HIGH + _EMAIL_NOISE_PATTERNS_WEAK
+
 
 def classify(text: str, metadata: dict[str, Any]) -> float:
     score = 0.0
     text_lower = text.lower()
     words = set(re.findall(r"\b\w+\b", text_lower))
 
-    # Penalty for noise patterns (marketing/auto emails/auth alerts)
-    noise_hits = sum(1 for p in _EMAIL_NOISE_PATTERNS if p.search(text))
-    if noise_hits >= 1:
+    # Penalty for noise patterns (marketing/auto emails/auth alerts).
+    # High-confidence patterns (OTP, out-of-office, password reset, etc.) drop
+    # the score immediately on a single match — no legitimate meeting thread
+    # contains these phrases. Weaker patterns (unsubscribe, marketing, etc.)
+    # require >= 2 hits, or >= 1 hit from an automated sender, to avoid
+    # discarding genuine threads with incidental noise words.
+    if any(p.search(text) for p in _EMAIL_NOISE_PATTERNS_HIGH):
+        return 0.0
+
+    weak_hits = sum(1 for p in _EMAIL_NOISE_PATTERNS_WEAK if p.search(text))
+    if weak_hits >= 1:
         sender = str(metadata.get("from", "")).lower()
         if any(term in sender for term in ("no-reply", "noreply", "donotreply", "notifications")):
             return 0.0
-        if noise_hits >= 2:
+        if weak_hits >= 2:
             return 0.0
 
     # Signal 1: meeting keywords in subject/title (strong signal)

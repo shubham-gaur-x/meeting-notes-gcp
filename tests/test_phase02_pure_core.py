@@ -305,24 +305,70 @@ def test_a_single_noise_marker_does_not_short_circuit() -> None:
 
 
 def test_otp_and_verification_emails_score_zero() -> None:
-    """2FA codes and sign-in alerts must always score 0.0."""
-    text = "Your verification code is 6TV-QF8. Enter this security code to verify."
-    assert classify(text, {}) == 0.0
-    assert classify("Your one-time passcode for Databricks SSO is 849201", {}) == 0.0
+    """2FA codes and sign-in alerts must score 0.0 even when meeting-like
+    signal is present in the same text.
+
+    On master these strings score > 0.40 (they contain attendees, action verbs,
+    and scheduling language). This branch's rules must drop them to 0.0.
+    """
+    # verification code + meeting-like body (action item, attendees metadata)
+    text = (
+        "Your verification code is 6TV-QF8. Enter this security code to continue. "
+        "This is your sign-in notification for the weekly sync meeting."
+    )
+    assert classify(text, {"attendees": ["alice@corp.com"], "start_time": "10:00"}) == 0.0
+
+    # one-time passcode alongside scheduling language
+    otp_text = (
+        "Your one-time passcode for Databricks SSO is 849201. "
+        "Action required: submit your review by Thursday. Meeting prep enclosed."
+    )
+    assert classify(otp_text, {"attendees": ["bob@corp.com"]}) == 0.0
 
 
 def test_no_reply_senders_with_noise_score_zero() -> None:
-    """Automated notifications from no-reply senders must score 0.0."""
-    text = "Submit your timecard by Friday EOD for payroll processing."
-    assert classify(text, {"from": "no-reply@notify.docker.com"}) == 0.0
-    assert classify(text, {"from": "sf-user@onixnet.com"}) == 0.0
+    """A single weak-tier noise hit from an automated (no-reply) sender must
+    score 0.0. The same text from a human sender must NOT be blocked by
+    the automated-sender short-circuit alone.
+
+    High-confidence patterns (timecard, OTP, OOF) always score 0.0 regardless
+    of sender — those are tested in test_otp_and_verification_emails_score_zero
+    and test_enterprise_noise_patterns_score_zero above.
+    """
+    # Weak noise hit ("unsubscribe") + no-reply sender → 0.0
+    footer_text = "Standup agenda recap. Unsubscribe from this list."
+    assert classify(footer_text, {"from": "no-reply@notify.docker.com"}) == 0.0
+    assert classify(footer_text, {"from": "notifications@updates.acme.com"}) == 0.0
+    # Same weak noise hit from a human sender → still scores (only 1 weak hit, not automated)
+    assert classify(footer_text, {"from": "manager@acme.com"}) > 0.0
+
 
 
 def test_enterprise_noise_patterns_score_zero() -> None:
-    """Out of office, password resets, and invoices must score 0.0."""
-    assert classify("Automatic reply: I am currently out of office until Monday.", {}) == 0.0
-    assert classify("Click here to reset your password. Temporary password enclosed.", {}) == 0.0
-    assert classify("Your payment received. Order R-44Z confirmed with billing statement.", {}) == 0.0
+    """Out of office, password resets, and invoices must score 0.0 even when
+    the body contains meeting-like language that would score > 0.40 on master.
+    """
+    # Out-of-office with meeting scheduling language (would score on master)
+    oof = (
+        "Automatic reply: I am out of office until Monday. "
+        "For our weekly sync meeting agenda please contact alice@corp.com."
+    )
+    assert classify(oof, {"attendees": ["alice@corp.com"], "start_time": "10:00"}) == 0.0
+
+    # Password reset with action-item language (would score on master)
+    pwd = (
+        "Click here to reset your password. Temporary password enclosed. "
+        "Action required: complete this step by EOD. Meeting credentials attached."
+    )
+    assert classify(pwd, {"attendees": ["bob@corp.com"]}) == 0.0
+
+    # Billing statement with scheduling context (would score on master)
+    bill = (
+        "Your payment received. Order R-44Z confirmed with billing statement. "
+        "Quarterly review meeting scheduled. Duration 60 minutes."
+    )
+    assert classify(bill, {"attendees": ["finance@corp.com"], "start_time": "14:00"}) == 0.0
+
 
 
 def test_a_real_meeting_scores_above_the_default_threshold() -> None:
