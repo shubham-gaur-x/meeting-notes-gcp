@@ -930,3 +930,88 @@ async def test_suggested_questions_endpoint(app: Any, monkeypatch: Any) -> None:
     assert body["count"] == 2
     assert len(body["questions"]) == 2
     assert body["questions"][0]["category"] == "🎯 Project Action"
+
+
+async def test_jira_webhook_accepts_issue_update(app: Any, monkeypatch: Any) -> None:
+    import api.routers.webhooks as wh
+
+    seen: list[str] = []
+
+    async def fake_refresh(key: str) -> None:
+        seen.append(key)
+
+    monkeypatch.setattr(wh, "_refresh_issue_from_jira", fake_refresh)
+    payload = {
+        "webhookEvent": "jira:issue_updated",
+        "issue": {"key": "MDP-25", "fields": {"status": {"name": "Done"}}},
+    }
+    response = await _post(app, "/webhook/jira", json=payload)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "accepted"
+    assert body["key"] == "MDP-25"
+    assert seen == ["MDP-25"], "the webhook must schedule an authenticated re-read"
+
+
+def _sync_settings(app: Any, *, token: str, project: str) -> None:
+    """Override the route's settings dependency, keyed on `settings_dep` itself.
+
+    No module attribute is rebound, so this cannot be defeated by how the route
+    happens to import its settings. The `app` fixture builds a fresh app per
+    test, so the override dies with it.
+    """
+    from api.deps import settings_dep
+    from meeting_notes.config import get_settings
+
+    real = get_settings()
+    fake = real.model_copy(
+        update={"jira_sync_trigger_token": token, "gcp_project_id": project}
+    )
+    app.dependency_overrides[settings_dep] = lambda: fake
+
+
+async def test_jira_sync_endpoint(app: Any, monkeypatch: Any) -> None:
+    from meeting_notes import jira_sync
+
+    async def fake_sync(*args, **kwargs):
+        return {"total": 5, "synced": 5, "completed": 2}
+
+    monkeypatch.setattr(jira_sync, "sync_open_jira_tickets", fake_sync)
+    _sync_settings(app, token="s3cret", project="proj")
+    response = await _post(
+        app, "/webhook/jira/sync", json={}, headers={"X-Sync-Token": "s3cret"}
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["total"] == 5
+    assert body["completed"] == 2
+
+
+async def test_jira_sync_rejects_a_bad_token(app: Any, monkeypatch: Any) -> None:
+    from meeting_notes import jira_sync
+
+    async def boom(*args, **kwargs):
+        raise AssertionError("a rejected sync must not reach Jira")
+
+    monkeypatch.setattr(jira_sync, "sync_open_jira_tickets", boom)
+    _sync_settings(app, token="s3cret", project="proj")
+    response = await _post(
+        app, "/webhook/jira/sync", json={}, headers={"X-Sync-Token": "wrong"}
+    )
+    assert response.status_code == 401
+
+
+async def test_jira_sync_refuses_when_deployed_without_a_token(
+    app: Any, monkeypatch: Any
+) -> None:
+    """An unconfigured token in a deployed project fails loudly, never openly."""
+    from meeting_notes import jira_sync
+
+    async def boom(*args, **kwargs):
+        raise AssertionError("an unguarded sync must not reach Jira")
+
+    monkeypatch.setattr(jira_sync, "sync_open_jira_tickets", boom)
+    _sync_settings(app, token="", project="proj")
+    response = await _post(app, "/webhook/jira/sync", json={})
+    assert response.status_code == 503
