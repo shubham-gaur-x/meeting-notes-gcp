@@ -23,7 +23,7 @@ import structlog
 from meeting_notes import dedup
 from meeting_notes.config import Settings, get_settings
 from meeting_notes.models import ActionItem, ExtractedMeeting
-from meeting_notes.utils import uuid5_id
+from meeting_notes.utils import gmail_thread_url, uuid5_id
 
 log = structlog.get_logger()
 
@@ -34,10 +34,16 @@ async def _default_mark_needs_review(action_id: str, reason: str) -> None:
     await mark_action_needs_review(action_id, reason)
 
 
-async def _default_get_open_actions(owner_email: str, *, exclude_id: str) -> list[dict[str, Any]]:
+async def _default_get_open_actions(
+    owner_email: str | None = None,
+    *,
+    exclude_id: str,
+    meeting_id: str | None = None,
+    **kwargs: Any,
+) -> list[dict[str, Any]]:
     from meeting_notes.graph_client import get_open_actions_for_owner
 
-    return await get_open_actions_for_owner(owner_email, exclude_id=exclude_id)
+    return await get_open_actions_for_owner(owner_email, exclude_id=exclude_id, meeting_id=meeting_id)
 
 
 async def _default_update_jira_key(action_id: str, jira_key: str) -> None:
@@ -128,11 +134,12 @@ async def push_action_items(
             action, action_id, meeting, meeting_id, settings,
             mark_needs_review=mark_needs_review, get_open_actions=get_open_actions,
             embed=embed, link_mentioned_in=link_mentioned_in, add_comment=add_comment,
+            update_jira_key=update_jira_key,
         ):
             continue
 
         jira_key = await _create_ticket(
-            action, action_id, meeting, sprint_id,
+            action, action_id, meeting, source_id, sprint_id,
             create_issue=create_issue, update_jira_key=update_jira_key,
         )
         if jira_key:
@@ -157,6 +164,7 @@ async def _is_gated(
     embed: Any,
     link_mentioned_in: Any,
     add_comment: Any,
+    update_jira_key: Any,
 ) -> bool:
     """True when this item must NOT become a ticket.
 
@@ -179,6 +187,7 @@ async def _is_gated(
             get_open_actions=get_open_actions, embed=embed,
             link_mentioned_in=link_mentioned_in, add_comment=add_comment,
             threshold=settings.jira_dedup_threshold,
+            update_jira_key=update_jira_key,
         )
         if duplicate is not None:
             return True
@@ -190,6 +199,7 @@ async def _create_ticket(
     action: ActionItem,
     action_id: str,
     meeting: ExtractedMeeting,
+    source_id: str,
     sprint_id: int | None,
     *,
     create_issue: Any,
@@ -200,10 +210,17 @@ async def _create_ticket(
     A failure here is logged and swallowed on purpose: one unbuildable item
     must not cost the rest of the batch its tickets.
     """
-    description = (
-        f"From meeting: {meeting.title} ({meeting.date})\n"
-        f"Owner: {action.owner}\nDue: {action.due or 'not specified'}"
-    )
+    # A title search was used here, which is not a link to the source: it is a
+    # guess that resolves to whatever that phrase matches in the reader's own
+    # mailbox, and it was attached to Meet and Calendar items too. The thread
+    # deep link is built from the source id or omitted.
+    source_url = gmail_thread_url(source_id)
+    lines = [f"From meeting: {meeting.title} ({meeting.date})"]
+    if source_url:
+        lines.append(f"Original Source: {source_url}")
+    lines.append(f"Owner: {action.owner}")
+    lines.append(f"Due: {action.due or 'not specified'}")
+    description = "\n".join(lines)
     try:
         jira_key: str = await create_issue(
             summary=action.task[:255],
@@ -231,9 +248,10 @@ async def _find_duplicate(
     link_mentioned_in: Any,
     add_comment: Any,
     threshold: float,
+    update_jira_key: Any,
 ) -> dict[str, Any] | None:
     """Link and comment on an existing item this one duplicates, or None."""
-    candidates = await get_open_actions(action.owner, exclude_id=action_id)
+    candidates = await get_open_actions(action.owner, exclude_id=action_id, meeting_id=meeting_id)
     if not candidates:
         return None
 
@@ -244,6 +262,10 @@ async def _find_duplicate(
 
     await link_mentioned_in(match["id"], meeting_id)
     if match.get("jira_key"):
+        # Not optional: without this the deduplicated item carries no jira_key,
+        # so the next run sees an unticketed action and files a second ticket
+        # for the thing we just decided was a duplicate.
+        await update_jira_key(action_id, match["jira_key"])
         try:
             await add_comment(
                 match["jira_key"],

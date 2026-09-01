@@ -223,15 +223,45 @@ async def test_restaging_the_same_source_id_does_not_duplicate() -> None:
 # ─── graph client write path ──────────────────────────────────────────────────
 
 
-class FakeTx:
-    """Records every Cypher statement instead of running it."""
+class _AsyncRows:
+    """Stand-in for a driver result: async-iterable over dict rows."""
 
-    def __init__(self) -> None:
+    def __init__(self, rows: list[dict] | None = None) -> None:
+        self._rows = list(rows or [])
+
+    def __aiter__(self) -> _AsyncRows:
+        self._it = iter(self._rows)
+        return self
+
+    async def __anext__(self) -> dict:
+        try:
+            return next(self._it)
+        except StopIteration:
+            raise StopAsyncIteration from None
+
+
+class FakeTx:
+    """Records every Cypher statement instead of running it.
+
+    `run` returns an async-iterable result like the real driver does, rather
+    than None. Production code had grown a `hasattr(res, "__aiter__")` check to
+    tolerate the old shape, which meant the read path it guarded was never once
+    exercised by the suite -- the fake taught the code to be wrong.
+
+    `rows_by_query` seeds rows for any statement containing a given substring.
+    """
+
+    def __init__(self, rows_by_query: dict[str, list[dict]] | None = None) -> None:
         self.calls: list[tuple[str, dict]] = []
         self.committed = False
+        self._rows_by_query = rows_by_query or {}
 
-    async def run(self, cypher: str, **params: object) -> None:
+    async def run(self, cypher: str, **params: object) -> _AsyncRows:
         self.calls.append((cypher, dict(params)))
+        for needle, rows in self._rows_by_query.items():
+            if needle in cypher:
+                return _AsyncRows(rows)
+        return _AsyncRows()
 
     async def commit(self) -> None:
         self.committed = True
@@ -253,15 +283,8 @@ class FakeSession:
     async def begin_transaction(self) -> FakeTx:
         return self._tx
 
-    async def run(self, cypher: str, **params: object):  # type: ignore[no-untyped-def]
-        class _Empty:
-            def __aiter__(self):  # type: ignore[no-untyped-def]
-                return self
-
-            async def __anext__(self):  # type: ignore[no-untyped-def]
-                raise StopAsyncIteration
-
-        return _Empty()
+    async def run(self, cypher: str, **params: object) -> _AsyncRows:
+        return _AsyncRows()
 
     async def __aenter__(self) -> FakeSession:
         return self
@@ -395,6 +418,46 @@ async def test_unresolved_attendees_are_held_for_review_not_dropped() -> None:
     assert "PersonReview" in tx.cypher()
 
 
+async def test_a_meeting_with_no_attendees_at_all_prunes_no_reviews() -> None:
+    """An empty extraction must not empty the human's review queue.
+
+    "everyone resolved" and "the model returned nothing this run" both arrive
+    here as an empty review list. The first version deleted every PersonReview
+    on the meeting whenever that list was empty, so one bad extraction silently
+    destroyed the queue -- and the resolution audit trail with it.
+    """
+    from meeting_notes import graph_client
+
+    tx = FakeTx()
+    await graph_client.upsert_meeting_graph(
+        _meeting(attendees=[]), "src-1", driver=FakeDriver(tx), known_people=[]
+    )
+    assert "DELETE" not in tx.cypher().upper()
+
+
+async def test_stale_pending_reviews_are_pruned_but_resolved_ones_are_kept() -> None:
+    """Pruning runs on every write, not only when the new set is empty.
+
+    Only pruning in the empty case left stale entries behind in exactly the
+    runs that produced a new set to compare them against.
+    """
+    from meeting_notes import graph_client
+
+    tx = FakeTx()
+    await graph_client.upsert_meeting_graph(
+        _meeting(attendees=[{"name": "Ghost Person"}]),
+        "src-1",
+        driver=FakeDriver(tx),
+        known_people=[],
+    )
+
+    prune = next((c, p) for c, p in tx.calls if "DETACH DELETE r" in c)
+    cypher, params = prune
+    assert "coalesce(r.status, 'pending') = 'pending'" in cypher, "resolved is an audit trail"
+    assert "NOT r.id IN $keep_ids" in cypher
+    assert len(params["keep_ids"]) == 1, "the review just written must survive its own prune"
+
+
 async def test_meeting_id_is_deterministic_from_the_source_id() -> None:
     """Re-processing the same record must MERGE onto the same Meeting."""
     from meeting_notes import graph_client
@@ -518,16 +581,16 @@ def test_resolve_owner_email_matches_attendee_roster_first() -> None:
         Attendee(name="Katrisa Brock", email="katrisa.brock@onixnet.com"),
     ]
     roster = Roster([])
+    michael = "michael.baylard@onixnet.com"
 
-    def resolved(owner: str) -> str | None:
+    def resolve(owner: str) -> str | None:
         return _resolve_owner_email(owner, roster, [], attendees=attendees)
 
-    assert resolved("Michael Baylard") == "michael.baylard@onixnet.com"      # full name
-    assert resolved("Katrisa") == "katrisa.brock@onixnet.com"                # given name
-    assert resolved("michael.baylard") == "michael.baylard@onixnet.com"      # local part
-    assert resolved("michael.baylard@onixnet.com") == "michael.baylard@onixnet.com"
-    assert resolved("All delivery associates") is None                       # not a person
-
+    assert resolve("Michael Baylard") == michael, "full name"
+    assert resolve("Katrisa") == "katrisa.brock@onixnet.com", "unique given name"
+    assert resolve("michael.baylard") == michael, "email local part"
+    assert resolve(michael) == michael, "exact email"
+    assert resolve("All delivery associates") is None, "a team is not a person"
 
 
 def test_an_ambiguous_given_name_resolves_to_nobody() -> None:
@@ -574,6 +637,85 @@ def test_a_blank_attendee_name_does_not_abort_the_transaction() -> None:
         _resolve_owner_email("Katrisa", Roster([]), [], attendees=attendees)
         == "katrisa.brock@onixnet.com"
     )
+
+
+# ─── repeat action items across meetings ───────────────────────────────────────
+
+_OWNED_OPEN_ACTIONS = "MATCH (a:ActionItem)-[:ASSIGNED_TO]->(p:Person {email: $owner_email})"
+
+
+async def test_a_repeated_action_item_merges_onto_the_open_one() -> None:
+    from meeting_notes import graph_client
+
+    tx = FakeTx({_OWNED_OPEN_ACTIONS: [{"id": "action-old", "task": "Ship the PSA skill update"}]})
+    await graph_client.upsert_meeting_graph(
+        _meeting(
+            attendees=[{"name": "Katrisa Brock", "email": "katrisa.brock@onixnet.com"}],
+            action_items=[{
+                "owner": "katrisa.brock@onixnet.com",
+                "task": "ship the PSA skill update",
+                "confidence": 0.9,
+            }],
+        ),
+        "src-repeat",
+        driver=FakeDriver(tx),
+        known_people=[{"email": "katrisa.brock@onixnet.com", "name": "Katrisa Brock"}],
+    )
+
+    written = next(p for c, p in tx.calls if "MERGE (a:ActionItem" in c)
+    assert written["id"] == "action-old", "a repeat must land on the open item"
+
+
+async def test_an_unowned_action_item_is_never_merged_across_meetings() -> None:
+    """Without an owner there is no scoping signal worth trusting.
+
+    The first version fell back to every unassigned open ActionItem in the
+    graph at a 0.70 token overlap, so "review the deck" from two unrelated
+    meetings collapsed into one node and the second meeting's provenance was
+    unrecoverable.
+    """
+    from meeting_notes import graph_client
+
+    tx = FakeTx({"MATCH (a:ActionItem)": [{"id": "action-old", "task": "review the deck"}]})
+    await graph_client.upsert_meeting_graph(
+        _meeting(action_items=[
+            {"owner": "Someone Unknown", "task": "review the deck", "confidence": 0.9}
+        ]),
+        "src-unowned",
+        driver=FakeDriver(tx),
+        known_people=[],
+    )
+
+    written = next(p for c, p in tx.calls if "MERGE (a:ActionItem" in c)
+    assert written["id"] != "action-old"
+
+
+async def test_repeat_detection_is_bounded_and_uses_the_configured_threshold() -> None:
+    """Two dedup passes with different thresholds merge in the graph and
+    ticket separately in Jira."""
+    from meeting_notes import graph_client
+    from meeting_notes.config import get_settings
+
+    tx = FakeTx()
+    await graph_client.upsert_meeting_graph(
+        _meeting(
+            attendees=[{"name": "Katrisa Brock", "email": "katrisa.brock@onixnet.com"}],
+            action_items=[{
+                "owner": "katrisa.brock@onixnet.com", "task": "ship it", "confidence": 0.9,
+            }],
+        ),
+        "src-bounded",
+        driver=FakeDriver(tx),
+        known_people=[{"email": "katrisa.brock@onixnet.com", "name": "Katrisa Brock"}],
+    )
+
+    cypher, params = next((c, p) for c, p in tx.calls if _OWNED_OPEN_ACTIONS in c)
+    assert "LIMIT $limit" in cypher, "an unbounded scan runs inside the meeting transaction"
+    assert params["limit"] == graph_client._REPEAT_ACTION_CANDIDATES
+    assert get_settings().jira_dedup_threshold == 0.9
+
+
+# ─── cross-source recap linking ────────────────────────────────────────────────
 
 
 def test_a_recap_title_normalizes_to_its_meetings_title() -> None:
@@ -679,43 +821,3 @@ async def test_an_untitled_meeting_links_to_nothing() -> None:
         known_people=[],
     )
     assert "RECAP_OF" not in tx.cypher()
-
-
-async def test_a_meeting_with_no_attendees_at_all_prunes_no_reviews() -> None:
-    """An empty extraction must not empty the human's review queue.
-
-    "everyone resolved" and "the model returned nothing this run" both arrive
-    here as an empty review list. The first version deleted every PersonReview
-    on the meeting whenever that list was empty, so one bad extraction silently
-    destroyed the queue -- and the resolution audit trail with it.
-    """
-    from meeting_notes import graph_client
-
-    tx = FakeTx()
-    await graph_client.upsert_meeting_graph(
-        _meeting(attendees=[]), "src-1", driver=FakeDriver(tx), known_people=[]
-    )
-    assert "DELETE" not in tx.cypher().upper()
-
-
-async def test_stale_pending_reviews_are_pruned_but_resolved_ones_are_kept() -> None:
-    """Pruning runs on every write, not only when the new set is empty.
-
-    Only pruning in the empty case left stale entries behind in exactly the
-    runs that produced a new set to compare them against.
-    """
-    from meeting_notes import graph_client
-
-    tx = FakeTx()
-    await graph_client.upsert_meeting_graph(
-        _meeting(attendees=[{"name": "Ghost Person"}]),
-        "src-1",
-        driver=FakeDriver(tx),
-        known_people=[],
-    )
-
-    prune = next((c, p) for c, p in tx.calls if "DETACH DELETE r" in c)
-    cypher, params = prune
-    assert "coalesce(r.status, 'pending') = 'pending'" in cypher, "resolved is an audit trail"
-    assert "NOT r.id IN $keep_ids" in cypher
-    assert len(params["keep_ids"]) == 1, "the review just written must survive its own prune"

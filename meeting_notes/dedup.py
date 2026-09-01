@@ -30,13 +30,34 @@ def cosine(a: list[float], b: list[float]) -> float:
     return dot / (na * nb)
 
 
+def token_jaccard(a: str, b: str) -> float:
+    """Overlap of the significant words in two task strings, 0.0 to 1.0.
+
+    Public because `graph_client` scores cross-meeting action items with it.
+    Reaching into another module's `_private` is how two callers end up with
+    two spellings of the same measure, and a threshold means nothing if the
+    thing it is compared against differs by caller.
+    """
+    set_a = {w for w in _norm(a).split() if len(w) > 2}
+    set_b = {w for w in _norm(b).split() if len(w) > 2}
+    if not set_a or not set_b:
+        return 0.0
+    return len(set_a & set_b) / len(set_a | set_b)
+
+
+# Retained: this module refers to it by the private name throughout.
+_token_jaccard = token_jaccard
+
+
 def similarity(
     new_text: str, new_embedding: list[float] | None, candidate: dict[str, Any]
 ) -> float:
     cand_emb = candidate.get("embedding")
     if new_embedding and cand_emb:
         return cosine(new_embedding, cand_emb)
-    return SequenceMatcher(None, _norm(new_text), _norm(candidate.get("task", ""))).ratio()
+    seq = SequenceMatcher(None, _norm(new_text), _norm(candidate.get("task", ""))).ratio()
+    jaccard = _token_jaccard(new_text, candidate.get("task", ""))
+    return max(seq, jaccard)
 
 
 def best_match(

@@ -516,6 +516,20 @@ async def test_a_near_duplicate_links_mentioned_in_instead_of_a_second_ticket() 
     async def link_mentioned_in(action_id, meeting_id, **kw):
         linked.append((action_id, meeting_id))
 
+    # Injected, not defaulted: the defaults reach a real Memgraph driver and the
+    # live Jira API. This test previously left them out and passed only because
+    # the code path that uses update_jira_key was unreachable.
+    keyed: list[tuple] = []
+
+    async def update_jira_key(action_id, jira_key, **kw):
+        keyed.append((action_id, jira_key))
+
+    async def add_comment(*a, **kw):
+        return None
+
+    async def get_active_sprint(*a, **kw):
+        return None
+
     settings = _jira_settings(JIRA_ENABLED=True, JIRA_DEDUP_ENABLED=True, JIRA_DEDUP_THRESHOLD=0.9)
     meeting = _meeting(action_items=[
         {"owner": "alice@corp.com", "task": "ship it", "confidence": 0.9}
@@ -524,11 +538,17 @@ async def test_a_near_duplicate_links_mentioned_in_instead_of_a_second_ticket() 
         meeting.action_items, meeting, "src-1", settings=settings,
         get_open_actions=get_open_actions, create_issue=create_issue,
         embed=fake_embed, link_mentioned_in=link_mentioned_in,
+        update_jira_key=update_jira_key, add_comment=add_comment,
+        get_active_sprint=get_active_sprint,
     )
 
     assert keys == [], "a duplicate must not report a newly-created key"
     assert created_calls == [], "no second Jira ticket for a near-duplicate"
     assert linked, "the duplicate must link MENTIONED_IN to the existing item"
+    assert keyed == [(jira_pusher.uuid5_id("action", "src-1:0:ship it"), "SCRUM-1")], (
+        "the deduplicated item must carry the existing ticket's key, or the next "
+        "run sees an unticketed action and files a second ticket"
+    )
 
 
 async def test_disabled_jira_is_a_clean_no_op() -> None:
