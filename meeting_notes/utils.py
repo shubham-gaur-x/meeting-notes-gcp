@@ -51,6 +51,22 @@ def extract_ticket_keys(text: str | None) -> list[str]:
     return list(seen)
 
 
+def gmail_thread_url(source_id: Any) -> str | None:
+    """Deep link to the originating Gmail thread, or None if there isn't one.
+
+    Only `gmail:` sources have one. Calendar rows and Meet transcripts reach
+    the caller too, and a Gmail URL built for a Meet transcript is a link that
+    goes nowhere -- which an LLM will happily cite as a source.
+    """
+    sid = str(source_id or "")
+    if not sid.startswith("gmail:"):
+        return None
+    thread_id = sid.split(":")[-1].strip()
+    if not thread_id:
+        return None
+    return f"https://mail.google.com/mail/u/0/#inbox/{thread_id}"
+
+
 def strip_json_fences(raw: str) -> str:
     """Local models often wrap JSON responses in ```json ... ``` fences despite
     being told to respond with raw JSON only. Strip them before json.loads()."""
