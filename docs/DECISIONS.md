@@ -994,6 +994,88 @@ so legitimate pairings would escalate to `NEEDS_HUMAN`.
 
 ---
 
+## ADR-026 — Jira write operations get their own authenticated router, and `PARENT_OF` gets a writer
+
+**Date:** 2026-09-02 · **Status:** Accepted
+
+**Context.** Multi-project Jira routing, sub-task creation, cross-project issue linking and
+status transitions arrived in one 30-commit branch that also carried backports of eight other
+PRs. Extracting the routing and sub-task work surfaced three problems in it.
+
+First, the four new write routes were mounted under `/webhook/jira/*`. Everything else on
+that prefix is deliberately unauthenticated, because a webhook cannot carry a bearer token:
+`/webhook/github` verifies an HMAC, and `/webhook/jira` treats its body as a hint and
+re-reads the issue over the authenticated REST API before touching the graph. The new routes
+inverted that — the body *was* the instruction, and acting on it spends this deployment's
+Jira credentials on an issue the caller names. `POST /webhook/jira/transition` with
+`{"key": "MDP-1", "status": "Done"}` closed any ticket, from anywhere.
+
+Second, `meeting_notes/jira_client.py` ended up with two top-level `async def add_comment`
+definitions, at lines 135 and 338, with different signatures and different error handling.
+Python keeps the last one, so every caller silently reached the lower definition and the
+upper one was dead code that still read as live.
+
+Third, the hierarchy view read `(parent:ActionItem)-[:PARENT_OF]->(a)` and nothing in the
+branch ever wrote a `PARENT_OF` edge. The column was structurally guaranteed to be null.
+
+**Decision.** The write routes move to `api/routers/jira_ops.py` under `/jira/*`, resolving a
+`Principal` through `api.deps.principal` like every other non-webhook route. `webhooks.py` is
+left exactly as it is, and two tests pin the boundary: one enumerates the routes mounted on
+`/webhook` and fails when a new one appears, the other asserts every `/jira/*` route carries
+the `principal` dependency.
+
+`add_comment` keeps one definition. It takes the better half of each: the existing name and
+position of `text`, plus the newer version's `status >= 400` raise and its return of Jira's
+created-comment body, which the operator route needs for the comment id. Raising matches
+`move_to_sprint` beside it; every existing caller already wraps the call because a failed
+comment is not worth failing a push over. A test parses this module's own AST and asserts
+exactly one top-level `add_comment`.
+
+`PARENT_OF` becomes a real edge with a writer: `graph_client.link_action_parent(parent_jira_key,
+child_action_id)`, MERGE not CREATE, addressing the parent by Jira key because that is the
+identity the two systems share and the only handle a caller filing a sub-task has. It returns
+whether both ends matched, read from a returned row rather than the write counters — MERGE on
+an existing edge creates nothing, and a counter read would report an already-correct graph as
+a failure. `POST /jira/subtask` takes an optional `child_action_id` and mirrors the Jira
+hierarchy into the graph when one is given.
+
+`get_all_actions` looks its `WHERE` clause up in a fixed table and raises on an unknown
+filter. Cypher cannot parameterise a predicate, so the clause is spliced into the query text;
+the route validates the same three values with a regex, which makes the lookup the second
+independent check rather than the only one.
+
+**Consequences.** The dashboard calls `/jira/transition` rather than `/webhook/jira/transition`,
+which is a same-origin fetch and unauthenticated under tier 0 exactly as `/graph/*` already
+is — so nothing about local development changes, and a configured access policy now gates
+Jira writes as it should. `create_issue` gains four keyword-only parameters and no caller
+changes: absent a `project_key` it still files into `JIRA_PROJECT_KEY`, and absent a
+`parent_key` it still uses `JIRA_ISSUE_TYPE`. With a parent it defaults to `Sub-task` and
+skips the sprint move, because Jira carries the sprint on the parent and rejects moving a
+child alone.
+
+The cost is a new node/edge type in the vocabulary. `PARENT_OF` is `ActionItem→ActionItem`,
+which is a self-referential edge the ontology alignment did not previously need, and the
+hierarchy stays flat for any parent filed outside this pipeline — such a parent has no
+`ActionItem`, so `link_action_parent` returns False and the route logs it rather than
+failing. That is real signal about where work is being tracked, not an error.
+
+**Rejected:** *Keep the routes on `/webhook/jira/*` and add a shared token.* That is the
+`jira_sync_trigger_token` pattern, which exists because `/webhook/jira/sync` costs a full
+REST sweep per call. These routes are not expensive, they are *authoritative* — the caller
+picks the issue and the outcome — and a bearer-token principal is the model this codebase
+already has for that. Two auth schemes for writes would be one more than necessary.
+
+*Store the parent as a plain `a.parent_jira_key` property.* Cheaper, and it would work for
+the read the dashboard does. But the hierarchy is a graph relationship, and a property cannot
+be traversed, so any later question — the whole sub-tree under a project, the depth of a
+chain — would need a second representation.
+
+*Leave `PARENT_OF` unwritten and ship the read anyway.* A column that cannot populate is
+worse than an absent one: it looks like an empty graph rather than a missing writer, which is
+exactly how it survived 30 commits.
+
+---
+
 ## Template
 
 ```

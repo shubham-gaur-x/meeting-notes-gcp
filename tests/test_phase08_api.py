@@ -72,6 +72,8 @@ from meeting_notes import graph_client  # noqa: E402
 # the governance test below must exercise the REAL function, not the stub.
 _REAL_INFLUENTIAL = graph_client.get_influential_nodes
 _REAL_COMMUNITIES = graph_client.get_all_communities
+_REAL_ALL_ACTIONS = graph_client.get_all_actions
+_REAL_OPEN_ACTIONS = graph_client.get_open_actions
 
 
 @pytest.fixture
@@ -111,7 +113,8 @@ def stub_graph(monkeypatch: Any) -> None:
     for name, fn in [
         ("get_recent_meetings", meetings), ("get_timeline", meetings),
         ("get_person_graph", one), ("get_topic_graph", one),
-        ("get_open_actions", empty), ("get_actions_needing_review", empty),
+        ("get_open_actions", empty), ("get_all_actions", empty),
+        ("get_actions_needing_review", empty),
         ("get_person_reviews", empty), ("get_open_blockers", empty),
         ("get_influential_nodes", people), ("get_all_communities", empty),
         ("get_community_members", empty), ("get_bridge_nodes", empty),
@@ -137,6 +140,7 @@ async def test_health_reports_degraded_rather_than_failing(app: Any) -> None:
         "/graph/person/a@corp.com",
         "/graph/topic/budget",
         "/graph/actions/open",
+        "/graph/actions",
         "/graph/provenance/m1",
         "/graph/provenance/by-ticket/SCRUM-1",
         "/review/actions",
@@ -1015,3 +1019,250 @@ async def test_jira_sync_refuses_when_deployed_without_a_token(
     _sync_settings(app, token="", project="proj")
     response = await _post(app, "/webhook/jira/sync", json={})
     assert response.status_code == 503
+
+
+# ─── Jira write operations ────────────────────────────────────────────────────
+# These are the routes the mega-PR hung off `/webhook/jira/*`, where nothing
+# resolves a principal. On that surface the body IS the instruction, so anyone
+# able to reach the service could close any ticket or open an issue in any
+# project. They live under `/jira/*` behind `principal` instead.
+
+
+def test_no_jira_write_route_is_mounted_on_the_public_webhook_surface() -> None:
+    """The webhook prefix is the unauthenticated one; keep writes off it.
+
+    Read off the OpenAPI schema rather than `app.routes`, which FastAPI wraps
+    per `include_router` call and is not a flat list of routes.
+    """
+    paths = {p for p in create_app().openapi()["paths"] if p.startswith("/webhook")}
+    assert paths == {"/webhook/github", "/webhook/jira", "/webhook/jira/sync"}, (
+        f"unexpected route on the unauthenticated webhook surface: {paths}"
+    )
+
+
+def test_every_jira_write_route_resolves_a_principal() -> None:
+    """A route added later without the dependency is the failure this catches.
+
+    Asserted against the router itself, which is the thing a contributor edits.
+    """
+    from api.deps import principal as principal_dep
+    from api.routers import jira_ops
+
+    assert len(jira_ops.router.routes) == 4
+    for route in jira_ops.router.routes:
+        deps = [d.call for d in route.dependant.dependencies]  # type: ignore[attr-defined]
+        assert principal_dep in deps, f"{route.path} is an unauthenticated Jira write"  # type: ignore[attr-defined]
+
+
+async def test_a_transition_writes_the_new_status_into_the_graph(
+    app: Any, monkeypatch: Any
+) -> None:
+    from meeting_notes import graph_client as gc
+    from meeting_notes import jira_client
+
+    written: list[tuple] = []
+
+    async def fake_transition(key: str, status_name: str, **kw: Any) -> bool:
+        return True
+
+    async def fake_update(key: str, status: str, done: bool, **kw: Any) -> bool:
+        written.append((key, status, done))
+        return True
+
+    monkeypatch.setattr(jira_client, "transition_issue", fake_transition)
+    monkeypatch.setattr(gc, "update_action_jira_status", fake_update)
+
+    response = await _post(app, "/jira/transition", json={"key": "MDP-25", "status": "Done"})
+    assert response.status_code == 200
+    assert response.json()["transitioned"] is True
+    assert written == [("MDP-25", "Done", True)]
+
+
+async def test_a_refused_transition_leaves_the_graph_alone(
+    app: Any, monkeypatch: Any
+) -> None:
+    """Writing optimistically shows a done item that is still open in Jira,
+    and the next sync silently undoes it."""
+    from meeting_notes import graph_client as gc
+    from meeting_notes import jira_client
+
+    async def fake_transition(key: str, status_name: str, **kw: Any) -> bool:
+        return False
+
+    async def boom(*a: Any, **k: Any) -> bool:
+        raise AssertionError("a refused transition must not reach the graph")
+
+    monkeypatch.setattr(jira_client, "transition_issue", fake_transition)
+    monkeypatch.setattr(gc, "update_action_jira_status", boom)
+
+    response = await _post(app, "/jira/transition", json={"key": "MDP-25", "status": "Done"})
+    assert response.status_code == 200
+    assert response.json()["transitioned"] is False
+
+
+async def test_a_transition_needs_both_a_key_and_a_status(app: Any) -> None:
+    assert (await _post(app, "/jira/transition", json={"key": "MDP-1"})).status_code == 422
+    assert (await _post(app, "/jira/transition", json={"key": "", "status": "Done"})).status_code == 422
+
+
+async def test_a_subtask_mirrors_the_parent_edge_in_the_graph(
+    app: Any, monkeypatch: Any
+) -> None:
+    """Without this the Jira hierarchy exists and the graph one does not, so
+    the PARENT_OF read is permanently empty."""
+    from meeting_notes import graph_client as gc
+    from meeting_notes import jira_client
+
+    keyed: list[tuple] = []
+    linked: list[tuple] = []
+
+    async def fake_subtask(parent_key: str, summary: str, description: str = "", **kw: Any) -> str:
+        return "MDP-31"
+
+    async def fake_key(action_id: str, jira_key: str, **kw: Any) -> None:
+        keyed.append((action_id, jira_key))
+
+    async def fake_link(parent_jira_key: str, child_action_id: str, **kw: Any) -> bool:
+        linked.append((parent_jira_key, child_action_id))
+        return True
+
+    monkeypatch.setattr(jira_client, "create_subtask", fake_subtask)
+    monkeypatch.setattr(gc, "update_action_jira_key", fake_key)
+    monkeypatch.setattr(gc, "link_action_parent", fake_link)
+
+    response = await _post(
+        app, "/jira/subtask",
+        json={"parent_key": "MDP-3", "summary": "write the runbook", "child_action_id": "a-1"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["subtask_key"] == "MDP-31"
+    assert body["graph_linked"] is True
+    assert keyed == [("a-1", "MDP-31")]
+    assert linked == [("MDP-3", "a-1")]
+
+
+async def test_a_subtask_without_a_child_action_touches_no_graph_node(
+    app: Any, monkeypatch: Any
+) -> None:
+    from meeting_notes import graph_client as gc
+    from meeting_notes import jira_client
+
+    async def fake_subtask(parent_key: str, summary: str, description: str = "", **kw: Any) -> str:
+        return "MDP-31"
+
+    async def boom(*a: Any, **k: Any) -> Any:
+        raise AssertionError("no ActionItem was named, so nothing should be written")
+
+    monkeypatch.setattr(jira_client, "create_subtask", fake_subtask)
+    monkeypatch.setattr(gc, "update_action_jira_key", boom)
+    monkeypatch.setattr(gc, "link_action_parent", boom)
+
+    response = await _post(
+        app, "/jira/subtask", json={"parent_key": "MDP-3", "summary": "write the runbook"}
+    )
+    assert response.status_code == 200
+    assert response.json()["graph_linked"] is False
+
+
+async def test_linking_two_issues_reports_a_refusal(app: Any, monkeypatch: Any) -> None:
+    from meeting_notes import jira_client
+
+    async def fake_link(inward: str, outward: str, **kw: Any) -> bool:
+        return False
+
+    monkeypatch.setattr(jira_client, "link_issues", fake_link)
+    response = await _post(
+        app, "/jira/link", json={"inward_key": "MDP-1", "outward_key": "SCRUM-2"}
+    )
+    assert response.status_code == 200
+    assert response.json()["linked"] is False
+
+
+async def test_a_comment_reports_the_created_comment_id(app: Any, monkeypatch: Any) -> None:
+    from meeting_notes import jira_client
+
+    async def fake_comment(key: str, text: str, **kw: Any) -> dict[str, Any]:
+        return {"id": "10101"}
+
+    monkeypatch.setattr(jira_client, "add_comment", fake_comment)
+    response = await _post(app, "/jira/comment", json={"key": "MDP-1", "comment": "hi"})
+    assert response.status_code == 200
+    assert response.json()["comment_id"] == "10101"
+
+
+# ─── the action item hierarchy read ───────────────────────────────────────────
+
+
+async def test_the_actions_route_rejects_an_unknown_status(app: Any) -> None:
+    """`status` reaches a spliced Cypher clause, so the pattern is the gate."""
+    response = await _get(app, "/graph/actions?status=; MATCH (n) DETACH DELETE n")
+    assert response.status_code == 422
+
+
+class _CapturingDriver:
+    """Records the Cypher a real graph_client function generates."""
+
+    def __init__(self, rows: list[dict[str, Any]] | None = None) -> None:
+        self.cypher: list[str] = []
+        self._rows = rows or []
+
+    def session(self) -> Any:
+        outer = self
+
+        class _Result:
+            def __init__(self) -> None:
+                self._it = iter(outer._rows)
+
+            def __aiter__(self) -> Any:
+                return self
+
+            async def __anext__(self) -> Any:
+                try:
+                    return next(self._it)
+                except StopIteration:
+                    raise StopAsyncIteration from None
+
+        class _Session:
+            async def run(self, cypher: str, **kw: Any) -> Any:
+                outer.cypher.append(cypher)
+                return _Result()
+
+            async def __aenter__(self) -> Any:
+                return self
+
+            async def __aexit__(self, *e: Any) -> bool:
+                return False
+
+        return _Session()
+
+
+@pytest.mark.parametrize(
+    ("status_filter", "expected"),
+    [("all", None), ("open", "= false"), ("done", "= true")],
+)
+async def test_get_all_actions_filters_on_done(status_filter: str, expected: str | None) -> None:
+    driver = _CapturingDriver()
+    await _REAL_ALL_ACTIONS(status_filter=status_filter, driver=driver)
+    cypher = driver.cypher[0]
+    assert "PARENT_OF" in cypher, "the hierarchy read is the point of this function"
+    if expected is None:
+        assert "coalesce(a.done, false) =" not in cypher
+    else:
+        assert f"coalesce(a.done, false) {expected}" in cypher
+
+
+async def test_get_all_actions_rejects_an_unknown_filter() -> None:
+    """The second, independent check: the clause is spliced, not parameterised."""
+    with pytest.raises(ValueError, match="unknown action status filter"):
+        await _REAL_ALL_ACTIONS(status_filter="; DETACH DELETE n")
+
+
+async def test_get_open_actions_is_the_undone_slice_of_get_all_actions(
+    monkeypatch: Any,
+) -> None:
+    """One Cypher query for both, so the two cannot drift apart."""
+    monkeypatch.setattr(graph_client, "get_all_actions", _REAL_ALL_ACTIONS)
+    driver = _CapturingDriver()
+    await _REAL_OPEN_ACTIONS(limit=7, driver=driver)
+    assert "coalesce(a.done, false) = false" in driver.cypher[0]
