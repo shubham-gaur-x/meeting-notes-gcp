@@ -39,6 +39,14 @@ class Settings(BaseSettings):
     gemini_api_key: str = ""
     gemini_chat_model: str = "gemini-2.5-flash"
     vertex_chat_model: str = ""
+    # The two embedding defaults are NOT free to bump. Both are native 768 and
+    # already unit-normalised, and an embedding space is only comparable with
+    # itself: swapping either model leaves the existing vectors in both
+    # Memgraph indexes non-comparable with every new one, at the same
+    # dimension, so the length check below cannot catch it. Dedup at
+    # jira_dedup_threshold and every semantic search would quietly get worse
+    # with nothing raising. Changing one means re-embedding everything
+    # already stored (ADR-027).
     vertex_embedding_model: str = "text-embedding-005"
     vertex_location: str = "us-central1"
     gemini_embedding_model: str = "text-embedding-004"

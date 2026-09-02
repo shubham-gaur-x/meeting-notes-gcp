@@ -379,6 +379,13 @@ async def embed(
         body = await _post(url, payload, {"x-goog-api-key": settings.gemini_api_key}, transport)
         vector = json.loads(body)["embedding"]["values"]
         if len(vector) > dimension:
+            # Belt to `outputDimensionality`'s braces, for a model that ignores
+            # it. Truncating a unit vector is NOT unit-length any more, which
+            # both consumers happen to tolerate: `metric: "cos"` on both
+            # Memgraph indexes and `dedup.cosine` are scale-invariant. Change
+            # either to a dot-product or L2 metric and this slice needs an
+            # L2 renormalisation, which Google requires for a Matryoshka model
+            # at any non-native dimension (ADR-027).
             vector = vector[:dimension]
     elif backend == "vertex":
         model = settings.vertex_embedding_model
@@ -392,6 +399,7 @@ async def embed(
         body = await _post(url, payload, headers, transport)
         vector = json.loads(body)["predictions"][0]["embeddings"]["values"]
         if len(vector) > dimension:
+            # See the gemini branch above on why this slice is not renormalised.
             vector = vector[:dimension]
     else:
         raise ValueError(f"unknown LLM backend {backend!r}")

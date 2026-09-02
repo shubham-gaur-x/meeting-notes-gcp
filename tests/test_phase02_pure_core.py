@@ -86,6 +86,34 @@ def test_embedding_dimension_is_768() -> None:
     assert Settings(_env_file=None).embedding_dimension == 768
 
 
+def test_the_embedding_model_defaults_are_pinned() -> None:
+    """Not a tautology — a guard on the one default whose drift is silent.
+
+    An embedding space is only comparable with itself. Swapping either model
+    leaves every vector already in the two Memgraph indexes non-comparable
+    with every new one, at the SAME 768 dimensions, so `llm_client.embed`'s
+    length check cannot see it: dedup at `jira_dedup_threshold` and every
+    semantic search just quietly get worse and nothing raises.
+
+    A deliberate change is fine. It means re-embedding everything already
+    stored, and it has to update this test, which is the point (ADR-027).
+    """
+    settings = Settings(_env_file=None)
+    assert settings.vertex_embedding_model == "text-embedding-005"
+    assert settings.gemini_embedding_model == "text-embedding-004"
+
+
+def test_the_two_chat_model_defaults_do_not_disagree() -> None:
+    """A chat model is stateless, so bumping it costs nothing stored — but the
+    two backends drifting apart means tier 1 and production extract with
+    different models and the fixtures recorded from one mislead about the
+    other. `vertex_chat_model` is blank on purpose: `.env.example` supplies
+    it, because the Vertex path needs a project anyway."""
+    settings = Settings(_env_file=None)
+    assert settings.gemini_chat_model == "gemini-2.5-flash"
+    assert settings.vertex_chat_model == ""
+
+
 def test_jira_is_disabled_by_default() -> None:
     """Tier 0 and tier 1 must run the pipeline fully and create no tickets."""
     assert Settings(_env_file=None).jira_enabled is False

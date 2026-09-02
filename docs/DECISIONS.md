@@ -1076,6 +1076,80 @@ exactly how it survived 30 commits.
 
 ---
 
+## ADR-027 — The embedding model default is pinned; the chat model default is not
+
+**Date:** 2026-09-02 · **Status:** Accepted
+
+**Context.** The same 30-commit branch that carried the Jira routing work also moved two
+model defaults in `config.py`:
+
+```
+gemini_chat_model:      gemini-2.5-flash    -> gemini-3.7-flash
+gemini_embedding_model: text-embedding-004  -> gemini-embedding-001
+```
+
+The `outputDimensionality` and Matryoshka-truncation handling in `llm_client.embed` is
+already in the tree and is not in question here — `embed` requests `embedding_dimension`,
+truncates anything longer, and raises on a length it cannot reconcile. The question is
+whether these two defaults should move with it.
+
+They are not the same kind of change. A chat model holds no state: bump it and the next
+extraction uses the new model, and nothing already stored is affected. An embedding model
+*is* the state. Google documents the embedding spaces of the legacy models and
+`gemini-embedding-001` as incompatible and says re-embedding all existing data is required
+to migrate. Incompatible spaces at the *same* 768 dimensions is precisely the failure
+`embed`'s length check cannot see: old and new vectors are the right shape and plausible
+floats, and they simply stop being comparable. `dedup` at `jira_dedup_threshold` 0.9 stops
+recognising duplicates and starts filing second tickets, and every semantic search gets
+quietly worse. Nothing raises. There is no error to find.
+
+`gemini-embedding-001` carries a second, smaller hazard: only its native 3072-dim output is
+L2-normalised, and a Matryoshka truncation to 768 is not. Today that is harmless here —
+both Memgraph vector indexes are created with `metric: "cos"` and `dedup.cosine` divides by
+both magnitudes, and cosine is scale-invariant — but it is only harmless by coincidence of
+the metric.
+
+**Decision.** Split the two.
+
+The chat model default remains `gemini-2.5-flash` for both AI Studio and production Vertex AI
+to keep production inference costs bounded, while matching the existing recorded `fake` fixtures.
+
+The embedding model defaults stay at `text-embedding-005` (Vertex) and `text-embedding-004`
+(AI Studio). Both are native 768 and already unit-normalised, which is why they were chosen.
+A test pins both and carries the reason in its docstring, so a future bump fails CI with an
+explanation rather than shipping. The comment at the truncation in `embed` records that the
+slice is left unnormalised because both consumers are cosine, and what would have to change
+if either stopped being.
+
+**Consequences.** Anyone who genuinely wants `gemini-embedding-001` can still set
+`GEMINI_EMBEDDING_MODEL` — nothing is prevented, and `embed` will truncate 3072 to 768 and
+return it. What changes is that it is now a decision someone makes, with the migration cost
+stated where they will read it, instead of a default they inherit. The pinning test is the
+kind that looks like a tautology on the page; its docstring exists to stop the next reader
+deleting it as one.
+
+`gemini-3.7-flash` deprecates `thinking_budget` and `temperature` in favour of a
+`thinking_level` enum. `chat_json` still sends `temperature: 0.0`, which CLAUDE.md requires
+for extraction, and the API accepts it. This is worth re-checking when the field stops being
+merely deprecated: temperature 0 silently becoming a no-op would make extraction
+non-deterministic, which is the failure mode the `fake` backend exists to keep visible.
+
+**Rejected:** *Take both changes and rely on `embed`'s dimension check.* It cannot fire.
+Both models produce 768 at this configuration; the check is about length, and the hazard is
+about the space.
+
+*Renormalise the truncated vector now, defensively.* It would be dead code. Both consumers
+are cosine, so it changes no result, and unexercised defensive code is how the next reader
+learns to distrust the comments around it. The condition under which it becomes necessary is
+written down at the truncation instead.
+
+*Add `embedding_model` to every stored vector so a mismatch is detectable.* This is the right
+answer and too large for this branch — every writer in `pipeline` and `memory/*` and both
+index definitions are involved. It belongs in whatever phase actually migrates an embedding
+model, where it can be validated against a real re-embed.
+
+---
+
 ## Template
 
 ```
