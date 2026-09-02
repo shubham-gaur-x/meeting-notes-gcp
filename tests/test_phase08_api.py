@@ -645,7 +645,7 @@ def test_the_dashboard_surfaces_decisions_and_action_items() -> None:
 
     html = (Path(api.__file__).parent / "static" / "dashboard.html").read_text(encoding="utf-8")
     assert "/graph/decisions" in html, "decisions are never fetched"
-    assert "/graph/actions/open" in html, "open action items are never fetched"
+    assert "/graph/actions" in html, "action items are never fetched"
     assert "/graph/meeting/" in html, "no per-meeting drill-down"
 
 
@@ -1192,6 +1192,45 @@ async def test_a_comment_reports_the_created_comment_id(app: Any, monkeypatch: A
 
 
 # ─── the action item hierarchy read ───────────────────────────────────────────
+
+
+async def test_the_actions_route_publishes_the_jira_domain_from_settings(
+    app: Any,
+) -> None:
+    """The dashboard links tickets with this. A literal Atlassian domain in the
+    page is what stops this repo moving to the Onix project (CLAUDE.md)."""
+    from api.deps import settings_dep
+    from meeting_notes.config import get_settings
+
+    app.dependency_overrides[settings_dep] = lambda: get_settings().model_copy(
+        update={"jira_domain": "tenant.atlassian.net"}
+    )
+    body = (await _get(app, "/graph/actions")).json()
+    assert body["jira_browse_base"] == "https://tenant.atlassian.net/browse/"
+
+
+async def test_the_actions_route_publishes_no_base_without_a_domain(app: Any) -> None:
+    """Blank rather than a broken `https:///browse/` the page would still link."""
+    from api.deps import settings_dep
+    from meeting_notes.config import get_settings
+
+    app.dependency_overrides[settings_dep] = lambda: get_settings().model_copy(
+        update={"jira_domain": ""}
+    )
+    assert (await _get(app, "/graph/actions")).json()["jira_browse_base"] == ""
+
+
+def test_the_dashboard_hardcodes_no_tenant() -> None:
+    """A project id, region or account email in source is a portability defect
+    (CLAUDE.md), and the dashboard is source like anything else."""
+    from pathlib import Path
+
+    import api.main as api_main
+
+    page = (Path(api_main.__file__).parent / "static" / "dashboard.html").read_text(
+        encoding="utf-8"
+    )
+    assert "atlassian.net" not in page, "the Jira tenant must come from the API"
 
 
 async def test_the_actions_route_rejects_an_unknown_status(app: Any) -> None:

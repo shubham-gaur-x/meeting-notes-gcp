@@ -6,9 +6,10 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from api.deps import principal
+from api.deps import principal, settings_dep
 from meeting_notes import digest, graph_client
 from meeting_notes.access_control import Principal
+from meeting_notes.config import Settings
 
 router = APIRouter(prefix="/graph", tags=["graph"])
 
@@ -66,15 +67,27 @@ async def actions_list(
     status: str = Query("all", pattern=r"^(all|open|done)$"),
     limit: int = Query(100, ge=1, le=1000),
     _: Principal = Depends(principal),
+    settings: Settings = Depends(settings_dep),
 ) -> dict[str, Any]:
     """Action items with done state and their parent project where one exists.
 
     The pattern is the gate rather than a bare string: `status` reaches a
     spliced Cypher clause, and `graph_client.get_all_actions` rejects an
     unknown value as well, so neither layer is the only check.
+
+    `jira_browse_base` is here so the dashboard can link a ticket without
+    knowing the tenant. A hardcoded Atlassian domain in the page is the thing
+    that stops this repo moving to the Onix project (CLAUDE.md), and it would
+    also quietly point one person's dashboard at another's Jira. Empty when
+    `JIRA_DOMAIN` is unset, which the page reads as "render the key as text".
     """
     actions = await graph_client.get_all_actions(status_filter=status, limit=limit)
-    return {"actions": actions, "count": len(actions)}
+    domain = settings.jira_domain.strip()
+    return {
+        "actions": actions,
+        "count": len(actions),
+        "jira_browse_base": f"https://{domain}/browse/" if domain else "",
+    }
 
 
 @router.get("/provenance/{meeting_id}")
