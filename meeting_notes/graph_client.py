@@ -882,23 +882,93 @@ async def get_topic_graph(name: str, driver: Any = None) -> dict[str, Any]:
     return rows[0] if rows else {}
 
 
-async def get_open_actions(limit: int = 50, driver: Any = None) -> list[dict[str, Any]]:
+_ACTION_STATUS_FILTERS = {
+    "all": "",
+    "open": "WHERE coalesce(a.done, false) = false",
+    "done": "WHERE coalesce(a.done, false) = true",
+}
+
+
+async def get_all_actions(
+    status_filter: str = "all", limit: int = 100, driver: Any = None
+) -> list[dict[str, Any]]:
+    """Action items with their parent project, if any, and their done state.
+
+    `status_filter` is looked up in a fixed table rather than interpolated.
+    The clause is spliced into the query text — Cypher cannot parameterise a
+    predicate — so an unknown value has to raise here instead of reaching the
+    f-string. The route validates the same three values with a pattern, which
+    makes this the second, independent check rather than the only one.
+
+    The `PARENT_OF` edge is optional and usually absent: an item only has a
+    parent once something has filed it as a Jira sub-task (see
+    `link_action_parent`). Absent, the parent columns come back as None and a
+    caller renders a flat list, which is the normal case.
+    """
+    where_clause = _ACTION_STATUS_FILTERS.get(status_filter)
+    if where_clause is None:
+        raise ValueError(f"unknown action status filter: {status_filter!r}")
+
     driver = driver or get_driver()
     async with driver.session() as session:
         result = await session.run(
-            """
+            f"""
             MATCH (a:ActionItem)
-            WHERE coalesce(a.done, false) = false
+            {where_clause}
+            OPTIONAL MATCH (m:Meeting)-[:FOLLOWS_UP]->(a)
             OPTIONAL MATCH (a)-[:ASSIGNED_TO]->(p:Person)
-            RETURN a.id AS id, a.task AS task, coalesce(p.name, a.owner) AS owner, a.due AS due,
+            OPTIONAL MATCH (parent:ActionItem)-[:PARENT_OF]->(a)
+            RETURN a.id AS id, a.task AS task, coalesce(p.name, a.owner) AS owner,
+                   a.due AS due,
+                   coalesce(substring(a.created_at, 0, 10), m.date, '') AS created_at,
                    a.priority AS priority, a.jira_key AS jira_key,
-                   a.jira_status AS jira_status, p.email AS owner_email
-            ORDER BY coalesce(a.due, '9999') ASC
+                   a.jira_status AS jira_status, coalesce(a.done, false) AS done,
+                   p.email AS owner_email,
+                   parent.id AS parent_id, parent.task AS parent_task,
+                   parent.jira_key AS parent_jira_key
+            ORDER BY coalesce(a.done, false) ASC, coalesce(a.due, '9999') ASC
             LIMIT $limit
             """,
             limit=limit,
         )
         return [dict(r) async for r in result]
+
+
+async def get_open_actions(limit: int = 50, driver: Any = None) -> list[dict[str, Any]]:
+    """Undone action items, soonest deadline first. A `get_all_actions` slice."""
+    return await get_all_actions(status_filter="open", limit=limit, driver=driver)
+
+
+async def link_action_parent(
+    parent_jira_key: str, child_action_id: str, driver: Any | None = None
+) -> bool:
+    """MERGE `(parent)-[:PARENT_OF]->(child)`. False when no parent matched.
+
+    The parent is addressed by Jira key because that is what the caller filing
+    a sub-task has in hand, and `jira_key` is the identity the two systems
+    share. MERGE, not CREATE: re-ingesting the same meeting must not stack a
+    second edge (CLAUDE.md).
+
+    Returning False rather than raising when either end is missing is
+    deliberate — a Jira parent created outside this pipeline has no
+    ActionItem, which is real signal for the caller to log, not an error.
+    Truth comes from a returned row, not from the write counters: MERGE on an
+    edge that already exists creates nothing, and reading the counter would
+    report an already-correct graph as a failure.
+    """
+    driver = driver or get_driver()
+    async with driver.session() as session:
+        result = await session.run(
+            """
+            MATCH (parent:ActionItem {jira_key: $parent_key})
+            MATCH (child:ActionItem {id: $child_id})
+            MERGE (parent)-[:PARENT_OF]->(child)
+            RETURN child.id AS id
+            """,
+            parent_key=parent_jira_key,
+            child_id=child_action_id,
+        )
+        return bool([r async for r in result])
 
 
 async def get_actions_needing_review(limit: int = 50, driver: Any = None) -> list[dict[str, Any]]:

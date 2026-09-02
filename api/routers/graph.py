@@ -54,10 +54,26 @@ async def topic(name: str, _: Principal = Depends(principal)) -> dict[str, Any]:
 
 @router.get("/actions/open")
 async def actions_open(
-    limit: int = Query(50, ge=1, le=200), _: Principal = Depends(principal)
+    limit: int = Query(50, ge=1, le=1000), _: Principal = Depends(principal)
 ) -> dict[str, Any]:
     """Undone action items, soonest deadline first, with Jira keys where filed."""
     actions = await graph_client.get_open_actions(limit=limit)
+    return {"actions": actions, "count": len(actions)}
+
+
+@router.get("/actions")
+async def actions_list(
+    status: str = Query("all", pattern=r"^(all|open|done)$"),
+    limit: int = Query(100, ge=1, le=1000),
+    _: Principal = Depends(principal),
+) -> dict[str, Any]:
+    """Action items with done state and their parent project where one exists.
+
+    The pattern is the gate rather than a bare string: `status` reaches a
+    spliced Cypher clause, and `graph_client.get_all_actions` rejects an
+    unknown value as well, so neither layer is the only check.
+    """
+    actions = await graph_client.get_all_actions(status_filter=status, limit=limit)
     return {"actions": actions, "count": len(actions)}
 
 
