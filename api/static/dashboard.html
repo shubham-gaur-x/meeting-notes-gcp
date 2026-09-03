@@ -94,6 +94,15 @@
   .pri-high { color:var(--hot); font-weight:600; }
   .quote { border-left:2px solid var(--accent); padding:2px 0 2px 12px; margin:0 0 10px; }
   code { font:12px ui-monospace,SFMono-Regular,Menlo,monospace; color:var(--accent); }
+  .chat-chip { display:inline-flex; align-items:center; gap:6px; background:var(--raise); border:1px solid var(--line); color:var(--ink); padding:6px 12px; border-radius:16px; cursor:pointer; font-size:12px; margin:0 6px 6px 0; transition:all .15s ease; text-align:left; }
+  .chat-chip:hover { border-color:var(--accent); background:rgba(99,102,241,0.08); transform:translateY(-1px); }
+  .chat-chip .chip-icon { font-size:13px; color:var(--accent); }
+  .setting-row { display:flex; justify-content:space-between; align-items:center; padding:12px 0; border-bottom:1px solid var(--line); }
+  .setting-item { display:flex; justify-content:space-between; align-items:center; background:var(--raise); border:1px solid var(--line); padding:9px 12px; border-radius:7px; margin-bottom:6px; font-size:13px; gap:10px; }
+  .del-btn { background:none; border:none; color:var(--muted); cursor:pointer; font-size:15px; padding:2px 6px; border-radius:4px; }
+  .del-btn:hover { color:var(--hot); background:rgba(248,113,113,0.1); }
+  textarea.chat-input { background:var(--bg); border:1px solid var(--line); color:var(--ink); min-width:min(520px, 100%); flex:1; min-height:38px; max-height:220px; resize:none; padding:8px 12px; box-sizing:border-box; border-radius:8px; font-family:inherit; font-size:13px; line-height:1.45; overflow-y:auto; }
+  textarea.chat-input:focus { outline:none; border-color:var(--accent); }
   dialog { background:var(--panel); color:var(--ink); border:1px solid var(--line);
            border-radius:12px; padding:0; max-width:min(760px,92vw); width:100%; }
   dialog::backdrop { background:rgba(0,0,0,.6); }
@@ -208,12 +217,16 @@
   </section>
 
   <section class="panel" id="ask">
-    <div class="row">
-      <input id="q" placeholder="Ask anything about your meetings…"
-             onkeydown="if(event.key==='Enter')askMemory()">
-      <button class="action" onclick="askMemory()">Ask</button>
+    <div class="row" style="align-items:flex-start;gap:8px;margin-bottom:10px">
+      <textarea id="q" class="chat-input" rows="1"
+                placeholder="Ask anything about your meetings… (Enter to send, Shift+Enter for new line)"
+                onkeydown="handleChatKeydown(event)"
+                oninput="autoGrowTextarea(this)"></textarea>
+      <button class="action" onclick="askMemory()" style="height:38px;padding:0 18px">Ask</button>
+      <button class="ghost" onclick="openChatSettings()" title="Chat Query & Suggestions Settings"
+              style="height:38px;padding:0 12px;margin:0;font-size:15px;display:inline-flex;align-items:center;justify-content:center">⚙️</button>
     </div>
-    <div id="examples"></div>
+    <div id="chat-suggestions" style="margin-bottom:14px"></div>
     <div id="ask-body"></div>
   </section>
 
@@ -231,6 +244,36 @@
     <button class="x" onclick="document.getElementById('detail').close()">&times;</button>
   </div>
   <div class="dlg-body" id="d-body"></div>
+</dialog>
+
+<dialog id="chat-settings-modal">
+  <div class="dlg-head">
+    <div><strong>Chat &amp; Suggestions Settings</strong><div class="muted" style="font-size:12px">Configure common queries and AI-seeded suggestions</div></div>
+    <button class="x" onclick="document.getElementById('chat-settings-modal').close()">&times;</button>
+  </div>
+  <div class="dlg-body">
+    <div class="setting-row">
+      <div>
+        <strong>AI-Seeded Suggested Questions</strong>
+        <div class="muted" style="font-size:12px">Dynamically surface suggested questions from active action items and decisions in graph memory</div>
+      </div>
+      <input type="checkbox" id="toggle-ai-questions" style="width:20px;height:20px;cursor:pointer" onchange="onToggleAiQuestions(this.checked)">
+    </div>
+
+    <h3 style="margin:20px 0 8px">Custom Common Questions</h3>
+    <p class="hint" style="margin-bottom:10px">Quick questions pinned right beneath your chat input. Click to ask immediately.</p>
+    
+    <div id="custom-queries-list" style="margin-bottom:12px"></div>
+
+    <div class="row" style="gap:8px;margin-bottom:16px">
+      <input id="new-query-input" placeholder="Enter a new common question…" style="flex:1" onkeydown="if(event.key==='Enter')addCustomQuery()">
+      <button class="action" onclick="addCustomQuery()">+ Add</button>
+    </div>
+
+    <div style="display:flex;justify-content:flex-end">
+      <button class="ghost" onclick="resetDefaultQueries()">Reset to Defaults</button>
+    </div>
+  </div>
 </dialog>
 
 <script>
@@ -691,35 +734,177 @@ function renderMarkdown(md) {
   return out.join("");
 }
 
-async function renderExamples() {
-  const container = $("#examples");
+const DEFAULT_COMMON_QUERIES = [
+  "What are all of my open deliverables and high-priority commitments?",
+  "Who is currently waiting on me for deliverables or approvals?",
+  "What key architectural decisions and project milestones were established in recent syncs?",
+  "What are the urgent action items with upcoming deadlines?",
+];
+
+const STORAGE_KEY_QUERIES = "mn_common_queries_v1";
+const STORAGE_KEY_AI_ENABLED = "mn_enable_ai_queries_v1";
+
+function getCustomCommonQueries() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_QUERIES);
+    if (raw) return JSON.parse(raw);
+  } catch {}
+  return [...DEFAULT_COMMON_QUERIES];
+}
+
+function saveCustomCommonQueries(queries) {
+  try {
+    localStorage.setItem(STORAGE_KEY_QUERIES, JSON.stringify(queries));
+  } catch {}
+}
+
+function isAiQuestionsEnabled() {
+  const val = localStorage.getItem(STORAGE_KEY_AI_ENABLED);
+  return val === null ? true : val === "true";
+}
+
+function setAiQuestionsEnabled(enabled) {
+  try {
+    localStorage.setItem(STORAGE_KEY_AI_ENABLED, String(enabled));
+  } catch {}
+}
+
+function autoGrowTextarea(el) {
+  el.style.height = "auto";
+  el.style.height = Math.min(el.scrollHeight, 220) + "px";
+}
+
+function handleChatKeydown(e) {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    askMemory();
+  }
+}
+
+function openChatSettings() {
+  const dlg = $("#chat-settings-modal");
+  if (!dlg) return;
+  $("#toggle-ai-questions").checked = isAiQuestionsEnabled();
+  renderCustomQueriesList();
+  dlg.showModal();
+}
+
+function renderCustomQueriesList() {
+  const container = $("#custom-queries-list");
   if (!container) return;
-  if (!SUGGESTED_QUESTIONS.length) {
-    try {
-      const data = await get("/graph/memory/suggested-questions");
-      SUGGESTED_QUESTIONS = data.questions || [];
-    } catch {
-      SUGGESTED_QUESTIONS = EXAMPLES.map(q => ({ category: "💡 Project Suggestion", question: q }));
+  const queries = getCustomCommonQueries();
+  if (!queries.length) {
+    container.innerHTML = `<div class="muted" style="font-size:12px;padding:8px 0">No custom questions added yet.</div>`;
+    return;
+  }
+  container.innerHTML = queries.map((q, idx) => `
+    <div class="setting-item">
+      <span>${esc(q)}</span>
+      <button class="del-btn" title="Delete question" onclick="deleteCustomQuery(${idx})">&times;</button>
+    </div>
+  `).join("");
+}
+
+function addCustomQuery() {
+  const input = $("#new-query-input");
+  const val = input.value.trim();
+  if (!val) return;
+  const queries = getCustomCommonQueries();
+  if (!queries.includes(val)) {
+    queries.push(val);
+    saveCustomCommonQueries(queries);
+  }
+  input.value = "";
+  renderCustomQueriesList();
+  renderChatSuggestions();
+}
+
+function deleteCustomQuery(idx) {
+  const queries = getCustomCommonQueries();
+  if (idx >= 0 && idx < queries.length) {
+    queries.splice(idx, 1);
+    saveCustomCommonQueries(queries);
+    renderCustomQueriesList();
+    renderChatSuggestions();
+  }
+}
+
+function resetDefaultQueries() {
+  saveCustomCommonQueries([...DEFAULT_COMMON_QUERIES]);
+  setAiQuestionsEnabled(true);
+  $("#toggle-ai-questions").checked = true;
+  renderCustomQueriesList();
+  renderChatSuggestions();
+}
+
+function onToggleAiQuestions(checked) {
+  setAiQuestionsEnabled(checked);
+  renderChatSuggestions();
+}
+
+let SUGGESTED_QUESTIONS = [];
+
+async function renderChatSuggestions() {
+  const container = $("#chat-suggestions");
+  if (!container) return;
+
+  const commonQueries = getCustomCommonQueries();
+  const aiEnabled = isAiQuestionsEnabled();
+
+  let html = "";
+
+  // 1. Common Questions Section (clickable chips)
+  if (commonQueries.length > 0) {
+    html += `<div style="margin-bottom:10px">` +
+      `<div class="sub" style="margin-bottom:6px;font-weight:600;letter-spacing:.5px;text-transform:uppercase">📌 Common Questions</div>` +
+      `<div style="display:flex;flex-wrap:wrap;align-items:center">` +
+      commonQueries.map(q =>
+        `<div class="chat-chip" onclick="askQuestion('${esc(q).replace(/'/g, "\\'")}')">` +
+        `<span class="chip-icon">💬</span>` +
+        `<span>${esc(q)}</span>` +
+        `</div>`
+      ).join("") +
+      `</div></div>`;
+  }
+
+  // 2. AI-Seeded Suggested Questions Section
+  if (aiEnabled) {
+    if (!SUGGESTED_QUESTIONS.length) {
+      try {
+        const data = await get("/graph/memory/suggested-questions");
+        SUGGESTED_QUESTIONS = data.questions || [];
+      } catch {
+        SUGGESTED_QUESTIONS = [];
+      }
+    }
+
+    if (SUGGESTED_QUESTIONS.length > 0) {
+      html += `<div style="margin-top:6px">` +
+        `<div class="sub" style="margin-bottom:6px;font-weight:600;letter-spacing:.5px;text-transform:uppercase">⚡ AI Suggested from Active Action Items &amp; Workstreams</div>` +
+        `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px">` +
+        SUGGESTED_QUESTIONS.map(q =>
+          `<div class="prompt-card" onclick="askQuestion('${esc(q.question).replace(/'/g, "\\'")}')">` +
+          `<div class="prompt-cat">${esc(q.category)}</div>` +
+          `<div class="prompt-text">${esc(q.question)}</div>` +
+          `</div>`
+        ).join("") +
+        `</div></div>`;
     }
   }
 
-  container.innerHTML =
-    `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;margin-bottom:14px">` +
-    SUGGESTED_QUESTIONS.map(q =>
-      `<div class="prompt-card" onclick="askQuestion('${esc(q.question).replace(/'/g, "\\'")}')">` +
-      `<div class="prompt-cat">${esc(q.category)}</div>` +
-      `<div class="prompt-text">${esc(q.question)}</div>` +
-      `</div>`
-    ).join("") + `</div>`;
+  container.innerHTML = html;
 }
 
 function askQuestion(q) {
-  $("#q").value = q;
+  const textarea = $("#q");
+  textarea.value = q;
+  autoGrowTextarea(textarea);
   askMemory();
 }
 
 async function askMemory() {
-  const question = $("#q").value.trim();
+  const textarea = $("#q");
+  const question = textarea.value.trim();
   if (!question) return;
   $("#ask-body").innerHTML = empty("Searching your meetings & knowledge graph…");
   try {
@@ -932,13 +1117,13 @@ const LOADERS = {
   actions: () => { if (!ACTIONS.length) loadActions(); },
   workstreams: loadWorkstreams,
   graph: loadGraph,
-  ask: renderExamples,
+  ask: renderChatSuggestions,
   review: loadReview,
 };
 
 loadHealth();
 loadOverview();
-renderExamples();
+renderChatSuggestions();
 </script>
 </body>
 </html>
