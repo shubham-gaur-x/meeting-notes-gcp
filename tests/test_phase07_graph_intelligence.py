@@ -1030,6 +1030,10 @@ async def test_pending_rows_are_embedded_concurrently() -> None:
     Measured live: a single Vertex embed is ~11.7s, so one meeting with 16
     action items spent 3m11s in this loop alone -- the dominant cost of the
     whole drain, and enough to blow a Cloud Run Job timeout.
+
+    This test verifies TWO invariants:
+    1. peak > 1: calls run concurrently, not one-at-a-time.
+    2. peak <= CONCURRENCY_LIMIT: the shared semaphore ceiling is respected.
     """
     import asyncio
 
@@ -1037,6 +1041,7 @@ async def test_pending_rows_are_embedded_concurrently() -> None:
 
     in_flight = 0
     peak = 0
+    CONCURRENCY_LIMIT = 3  # small so the test is fast but meaningful
 
     async def slow_embed(text, settings=None):
         nonlocal in_flight, peak
@@ -1046,7 +1051,7 @@ async def test_pending_rows_are_embedded_concurrently() -> None:
         in_flight -= 1
         return [0.1] * 768
 
-    rows = [{"id": f"a{i}", "task": f"task {i}"} for i in range(8)]
+    rows = [{"id": f"a{i}", "task": f"task {i}"} for i in range(10)]
 
     class _Result:
         def __aiter__(self):
@@ -1073,15 +1078,23 @@ async def test_pending_rows_are_embedded_concurrently() -> None:
         def session(self):
             return _Session()
 
+    # Pass a shared semaphore with limit=CONCURRENCY_LIMIT so slow_embed (the
+    # real embed function) runs through the actual asyncio.Semaphore code path.
+    # This catches the "per-pass semaphore" bug where 3 independent semaphores
+    # of size N allow up to 3*N in-flight calls instead of N.
+    shared_sem = asyncio.Semaphore(CONCURRENCY_LIMIT)
     count = await vector._embed_pending(
         "MATCH ... RETURN a.id AS id, a.task AS task", "MATCH ... SET a.embedding = $embedding",
-        "m1", "task", driver=_Driver(), settings=None, embed=slow_embed,
+        "m1", "task", driver=_Driver(), settings=None, embed=slow_embed, semaphore=shared_sem,
     )
 
-    assert count == 8, "every row must still be embedded"
+    assert count == 10, "every row must still be embedded"
     assert peak > 1, (
         f"embeddings ran one at a time (peak in-flight={peak}); they are "
         "independent calls and must overlap"
+    )
+    assert peak <= CONCURRENCY_LIMIT, (
+        f"semaphore ceiling breached: peak in-flight={peak} exceeded limit={CONCURRENCY_LIMIT}"
     )
 
 
