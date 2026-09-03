@@ -655,3 +655,53 @@ async def test_chat_list_reaches_the_backend_and_parses() -> None:
 
     result = await chat_list("s", "u", settings=_vertex_settings(), transport=transport)
     assert result == ["fact one", "fact two"]
+
+
+# ─── raw url extraction & repair links merging ───────────────────────────────
+
+
+def test_extract_raw_urls_harvests_valid_document_links() -> None:
+    from meeting_notes.extractor import _extract_raw_urls
+
+    text = (
+        "Please review the design spec at https://docs.google.com/document/d/123/edit "
+        "and the project board at https://michael-baylard.atlassian.net/browse/MDP-45. "
+        "Also see https://drive.google.com/file/d/456/view."
+    )
+    urls = _extract_raw_urls(text)
+    assert urls == [
+        "https://docs.google.com/document/d/123/edit",
+        "https://michael-baylard.atlassian.net/browse/MDP-45",
+        "https://drive.google.com/file/d/456/view",
+    ]
+
+
+def test_extract_raw_urls_filters_noise_domains_and_image_assets() -> None:
+    from meeting_notes.extractor import _extract_raw_urls
+
+    text = (
+        "Check namespace http://schemas.microsoft.com/office/2004/12/omml and "
+        "http://www.w3.org/1999/xhtml. Logo at https://cdn.example.com/logo.png and "
+        "https://mail.google.com/mail/u/0/#inbox. "
+        "Real doc: https://company.atlassian.net/wiki/spaces/ENG/pages/789."
+    )
+    urls = _extract_raw_urls(text)
+    assert urls == ["https://company.atlassian.net/wiki/spaces/ENG/pages/789"]
+
+
+def test_repair_merges_raw_urls_with_extracted_links() -> None:
+    from meeting_notes.extractor import repair
+
+    raw_data = {
+        "title": "Architecture Sync",
+        "links": ["https://docs.google.com/document/d/extracted"],
+    }
+    context = {
+        "text": "Meeting notes with additional doc https://docs.google.com/document/d/raw_in_body",
+    }
+    repaired = repair(raw_data, context=context)
+    assert repaired["links"] == [
+        "https://docs.google.com/document/d/extracted",
+        "https://docs.google.com/document/d/raw_in_body",
+    ]
+
