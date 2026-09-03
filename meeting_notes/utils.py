@@ -55,8 +55,13 @@ def gmail_thread_url(source_id: Any) -> str | None:
     """Deep link to the originating Gmail thread, or None if there isn't one.
 
     Only `gmail:` sources have one. Calendar rows and Meet transcripts reach
-    the caller too, and a Gmail URL built for a Meet transcript is a link that
-    goes nowhere -- which an LLM will happily cite as a source.
+    both callers too, and a Gmail URL built for a Meet transcript is a link
+    that goes nowhere -- in a Jira ticket a person clicks it, and in an LLM
+    context the model cites it.
+
+    Lives here because `jira_pusher` writes this URL into ticket descriptions
+    and `memory/retrieval` renders it into answers. Two builders would drift,
+    and a link is only useful while it resolves.
     """
     sid = str(source_id or "")
     if not sid.startswith("gmail:"):

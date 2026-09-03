@@ -25,12 +25,13 @@ from __future__ import annotations
 import json
 import re
 from datetime import UTC, datetime, timedelta
+from difflib import SequenceMatcher
 from typing import Any
 
 import structlog
 from neo4j import AsyncDriver, AsyncGraphDatabase
 
-from meeting_notes import person_resolver
+from meeting_notes import dedup, person_resolver
 from meeting_notes.config import Settings, get_settings
 from meeting_notes.models import Attendee, ExtractedMeeting
 from meeting_notes.person_resolver import Roster
@@ -149,6 +150,7 @@ def _resolve_owner_email(
     )
     return resolution.email if resolution.status == "resolved" else None
 
+
 @with_retry(max_attempts=3, base_delay=1.0)
 async def _write_meeting(
     tx: Any, meeting: ExtractedMeeting, meeting_id: str, source_id: str, now: str
@@ -187,6 +189,7 @@ async def _write_meeting(
         now=now,
     )
 
+
 async def _write_attendees(tx: Any, resolved: Any, meeting_id: str, now: str) -> None:
     """Person + Organization + ATTENDED, one statement per attendee.
 
@@ -199,8 +202,10 @@ async def _write_attendees(tx: Any, resolved: Any, meeting_id: str, now: str) ->
         await tx.run(
             """
             MERGE (p:Person {email: $email})
-            ON CREATE SET p.created_at = $now, p.tracked = $tracked
-            SET p.name = $name, p.id = $person_id, p.updated_at = $now,
+            ON CREATE SET p.created_at = $now, p.name = $name, p.tracked = $tracked
+            SET p.name = CASE WHEN size(coalesce($name, '')) > size(coalesce(p.name, ''))
+                              THEN $name ELSE p.name END,
+                p.id = $person_id, p.updated_at = $now,
                 p.tracked = CASE WHEN $tracked THEN true ELSE coalesce(p.tracked, false) END
 
             MERGE (o:Organization {domain: $domain})
@@ -364,6 +369,60 @@ async def _write_blockers(
         )
 
 
+# The candidate set is capped. Scoring happens in Python, one pass per action
+# item per meeting, and the query runs inside the transaction that writes the
+# whole meeting -- an unbounded label scan there stalls every other write.
+_REPEAT_ACTION_CANDIDATES = 200
+
+
+async def _find_repeat_action(tx: Any, task: str, owner_email: str | None) -> str | None:
+    """The id of an open action item this one repeats, or None.
+
+    Scoped to one owner, deliberately. The first version fell back, when the
+    owner did not resolve, to every unassigned open ActionItem in the graph and
+    merged on a 0.70 token overlap -- so "review the deck" from two unrelated
+    meetings became one node, and the second meeting's provenance was gone with
+    no way to recover it. Without an owner there is no scoping signal worth
+    trusting, so nothing is merged.
+
+    Thresholds come from settings rather than being spelt here: `jira_pusher`
+    already dedups with `settings.jira_dedup_threshold`, and two dedup passes
+    disagreeing about what "the same task" means is how an item gets merged in
+    the graph and ticketed separately in Jira.
+    """
+    if not owner_email or not (task or "").strip():
+        return None
+
+    settings = get_settings()
+    if not settings.jira_dedup_enabled:
+        return None
+    threshold = settings.jira_dedup_threshold
+
+    res = await tx.run(
+        """
+        MATCH (a:ActionItem)-[:ASSIGNED_TO]->(p:Person {email: $owner_email})
+        WHERE coalesce(a.done, false) = false
+        RETURN a.id AS id, a.task AS task
+        LIMIT $limit
+        """,
+        owner_email=owner_email,
+        limit=_REPEAT_ACTION_CANDIDATES,
+    )
+
+    norm_task = re.sub(r"\s+", " ", task.strip().lower())
+    async for row in res:
+        cand = dict(row)
+        cand_task = cand.get("task") or ""
+        norm_cand = re.sub(r"\s+", " ", cand_task.strip().lower())
+        score = max(
+            dedup.token_jaccard(norm_task, norm_cand),
+            SequenceMatcher(None, norm_task, norm_cand).ratio(),
+        )
+        if score >= threshold:
+            return str(cand["id"])
+    return None
+
+
 async def _write_action_items(
     tx: Any, actions: Any, source_id: str, meeting_id: str, now: str,
     *, roster: Roster, known_people: list[dict[str, Any]],
@@ -371,23 +430,32 @@ async def _write_action_items(
 ) -> None:
     """ActionItem + FOLLOWS_UP, and ASSIGNED_TO when the owner resolves.
 
-    The owner is resolved to an email rather than checked for an "@": a naive
-    check left ASSIGNED_TO unformed for every owner written as a display name,
-    and the edge simply never appeared.
+    Deduplicates semantically near-identical action items across repeat emails/meetings
+    and canonicalizes owner names to unified Person entities.
     """
     for i, action in enumerate(actions):
         owner_email = _resolve_owner_email(action.owner, roster, known_people, attendees=attendees)
+        canonical_owner = action.owner
+        if owner_email:
+            matched_person = next((p for p in known_people if p.get("email") == owner_email), None)
+            if matched_person and matched_person.get("name"):
+                canonical_owner = matched_person["name"]
+            elif "@" in str(action.owner):
+                canonical_owner = str(action.owner).split("@")[0].replace(".", " ").replace("_", " ").title()
+
+        existing_action_id = await _find_repeat_action(tx, action.task, owner_email)
+        action_id = existing_action_id or uuid5_id("action", f"{source_id}:{i}:{action.task}")
+
         await tx.run(
             """
             MERGE (a:ActionItem {id: $id})
-            ON CREATE SET a.created_at = $now
-            SET a.task = $task,
-                a.owner = $owner,
-                a.due = $due,
-                a.done = $done,
+            ON CREATE SET a.created_at = $now, a.done = $done, a.task = $task, a.owner = $owner
+            SET a.due = coalesce($due, a.due),
+                a.done = CASE WHEN coalesce(a.done, false) = true THEN true ELSE $done END,
                 a.priority = $priority,
                 a.is_engineering_task = $is_engineering_task,
-                a.confidence = $confidence,
+                a.confidence = CASE WHEN $confidence > coalesce(a.confidence, 0.0)
+                                    THEN $confidence ELSE a.confidence END,
                 a.updated_at = $now
 
             WITH a
@@ -400,9 +468,9 @@ async def _write_action_items(
                 MERGE (a)-[:ASSIGNED_TO]->(p)
             )
             """,
-            id=uuid5_id("action", f"{source_id}:{i}:{action.task}"),
+            id=action_id,
             task=action.task,
-            owner=action.owner,
+            owner=canonical_owner,
             due=str(action.due) if action.due else None,
             done=action.done,
             priority=action.priority,
@@ -414,6 +482,9 @@ async def _write_action_items(
         )
 
 
+# Prefixes that mark a title as *about* a meeting rather than being one: a
+# recap mail, a notes doc, a transcript. Which side of RECAP_OF a meeting sits
+# on is decided by these, so they are matched before normalisation strips them.
 _RECAP_PREFIX_RE = re.compile(
     r"^\s*(re:|fwd?:)?\s*(recap|notes|minutes|summary|follow[- ]?up|transcript)\b\s*[:\-–]?",
     re.IGNORECASE,
@@ -600,7 +671,11 @@ async def update_action_jira_key(action_id: str, jira_key: str, driver: Any | No
 
 
 async def get_open_actions_for_owner(
-    owner_email: str, *, exclude_id: str, driver: Any | None = None
+    owner_email: str | None = None,
+    *,
+    exclude_id: str,
+    meeting_id: str | None = None,
+    driver: Any | None = None,
 ) -> list[dict[str, Any]]:
     """Same-owner open items, the dedup candidate set jira_pusher scores against.
 
@@ -612,15 +687,28 @@ async def get_open_actions_for_owner(
     """
     driver = driver or get_driver()
     async with driver.session() as session:
-        result = await session.run(
-            """
-            MATCH (a:ActionItem)-[:ASSIGNED_TO]->(p:Person {email: $email})
-            WHERE coalesce(a.done, false) = false AND a.id <> $exclude_id
-            RETURN a.id AS id, a.task AS task, a.jira_key AS jira_key, a.embedding AS embedding
-            """,
-            email=owner_email,
-            exclude_id=exclude_id,
-        )
+        if owner_email:
+            result = await session.run(
+                """
+                MATCH (a:ActionItem)-[:ASSIGNED_TO]->(p:Person {email: $email})
+                WHERE coalesce(a.done, false) = false AND a.id <> $exclude_id
+                RETURN a.id AS id, a.task AS task, a.jira_key AS jira_key, a.embedding AS embedding
+                """,
+                email=owner_email,
+                exclude_id=exclude_id,
+            )
+        elif meeting_id:
+            result = await session.run(
+                """
+                MATCH (m:Meeting {id: $meeting_id})-[:DISCUSSED*0..1]->(a:ActionItem)
+                WHERE coalesce(a.done, false) = false AND a.id <> $exclude_id
+                RETURN a.id AS id, a.task AS task, a.jira_key AS jira_key, a.embedding AS embedding
+                """,
+                meeting_id=meeting_id,
+                exclude_id=exclude_id,
+            )
+        else:
+            return []
         return [dict(r) async for r in result]
 
 
@@ -802,7 +890,7 @@ async def get_open_actions(limit: int = 50, driver: Any = None) -> list[dict[str
             MATCH (a:ActionItem)
             WHERE coalesce(a.done, false) = false
             OPTIONAL MATCH (a)-[:ASSIGNED_TO]->(p:Person)
-            RETURN a.id AS id, a.task AS task, a.owner AS owner, a.due AS due,
+            RETURN a.id AS id, a.task AS task, coalesce(p.name, a.owner) AS owner, a.due AS due,
                    a.priority AS priority, a.jira_key AS jira_key,
                    a.jira_status AS jira_status, p.email AS owner_email
             ORDER BY coalesce(a.due, '9999') ASC
