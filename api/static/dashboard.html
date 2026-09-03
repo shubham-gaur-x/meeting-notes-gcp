@@ -231,6 +231,21 @@
         </svg>
       </button>
     </div>
+    <div class="row" style="gap:8px;align-items:center;margin-bottom:12px">
+      <span class="muted" style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.6px">Filter Scope:</span>
+      <select id="chat-scope" style="padding:4px 9px;font-size:12px;border-radius:6px">
+        <option value="">All Memory &amp; Graph</option>
+        <option value="ActionItem">Open Deliverables &amp; Actions</option>
+        <option value="Decision">Decisions &amp; Milestones</option>
+        <option value="Meeting">Recent Meetings</option>
+      </select>
+      <select id="chat-timeframe" style="padding:4px 9px;font-size:12px;border-radius:6px">
+        <option value="">All Time</option>
+        <option value="7">Past 7 Days</option>
+        <option value="30">Past 30 Days</option>
+        <option value="90">Past Quarter</option>
+      </select>
+    </div>
     <div id="chat-suggestions" style="margin-bottom:14px"></div>
     <div id="ask-body"></div>
   </section>
@@ -698,6 +713,15 @@ function renderMarkdown(md) {
       continue;
     }
 
+    // Structured Metadata Fields (Owner:, Due Date:, Priority:, Status:, Details:, Source:, Links:)
+    const metaMatch = trimmed.match(/^<strong>(Owner|Due Date|Due|Priority|Status|Details|Source|Links):<\/strong>\s*(.*)$/i) ||
+                      trimmed.match(/^(Owner|Due Date|Due|Priority|Status|Details|Source|Links):\s*(.*)$/i);
+    if (metaMatch) {
+      closeLists();
+      out.push(`<div style="margin:3px 0;font-size:13px;display:flex;gap:6px;align-items:baseline"><span style="color:var(--muted);font-weight:600;min-width:76px;font-size:12px;text-transform:uppercase;letter-spacing:.4px">${metaMatch[1]}:</span> <span style="color:var(--ink);flex:1">${metaMatch[2]}</span></div>`);
+      continue;
+    }
+
     // Unordered List Items (- or *)
     if (trimmed.startsWith("- ") || trimmed.startsWith("* ")) {
       if (inOl) { out.push('</ol>'); inOl = false; }
@@ -904,23 +928,78 @@ function askQuestion(q) {
   askMemory();
 }
 
+let LAST_RAW_ANSWER = "";
+
+function copyAnswerText(btn) {
+  if (!LAST_RAW_ANSWER) return;
+  navigator.clipboard.writeText(LAST_RAW_ANSWER).then(() => {
+    const label = btn.querySelector("span");
+    if (label) {
+      const orig = label.textContent;
+      label.textContent = "Copied!";
+      setTimeout(() => { label.textContent = orig; }, 2000);
+    }
+  }).catch(() => {});
+}
+
 async function askMemory() {
   const textarea = $("#q");
   const question = textarea.value.trim();
   if (!question) return;
+
+  const scope = $("#chat-scope")?.value || "";
+  const timeframe = $("#chat-timeframe")?.value || "";
+  let payloadQuestion = question;
+  const constraints = [];
+  if (scope) constraints.push(`Scope: ${scope}`);
+  if (timeframe) constraints.push(`Timeframe: past ${timeframe} days`);
+  if (constraints.length) {
+    payloadQuestion += ` (${constraints.join(", ")})`;
+  }
+
   $("#ask-body").innerHTML = empty("Searching your meetings & knowledge graph…");
   try {
     const r = await fetch("/graph/memory/query", {
       method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({question}),
+      body: JSON.stringify({question: payloadQuestion}),
     });
     if (!r.ok) throw new Error("query -> " + r.status);
     const d = await r.json();
+    LAST_RAW_ANSWER = d.answer || "";
     const count = (d.node_ids || []).length;
     const noun = count === 1 ? "item" : "items";
+
+    let entitiesHtml = "";
+    const topics = (d.entities?.topics || []).filter(Boolean);
+    const people = (d.entities?.people || []).filter(Boolean);
+    if (topics.length || people.length) {
+      entitiesHtml += `<div style="margin-top:12px;display:flex;flex-wrap:wrap;align-items:center;gap:6px">` +
+        `<span class="muted" style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px">Related Entities:</span>` +
+        topics.map(t => `<span class="pill" style="cursor:pointer" onclick="askQuestion('What are the key decisions, deliverables, and updates regarding ${esc(t).replace(/'/g, "\\'")}')">📂 ${esc(t)}</span>`).join("") +
+        people.map(p => `<span class="pill" style="cursor:pointer" onclick="askQuestion('What deliverables and action items are assigned to or involve ${esc(p).replace(/'/g, "\\'")}')">👤 ${esc(p)}</span>`).join("") +
+        `</div>`;
+    }
+
+    let followupsHtml = "";
+    if ((d.suggested_followups || []).length) {
+      followupsHtml += `<div style="margin-top:10px;display:flex;flex-wrap:wrap;align-items:center">` +
+        `<span class="muted" style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-right:6px">Follow-ups:</span>` +
+        d.suggested_followups.map(f => `<button class="followup-btn" onclick="askQuestion('${esc(f).replace(/'/g, "\\'")}')">↪ ${esc(f)}</button>`).join("") +
+        `</div>`;
+    }
+
     $("#ask-body").innerHTML =
-      `<div class="answer" style="line-height:1.6">${renderMarkdown(d.answer)}</div>` +
-      `<p class="muted" style="font-size:12px;margin-top:8px">Answered from ${count} ${noun} in your meeting memory.</p>`;
+      `<div class="answer" style="line-height:1.6;position:relative">` +
+      `<div style="display:flex;justify-content:flex-end;margin-bottom:8px">` +
+      `<button class="ghost" onclick="copyAnswerText(this)" style="padding:4px 10px;font-size:11px;margin:0;display:inline-flex;align-items:center;gap:5px" title="Copy answer to clipboard">` +
+      `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>` +
+      `<span>Copy Answer</span></button>` +
+      `</div>` +
+      `<div>${renderMarkdown(d.answer)}</div>` +
+      `</div>` +
+      entitiesHtml +
+      followupsHtml +
+      `<p class="muted" style="font-size:12px;margin-top:10px">Answered from ${count} ${noun} in your meeting memory.</p>`;
   } catch (e) { fail("#ask-body", e); }
 }
 
