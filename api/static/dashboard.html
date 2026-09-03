@@ -223,8 +223,13 @@
                 onkeydown="handleChatKeydown(event)"
                 oninput="autoGrowTextarea(this)"></textarea>
       <button class="action" onclick="askMemory()" style="height:38px;padding:0 18px">Ask</button>
-      <button class="ghost" onclick="openChatSettings()" title="Chat Query & Suggestions Settings"
-              style="height:38px;padding:0 12px;margin:0;font-size:15px;display:inline-flex;align-items:center;justify-content:center">⚙️</button>
+      <button class="ghost" onclick="openChatSettings()" title="Chat Query &amp; Suggestions Settings"
+              style="height:38px;padding:0 12px;margin:0;display:inline-flex;align-items:center;justify-content:center">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block">
+          <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path>
+          <circle cx="12" cy="12" r="3"></circle>
+        </svg>
+      </button>
     </div>
     <div id="chat-suggestions" style="margin-bottom:14px"></div>
     <div id="ask-body"></div>
@@ -848,12 +853,14 @@ async function renderChatSuggestions() {
 
   // 1. Common Questions Section (clickable chips)
   if (commonQueries.length > 0) {
-    html += `<div style="margin-bottom:10px">` +
-      `<div class="sub" style="margin-bottom:6px;font-weight:600;letter-spacing:.5px;text-transform:uppercase">📌 Common Questions</div>` +
+    html += `<div style="margin-bottom:12px">` +
+      `<div class="sub" style="margin-bottom:6px;font-weight:600;letter-spacing:.5px;text-transform:uppercase;display:flex;align-items:center;gap:6px">` +
+      `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--accent)"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>` +
+      `<span>Common Questions</span></div>` +
       `<div style="display:flex;flex-wrap:wrap;align-items:center">` +
       commonQueries.map(q =>
         `<div class="chat-chip" onclick="askQuestion('${esc(q).replace(/'/g, "\\'")}')">` +
-        `<span class="chip-icon">💬</span>` +
+        `<svg class="chip-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>` +
         `<span>${esc(q)}</span>` +
         `</div>`
       ).join("") +
@@ -873,7 +880,9 @@ async function renderChatSuggestions() {
 
     if (SUGGESTED_QUESTIONS.length > 0) {
       html += `<div style="margin-top:6px">` +
-        `<div class="sub" style="margin-bottom:6px;font-weight:600;letter-spacing:.5px;text-transform:uppercase">⚡ AI Suggested from Active Action Items &amp; Workstreams</div>` +
+        `<div class="sub" style="margin-bottom:6px;font-weight:600;letter-spacing:.5px;text-transform:uppercase;display:flex;align-items:center;gap:6px">` +
+        `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--accent)"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>` +
+        `<span>AI Suggested from Active Action Items &amp; Workstreams</span></div>` +
         `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px">` +
         SUGGESTED_QUESTIONS.map(q =>
           `<div class="prompt-card" onclick="askQuestion('${esc(q.question).replace(/'/g, "\\'")}')">` +
