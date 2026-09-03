@@ -574,3 +574,108 @@ def test_a_blank_attendee_name_does_not_abort_the_transaction() -> None:
         _resolve_owner_email("Katrisa", Roster([]), [], attendees=attendees)
         == "katrisa.brock@onixnet.com"
     )
+
+
+def test_a_recap_title_normalizes_to_its_meetings_title() -> None:
+    """The two sides of the recap match must produce the same string.
+
+    This is the assertion the original lacked. It compared a normalised title
+    against `toLower(m2.title)`, so the ampersand survived on one side only and
+    the headline case never matched -- while the test asserted merely that the
+    word RECAP_OF appeared in the query text, which it did.
+    """
+    from meeting_notes.graph_client import normalize_meeting_title as norm
+
+    assert norm("Recap: Architecture & API Design Sync") == norm(
+        "Architecture & API Design Sync"
+    )
+    assert norm("Re: Fwd: Notes: Q3 Planning!") == norm("Q3 Planning")
+    assert norm("   ") == ""
+
+
+def test_recap_titles_are_told_apart_from_the_meetings_they_recap() -> None:
+    from meeting_notes.graph_client import is_recap_title
+
+    assert is_recap_title("Recap: Architecture Sync")
+    assert is_recap_title("Re: Notes - Q3 Planning")
+    assert is_recap_title("Transcript: Standup")
+    assert not is_recap_title("Architecture Sync")
+    # "Summary" as a topic, not a marker, must not flip the edge direction.
+    assert not is_recap_title("Executive Summary Review")
+
+
+def test_the_recap_window_covers_the_morning_after() -> None:
+    """Recaps are written the next day, so an exact-date match misses them."""
+    from meeting_notes.graph_client import _adjacent_dates
+
+    assert _adjacent_dates("2026-08-28") == ["2026-08-27", "2026-08-28", "2026-08-29"]
+    # Unparseable dates degrade to an exact match rather than raising inside
+    # the one transaction that writes the whole meeting.
+    assert _adjacent_dates("not-a-date") == ["not-a-date"]
+
+
+async def test_a_recap_links_to_its_meeting_on_the_normalized_title() -> None:
+    from meeting_notes import graph_client
+
+    tx = FakeTx()
+    await graph_client.upsert_meeting_graph(
+        _meeting(title="Recap: Architecture & API Design Sync", date="2026-08-28"),
+        "email-src-101",
+        driver=FakeDriver(tx),
+        known_people=[],
+    )
+
+    written = next(p for c, p in tx.calls if "MERGE (m:Meeting" in c)
+    linked = next(p for c, p in tx.calls if "RECAP_OF" in c)
+    cypher = tx.cypher()
+
+    # The stored property and the one matched against are the same string.
+    assert written["title_norm"] == "architecture api design sync"
+    assert linked["norm"] == written["title_norm"]
+    assert "m2.title_norm = $norm" in cypher, "must match the normalised property"
+    assert "toLower(m2.title)" not in cypher, "matching a raw title is the old bug"
+
+    # This side announced itself as the recap, so it is the edge's source.
+    assert "MERGE (m1)-[r:RECAP_OF]->(m2)" in cypher
+    assert linked["other_is_recap"] is False
+    assert "2026-08-29" in linked["dates"], "the morning-after case must be covered"
+
+    # One direction only; the inverse edge was redundant state to keep in step.
+    assert "HAS_RECAP" not in cypher
+
+
+async def test_a_plain_meeting_is_the_target_of_the_recap_edge_not_its_source() -> None:
+    """Direction follows the recap marker, not ingestion order.
+
+    The original always pointed the newly written meeting at the older one, so
+    ingesting the calendar event after the recap mail recorded the meeting as a
+    recap of its own recap.
+    """
+    from meeting_notes import graph_client
+
+    tx = FakeTx()
+    await graph_client.upsert_meeting_graph(
+        _meeting(title="Architecture & API Design Sync", date="2026-08-28"),
+        "cal-src-202",
+        driver=FakeDriver(tx),
+        known_people=[],
+    )
+    cypher = tx.cypher()
+    linked = next(p for c, p in tx.calls if "RECAP_OF" in c)
+
+    assert "MERGE (m2)-[r:RECAP_OF]->(m1)" in cypher
+    assert linked["other_is_recap"] is True
+
+
+async def test_an_untitled_meeting_links_to_nothing() -> None:
+    """An empty norm matched every empty-titled meeting under `CONTAINS`."""
+    from meeting_notes import graph_client
+
+    tx = FakeTx()
+    await graph_client.upsert_meeting_graph(
+        _meeting(title="   ", date="2026-08-28"),
+        "src-303",
+        driver=FakeDriver(tx),
+        known_people=[],
+    )
+    assert "RECAP_OF" not in tx.cypher()

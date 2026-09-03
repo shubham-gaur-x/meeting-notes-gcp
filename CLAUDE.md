@@ -334,7 +334,14 @@ own documentation.
 
 ### Core
 **Nodes:** `Meeting` · `Person` · `Organization` · `Topic` · `Decision` · `ActionItem`
-**Edges:** `ATTENDED` · `DISCUSSED` · `PRODUCED` · `ASSIGNED_TO` · `WORKS_AT` · `FOLLOWS_UP` · `MENTIONS` · `MENTIONED_IN`
+**Edges:** `ATTENDED` · `DISCUSSED` · `PRODUCED` · `ASSIGNED_TO` · `WORKS_AT` · `FOLLOWS_UP` · `MENTIONS` · `MENTIONED_IN` · `RECAP_OF{confidence}`
+
+`RECAP_OF` (Meeting→Meeting) points from a recap — a follow-up mail, a notes doc, a
+transcript — at the meeting it describes. Direction comes from `Meeting.is_recap`, never from
+ingestion order. It is stored one way only; there is no `HAS_RECAP` inverse, because a second
+row saying the same thing is a second row that can disagree. Matching is exact equality of
+`Meeting.title_norm` within ±1 day, deliberately narrow: a false `RECAP_OF` feeds a wrong claim
+to the LLM, while a missed one costs a little context.
 
 ### Memory layer
 **Nodes:** `Fact` · `Preference` · `Procedure` · `ProcedureStep` · `MemorySession`
@@ -363,6 +370,9 @@ a Feature and `follows_up_on` a Meeting; our `AgentRun` is the same bridge conce
 - `Person.tracked` (default `false`) is the governance gate. Per-person analytics — PageRank,
   centrality, any leaderboard — **must** filter on `tracked = true`. Aggregates are the default;
   naming individuals is opt-in.
+- `Meeting.title_norm` is written by the same helper that reads it
+  (`graph_client.normalize_meeting_title`). Comparing a normalised string against a raw one is
+  how the first version of `RECAP_OF` silently never matched anything.
 - `Topic` MERGE key is **lowercased and stripped**. Using raw case fragmented single topics
   across multiple nodes in v5 and silently understated every insight query.
 - `ActionItem.confidence` and `Decision.confidence` gate side effects. Below
