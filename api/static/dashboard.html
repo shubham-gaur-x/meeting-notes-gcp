@@ -595,14 +595,6 @@ async function openWorkstream(w) {
   } catch (e) { $("#d-body").innerHTML = `<div class="err">${esc(e.message)}</div>`; }
 }
 
-const EXAMPLES = [
-  "What are all of my open deliverables and high-priority commitments?",
-  "Who is currently waiting on me for deliverables or approvals?",
-  "What key architectural decisions and project milestones were established in recent syncs?",
-];
-
-let SUGGESTED_QUESTIONS = [];
-
 function renderMarkdown(md) {
   if (!md) return "";
   let html = esc(md);
@@ -740,6 +732,7 @@ const DEFAULT_COMMON_QUERIES = [
   "What key architectural decisions and project milestones were established in recent syncs?",
   "What are the urgent action items with upcoming deadlines?",
 ];
+const EXAMPLES = DEFAULT_COMMON_QUERIES;
 
 const STORAGE_KEY_QUERIES = "mn_common_queries_v1";
 const STORAGE_KEY_AI_ENABLED = "mn_enable_ai_queries_v1";
