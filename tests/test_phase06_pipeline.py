@@ -375,6 +375,207 @@ async def test_a_sprint_move_failure_does_not_fail_issue_creation() -> None:
     assert key == "SCRUM-1"
 
 
+# ─── multi-project routing and sub-tasks ──────────────────────────────────────
+
+
+async def test_an_issue_defaults_to_the_configured_project() -> None:
+    """Every pre-existing caller passes no project and must not change behaviour."""
+    seen: dict = {}
+
+    async def transport(method, url, headers, params, json_body):
+        seen.update(json_body or {})
+        return 200, {"key": "SCRUM-1"}
+
+    await create_issue(
+        summary="s", description="d", priority="medium", sprint_id=None,
+        is_engineering_task=False, settings=_jira_settings(), transport=transport,
+    )
+    assert seen["fields"]["project"]["key"] == "SCRUM"
+    assert seen["fields"]["issuetype"]["name"] == "Task"
+
+
+async def test_an_explicit_project_key_routes_the_issue_elsewhere() -> None:
+    seen: dict = {}
+
+    async def transport(method, url, headers, params, json_body):
+        seen.update(json_body or {})
+        return 200, {"key": "MDP-7"}
+
+    key = await create_issue(
+        summary="s", description="d", priority="medium", sprint_id=None,
+        is_engineering_task=False, project_key="MDP",
+        settings=_jira_settings(), transport=transport,
+    )
+    assert key == "MDP-7"
+    assert seen["fields"]["project"]["key"] == "MDP"
+
+
+async def test_a_parent_makes_the_issue_a_subtask_by_default() -> None:
+    seen: dict = {}
+
+    async def transport(method, url, headers, params, json_body):
+        seen.update(json_body or {})
+        return 200, {"key": "SCRUM-2"}
+
+    await create_issue(
+        summary="s", description="d", priority="medium", sprint_id=None,
+        is_engineering_task=False, parent_key="SCRUM-1",
+        settings=_jira_settings(), transport=transport,
+    )
+    assert seen["fields"]["parent"] == {"key": "SCRUM-1"}
+    assert seen["fields"]["issuetype"]["name"] == "Sub-task", (
+        "JIRA_ISSUE_TYPE is Task, which Jira will not accept under a parent"
+    )
+
+
+async def test_a_subtask_is_never_moved_to_a_sprint() -> None:
+    """Jira carries the sprint on the parent and rejects moving a child alone."""
+    calls: list[str] = []
+
+    async def transport(method, url, headers, params, json_body):
+        calls.append(url)
+        return 200, {"key": "SCRUM-2"}
+
+    await create_issue(
+        summary="s", description="d", priority="high", sprint_id=42,
+        is_engineering_task=False, parent_key="SCRUM-1",
+        settings=_jira_settings(), transport=transport,
+    )
+    assert not any("sprint/42/issue" in u for u in calls)
+
+
+async def test_extra_labels_are_appended_never_substituted() -> None:
+    """Dropping DEV_AGENT_LABEL makes an engineering ticket invisible to the
+    agent forever, so a caller's own labels must not be able to replace it."""
+    seen: dict = {}
+
+    async def transport(method, url, headers, params, json_body):
+        seen.update(json_body or {})
+        return 200, {"key": "SCRUM-1"}
+
+    await create_issue(
+        summary="s", description="d", priority="medium", sprint_id=None,
+        is_engineering_task=True, labels=["timecard", "dev-agent"],
+        settings=_jira_settings(), transport=transport,
+    )
+    assert seen["fields"]["labels"] == ["dev-agent", "timecard"], (
+        "the routing label stays first and a repeat of it is not duplicated"
+    )
+
+
+async def test_create_subtask_takes_the_project_from_the_parent_key() -> None:
+    """Jira only accepts a sub-task in its parent's project, so deriving it
+    removes the one way this call can be made to fail."""
+    from meeting_notes.jira_client import create_subtask
+
+    seen: dict = {}
+
+    async def transport(method, url, headers, params, json_body):
+        seen.update(json_body or {})
+        return 200, {"key": "MDP-8"}
+
+    key = await create_subtask(
+        "MDP-3", "write the runbook",
+        settings=_jira_settings(), transport=transport,
+    )
+    assert key == "MDP-8"
+    assert seen["fields"]["project"]["key"] == "MDP", (
+        "JIRA_PROJECT_KEY is SCRUM; the parent's project must win"
+    )
+    assert seen["fields"]["parent"] == {"key": "MDP-3"}
+
+
+async def test_link_issues_reports_a_refusal_instead_of_raising() -> None:
+    """A ticket that exists but is unlinked beats a failed push."""
+    from meeting_notes.jira_client import link_issues
+
+    async def transport(method, url, headers, params, json_body):
+        return 400, {"errorMessages": ["No issue link type with name 'Nope'"]}
+
+    assert await link_issues(
+        "SCRUM-1", "MDP-2", link_type="Nope",
+        settings=_jira_settings(), transport=transport,
+    ) is False
+
+
+async def test_link_issues_sends_both_ends_and_an_optional_comment() -> None:
+    from meeting_notes.jira_client import link_issues
+
+    seen: dict = {}
+
+    async def transport(method, url, headers, params, json_body):
+        seen["url"] = url
+        seen["body"] = json_body
+        return 201, None
+
+    assert await link_issues(
+        "SCRUM-1", "MDP-2", link_type="Blocks", comment="raised in standup",
+        settings=_jira_settings(), transport=transport,
+    ) is True
+    assert seen["url"].endswith("/issueLink")
+    assert seen["body"]["inwardIssue"] == {"key": "SCRUM-1"}
+    assert seen["body"]["outwardIssue"] == {"key": "MDP-2"}
+    assert seen["body"]["type"] == {"name": "Blocks"}
+    assert "comment" in seen["body"]
+
+
+def test_jira_client_defines_add_comment_exactly_once() -> None:
+    """A second `async def add_comment` silently shadows the first.
+
+    The mega-PR this was split out of carried two definitions with different
+    signatures and different error handling, and the one every caller reached
+    was whichever happened to be lower in the file.
+    """
+    import ast
+    from pathlib import Path
+
+    import meeting_notes.jira_client as jc
+
+    tree = ast.parse(Path(jc.__file__).read_text(encoding="utf-8"))
+    names = [
+        n.name for n in tree.body if isinstance(n, ast.AsyncFunctionDef | ast.FunctionDef)
+    ]
+    assert names.count("add_comment") == 1, f"duplicate top-level definitions: {names}"
+
+
+async def test_add_comment_raises_on_a_rejected_comment(monkeypatch) -> None:
+    """Returning quietly reports a rejected comment as a successful one.
+
+    `add_comment` is `@with_retry`, same as `move_to_sprint` beside it, so the
+    backoff sleeps are stubbed out rather than actually waited on.
+    """
+    import asyncio
+
+    import pytest
+
+    from meeting_notes.jira_client import add_comment
+
+    async def no_sleep(_: float) -> None:
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", no_sleep)
+
+    async def transport(method, url, headers, params, json_body):
+        return 403, {"errorMessages": ["no permission"]}
+
+    with pytest.raises(RuntimeError, match="HTTP 403"):
+        await add_comment(
+            "SCRUM-1", "hello", settings=_jira_settings(), transport=transport
+        )
+
+
+async def test_add_comment_returns_the_created_comment_body() -> None:
+    from meeting_notes.jira_client import add_comment
+
+    async def transport(method, url, headers, params, json_body):
+        return 201, {"id": "10101"}
+
+    created = await add_comment(
+        "SCRUM-1", "hello", settings=_jira_settings(), transport=transport
+    )
+    assert created["id"] == "10101"
+
+
 async def test_active_sprint_id_returns_none_when_no_sprint_is_active() -> None:
     async def transport(method, url, headers, params, json_body):
         return 200, {"values": []}

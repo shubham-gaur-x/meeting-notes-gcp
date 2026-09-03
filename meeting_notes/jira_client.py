@@ -134,12 +134,22 @@ async def get_issue(
 @with_retry(max_attempts=3, base_delay=2.0)
 async def add_comment(
     key: str, text: str, *, settings: Settings | None = None, transport: Transport | None = None
-) -> None:
-    """Comment on an issue. Phase 6's dedup path links to an existing ticket
-    rather than opening a duplicate, and says so in a comment."""
+) -> dict[str, Any]:
+    """Comment on an issue, returning Jira's created-comment body.
+
+    Phase 6's dedup path links to an existing ticket rather than opening a
+    duplicate, and says so in a comment. Callers that only want the side
+    effect can ignore the return value; the operator route beside this one
+    reports the comment id back, which is why the body is surfaced at all.
+
+    A 4xx/5xx raises rather than returning silently. Every caller already
+    treats a comment failure as non-fatal by wrapping the call, so the loud
+    version costs nothing and stops a rejected comment from reading as a
+    successful one.
+    """
     settings = settings or get_settings()
     transport = transport or _default_transport
-    await transport(
+    status, body = await transport(
         "POST",
         f"{jira_base_url(settings)}/issue/{key}/comment",
         jira_headers(settings),
@@ -154,7 +164,10 @@ async def add_comment(
             }
         },
     )
+    if status >= 400:
+        raise RuntimeError(f"Adding a Jira comment returned HTTP {status}")
     log.info("jira.comment_added", issue_key=key)
+    return body or {}
 
 
 # ─── issue creation and sprint handling ────────────────────────────────────────
@@ -220,6 +233,10 @@ async def create_issue(
     priority: str,
     sprint_id: int | None,
     is_engineering_task: bool,
+    project_key: str | None = None,
+    issue_type: str | None = None,
+    parent_key: str | None = None,
+    labels: list[str] | None = None,
     settings: Settings | None = None,
     transport: Transport | None = None,
 ) -> str:
@@ -233,27 +250,43 @@ async def create_issue(
     A high-priority item is moved to the active sprint. **A sprint-move
     failure does not fail issue creation** — the issue already exists at that
     point and is more valuable un-sprinted than lost.
+
+    `project_key` routes an issue somewhere other than `JIRA_PROJECT_KEY`, so
+    one deployment can file into whichever project owns the work. It defaults
+    to the configured project, which keeps every existing caller unchanged.
+
+    `parent_key` makes the issue a child of an existing one. The issue type
+    then defaults to `Sub-task` rather than `JIRA_ISSUE_TYPE`, and the sprint
+    move is skipped: Jira boards carry the sprint on the parent, and moving a
+    sub-task independently is rejected.
     """
     settings = settings or get_settings()
     transport = transport or _default_transport
+    target_project = project_key or settings.jira_project_key
+    target_issue_type = issue_type or ("Sub-task" if parent_key else settings.jira_issue_type)
 
     fields: dict[str, Any] = {
-        "project": {"key": settings.jira_project_key},
+        "project": {"key": target_project},
         "summary": summary,
         "description": {
             "type": "doc",
             "version": 1,
             "content": [{"type": "paragraph", "content": [{"type": "text", "text": description}]}],
         },
-        "issuetype": {"name": settings.jira_issue_type},
+        "issuetype": {"name": target_issue_type},
         "priority": {"name": _PRIORITY_MAP.get(priority, "Medium")},
     }
+    if parent_key:
+        fields["parent"] = {"key": parent_key}
+
     # The two halves have to agree on how a coding task is marked:
     # `find_sprint_candidates` selects on DEV_AGENT_LABEL, so an engineering
-    # task created without it is invisible to the agent forever.
-    fields["labels"] = (
-        [DEV_AGENT_LABEL] if is_engineering_task else [MEETING_ACTION_ITEM_LABEL]
-    )
+    # task created without it is invisible to the agent forever. Extra labels
+    # are appended, never substituted, and de-duplicated in order so a caller
+    # passing the routing label back cannot drop the one that matters.
+    all_labels = [DEV_AGENT_LABEL] if is_engineering_task else [MEETING_ACTION_ITEM_LABEL]
+    all_labels.extend(labels or [])
+    fields["labels"] = list(dict.fromkeys(all_labels))
 
     status, body = await transport(
         "POST", f"{jira_base_url(settings)}/issue", jira_headers(settings), None, {"fields": fields}
@@ -262,14 +295,97 @@ async def create_issue(
         raise RuntimeError(f"Jira issue creation returned HTTP {status}")
     issue_key: str = (body or {})["key"]
 
-    if sprint_id and priority == "high":
+    if sprint_id and priority == "high" and not parent_key:
         try:
             await move_to_sprint(issue_key, sprint_id, settings=settings, transport=transport)
         except Exception as exc:  # noqa: BLE001 - reported, issue creation still succeeds
             log.warning("jira.sprint_move_failed", issue_key=issue_key, error=str(exc))
 
-    log.info("jira.issue_created", issue_key=issue_key, priority=priority)
+    log.info(
+        "jira.issue_created",
+        issue_key=issue_key,
+        project=target_project,
+        priority=priority,
+        parent_key=parent_key,
+    )
     return issue_key
+
+
+async def create_subtask(
+    parent_key: str,
+    summary: str,
+    description: str = "",
+    *,
+    priority: str = "medium",
+    labels: list[str] | None = None,
+    settings: Settings | None = None,
+    transport: Transport | None = None,
+) -> str:
+    """Create a sub-task under `parent_key`. Returns the new issue key.
+
+    The project is taken from the parent's key rather than from settings: a
+    sub-task Jira will accept has to live in the same project as its parent,
+    so deriving it removes the one way this call can be made to fail.
+    """
+    project_key = parent_key.split("-")[0] if "-" in parent_key else None
+    return await create_issue(
+        summary=summary,
+        description=description,
+        priority=priority,
+        sprint_id=None,
+        is_engineering_task=False,
+        project_key=project_key,
+        parent_key=parent_key,
+        labels=labels,
+        settings=settings,
+        transport=transport,
+    )
+
+
+@with_retry(max_attempts=3, base_delay=2.0)
+async def link_issues(
+    inward_key: str,
+    outward_key: str,
+    *,
+    link_type: str = "Relates",
+    comment: str | None = None,
+    settings: Settings | None = None,
+    transport: Transport | None = None,
+) -> bool:
+    """Link two issues, possibly across projects. False when Jira refused.
+
+    Returns a bool rather than raising because the caller is always doing this
+    alongside something more important — a ticket that exists but is unlinked
+    is a far better outcome than a failed push. A refusal is logged with the
+    status so an unknown `link_type` is diagnosable.
+    """
+    settings = settings or get_settings()
+    transport = transport or _default_transport
+    payload: dict[str, Any] = {
+        "type": {"name": link_type},
+        "inwardIssue": {"key": inward_key},
+        "outwardIssue": {"key": outward_key},
+    }
+    if comment:
+        payload["comment"] = {
+            "body": {
+                "type": "doc",
+                "version": 1,
+                "content": [{"type": "paragraph", "content": [{"type": "text", "text": comment}]}],
+            }
+        }
+
+    status, _ = await transport(
+        "POST", f"{jira_base_url(settings)}/issueLink", jira_headers(settings), None, payload
+    )
+    if status >= 400:
+        log.warning(
+            "jira.issue_link_failed", inward=inward_key, outward=outward_key, status=status
+        )
+        return False
+
+    log.info("jira.issues_linked", inward=inward_key, outward=outward_key, link_type=link_type)
+    return True
 
 
 # ─── dev agent (Phase 11, ADR-020) ─────────────────────────────────────────────

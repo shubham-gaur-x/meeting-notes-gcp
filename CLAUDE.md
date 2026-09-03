@@ -339,7 +339,13 @@ own documentation.
 
 ### Core
 **Nodes:** `Meeting` · `Person` · `Organization` · `Topic` · `Decision` · `ActionItem`
-**Edges:** `ATTENDED` · `DISCUSSED` · `PRODUCED` · `ASSIGNED_TO` · `WORKS_AT` · `FOLLOWS_UP` · `MENTIONS` · `MENTIONED_IN` · `RECAP_OF{confidence}`
+**Edges:** `ATTENDED` · `DISCUSSED` · `PRODUCED` · `ASSIGNED_TO` · `WORKS_AT` · `FOLLOWS_UP` · `MENTIONS` · `MENTIONED_IN` · `RECAP_OF{confidence}` · `PARENT_OF`
+
+`PARENT_OF` (ActionItem→ActionItem) mirrors a Jira parent/sub-task hierarchy into the graph.
+Written only by `graph_client.link_action_parent`, addressed by the parent's `jira_key`
+because that is the identity the two systems share. A parent filed outside this pipeline has
+no `ActionItem`, so the edge is absent and the hierarchy reads flat — that is real signal
+about where work is tracked, not a failure (ADR-026).
 
 `RECAP_OF` (Meeting→Meeting) points from a recap — a follow-up mail, a notes doc, a
 transcript — at the meeting it describes. Direction comes from `Meeting.is_recap`, never from
