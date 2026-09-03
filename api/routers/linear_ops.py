@@ -27,6 +27,11 @@ def _is_done_type(state_type: str) -> bool:
     return state_type.strip().lower() in _DONE_TYPES
 
 
+def _state_name(issue: dict[str, Any], default: str = "Todo") -> str:
+    """Extract the workflow state name from a Linear issue response."""
+    return str((issue.get("state") or {}).get("name", default))
+
+
 class LinearTransitionRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -97,7 +102,7 @@ async def subtask(
     linear_id = created.get("id", "")
     linear_identifier = created.get("identifier", "")
     linear_url = created.get("url", "")
-    linear_state = (created.get("state") or {}).get("name", "Todo")
+    linear_state = _state_name(created)
 
     if body.child_action_id and linear_id:
         await graph_client.update_action_linear_info(
@@ -132,7 +137,7 @@ async def create_issue_endpoint(
     linear_id = created.get("id", "")
     linear_identifier = created.get("identifier", "")
     linear_url = created.get("url", "")
-    linear_state = (created.get("state") or {}).get("name", "Todo")
+    linear_state = _state_name(created)
 
     if body.action_id and linear_id:
         await graph_client.update_action_linear_info(

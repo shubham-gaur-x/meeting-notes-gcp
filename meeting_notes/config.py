@@ -142,7 +142,7 @@ class Settings(BaseSettings):
     jira_sync_trigger_token: str = ""
 
     # ─── Linear (Epics, Projects, Sub-projects, Tasks) ────────────────────
-    issue_tracker: str = "jira"  # "jira", "linear", "both", "none"
+    issue_tracker: Literal["jira", "linear", "both", "none"] = "jira"
     linear_api_key: str = ""
     linear_team_id: str = ""
     linear_default_project_id: str | None = None
