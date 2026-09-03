@@ -55,6 +55,57 @@ def build_system_prompt(type_hint: str | None = None) -> str:
     return f"{_SYSTEM_PROMPT}\n\nMeeting-type guidance:\n{type_hint}"
 
 
+def _extract_raw_urls(text: str) -> list[str]:
+    """Harvest real resource and document URLs from source text.
+
+    Filters out XML namespaces, image/logo assets, and webmail anchors so
+    only genuine document, project, and reference links enter the graph.
+    """
+    import re
+
+    if not text:
+        return []
+
+    # Find candidate http(s) URLs
+    urls = re.findall(r"https?://[^\s<>\")']+", text)
+    cleaned: list[str] = []
+
+    noise_domains = (
+        "schemas.microsoft.com",
+        "schemas.openxmlformats.org",
+        "w3.org",
+        "xmlsoap.org",
+        "mail.google.com/mail",
+        "gstatic.com",
+        "googleusercontent.com",
+    )
+
+    noise_extensions = (
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".gif",
+        ".svg",
+        ".ico",
+        ".webp",
+        ".css",
+        ".js",
+    )
+
+    for u in urls:
+        u = u.rstrip(".,;:)>]")
+        if len(u) < 10:
+            continue
+        u_lower = u.lower()
+        if any(noise in u_lower for noise in noise_domains):
+            continue
+        if any(u_lower.endswith(ext) or f"{ext}?" in u_lower for ext in noise_extensions):
+            continue
+        cleaned.append(u)
+
+    return list(dict.fromkeys(cleaned))
+
+
 def repair(data: dict[str, Any], context: dict[str, Any] | None = None) -> dict[str, Any]:
     """Fill required fields the model left null-like, in place.
 
@@ -69,6 +120,13 @@ def repair(data: dict[str, Any], context: dict[str, Any] | None = None) -> dict[
         data["date"] = ctx.get("date") or datetime.now(UTC).strftime("%Y-%m-%d")
     if _is_null_like(data.get("summary")):
         data["summary"] = data.get("title") or "No summary available"
+
+    # Merge extracted links with raw URLs present in source text/body
+    raw_urls = _extract_raw_urls(ctx.get("text", "") or ctx.get("body", "") or "")
+    existing_links = [
+        link.strip() for link in (data.get("links") or []) if isinstance(link, str) and link.strip()
+    ]
+    data["links"] = list(dict.fromkeys(existing_links + raw_urls))
 
     # action_items: owner and task must be non-null strings, and an item is
     # repaired rather than dropped -- a nameless task is still a real task.
@@ -123,7 +181,8 @@ async def extract_meeting(
         return None
 
     try:
-        meeting = ExtractedMeeting.model_validate(repair(data, context))
+        enriched_ctx = {"text": text, "source_type": source_type, **(context or {})}
+        meeting = ExtractedMeeting.model_validate(repair(data, enriched_ctx))
     except Exception as exc:  # noqa: BLE001 - reported, then surfaced as None
         log.error(
             "extractor.validate_failed",
