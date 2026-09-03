@@ -506,3 +506,71 @@ async def test_db_exposes_reading_and_replacing_staged_records() -> None:
 
     assert hasattr(db, "list_staged_by_type")
     assert hasattr(db, "replace_staged_records")
+
+
+def test_resolve_owner_email_matches_attendee_roster_first() -> None:
+    from meeting_notes.graph_client import _resolve_owner_email
+    from meeting_notes.models import Attendee
+    from meeting_notes.person_resolver import Roster
+
+    attendees = [
+        Attendee(name="Michael Baylard", email="michael.baylard@onixnet.com"),
+        Attendee(name="Katrisa Brock", email="katrisa.brock@onixnet.com"),
+    ]
+    roster = Roster([])
+
+    def resolved(owner: str) -> str | None:
+        return _resolve_owner_email(owner, roster, [], attendees=attendees)
+
+    assert resolved("Michael Baylard") == "michael.baylard@onixnet.com"      # full name
+    assert resolved("Katrisa") == "katrisa.brock@onixnet.com"                # given name
+    assert resolved("michael.baylard") == "michael.baylard@onixnet.com"      # local part
+    assert resolved("michael.baylard@onixnet.com") == "michael.baylard@onixnet.com"
+    assert resolved("All delivery associates") is None                       # not a person
+
+
+
+def test_an_ambiguous_given_name_resolves_to_nobody() -> None:
+    """Two Katrisas in the room means no match, not the first one.
+
+    A given name is only usable because it is usually unique among the handful
+    of people actually in a meeting. When it isn't, picking either one assigns
+    the work to the wrong person and the graph gives no hint that it guessed --
+    so the edge must not form at all.
+    """
+    from meeting_notes.graph_client import _resolve_owner_email
+    from meeting_notes.models import Attendee
+    from meeting_notes.person_resolver import Roster
+
+    attendees = [
+        Attendee(name="Katrisa Brock", email="katrisa.brock@onixnet.com"),
+        Attendee(name="Katrisa Nguyen", email="katrisa.nguyen@onixnet.com"),
+    ]
+    assert _resolve_owner_email("Katrisa", Roster([]), [], attendees=attendees) is None
+
+    # A full name is still unambiguous even when the given name is not.
+    assert (
+        _resolve_owner_email("Katrisa Nguyen", Roster([]), [], attendees=attendees)
+        == "katrisa.nguyen@onixnet.com"
+    )
+
+
+def test_a_blank_attendee_name_does_not_abort_the_transaction() -> None:
+    """`Attendee.name` is a plain str, so a whitespace-only name is valid input.
+
+    Resolution used `name.split()[0]`, which raises IndexError on one -- inside
+    the single transaction that writes the whole meeting, so one malformed
+    attendee would cost every node in it.
+    """
+    from meeting_notes.graph_client import _resolve_owner_email
+    from meeting_notes.models import Attendee
+    from meeting_notes.person_resolver import Roster
+
+    attendees = [
+        Attendee(name="   ", email="ghost@onixnet.com"),
+        Attendee(name="Katrisa Brock", email="katrisa.brock@onixnet.com"),
+    ]
+    assert (
+        _resolve_owner_email("Katrisa", Roster([]), [], attendees=attendees)
+        == "katrisa.brock@onixnet.com"
+    )

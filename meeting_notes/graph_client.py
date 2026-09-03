@@ -80,8 +80,22 @@ async def get_known_people(driver: Any | None = None) -> list[dict[str, Any]]:
         return [dict(r) async for r in result]
 
 
+def _given_name(name: str | None) -> str:
+    """First whitespace-separated token of a name, normalised. '' if there is none.
+
+    `name.split()[0]` raises IndexError on a whitespace-only name, and
+    `Attendee.name` is a plain `str` with no such constraint. Raising here
+    would abort the whole meeting transaction over one malformed attendee.
+    """
+    parts = person_resolver.normalize_name(name).split()
+    return parts[0] if parts else ""
+
+
 def _resolve_owner_email(
-    owner: str, roster: Roster, known_people: list[dict[str, Any]]
+    owner: str,
+    roster: Roster,
+    known_people: list[dict[str, Any]],
+    attendees: list[Attendee] | None = None,
 ) -> str | None:
     """Canonical email for an action item's owner, or None.
 
@@ -90,19 +104,49 @@ def _resolve_owner_email(
     ASSIGNED_TO edge never forms. Running the owner through the same resolver
     the attendees use turns a name into the canonical email the MERGE needs.
 
+    The meeting's own attendee roster is tried first, because it is the
+    strongest available context: "Katrisa" is ambiguous across an organisation
+    but usually unique among the six people who were actually in the room.
+    A given-name match must be unique within that roster — two Katrisas mean
+    no match rather than a coin flip, since guessing here silently assigns
+    someone else's work.
+
     Returns None when the owner cannot be resolved: no email is invented, the
     edge simply does not form, and the ActionItem still exists with its raw
     `owner` string intact for a human to read.
     """
     if not owner:
         return None
+
+    # 1. The meeting's own attendees, strongest signal first.
+    if attendees:
+        norm_owner = person_resolver.normalize_name(owner)
+        known = [(a.name, a.email) for a in attendees if a.email]
+
+        for _name, email in known:
+            if email.lower() == owner.lower():
+                return email.lower()
+
+        for name, email in known:
+            if person_resolver.normalize_name(name) == norm_owner:
+                return email.lower()
+
+        given = [email for name, email in known if _given_name(name) == norm_owner]
+        if len(given) == 1:
+            return given[0].lower()
+
+        # Local part, e.g. an owner written as "michael.baylard".
+        for _name, email in known:
+            if email.split("@")[0].lower() == norm_owner:
+                return email.lower()
+
+    # 2. Global roster & known people resolution
     resolution = person_resolver.resolve(
         Attendee(name=owner, email=owner if "@" in owner else None),
         roster,
         known_people=known_people,
     )
     return resolution.email if resolution.status == "resolved" else None
-
 
 @with_retry(max_attempts=3, base_delay=1.0)
 async def _write_meeting(
@@ -277,6 +321,7 @@ async def _write_blockers(
 async def _write_action_items(
     tx: Any, actions: Any, source_id: str, meeting_id: str, now: str,
     *, roster: Roster, known_people: list[dict[str, Any]],
+    attendees: list[Any] | None = None,
 ) -> None:
     """ActionItem + FOLLOWS_UP, and ASSIGNED_TO when the owner resolves.
 
@@ -285,6 +330,7 @@ async def _write_action_items(
     and the edge simply never appeared.
     """
     for i, action in enumerate(actions):
+        owner_email = _resolve_owner_email(action.owner, roster, known_people, attendees=attendees)
         await tx.run(
             """
             MERGE (a:ActionItem {id: $id})
@@ -317,7 +363,7 @@ async def _write_action_items(
             is_engineering_task=action.is_engineering_task,
             confidence=action.confidence,
             meeting_id=meeting_id,
-            owner_email=_resolve_owner_email(action.owner, roster, known_people),
+            owner_email=owner_email,
             now=now,
         )
 
@@ -365,6 +411,7 @@ async def upsert_meeting_graph(
             await _write_action_items(
                 tx, meeting.action_items, source_id, meeting_id, now,
                 roster=roster, known_people=known_people,
+                attendees=meeting.attendees,
             )
             await tx.commit()
 
