@@ -474,11 +474,12 @@
     <tbody>
       <tr><td>Ingestion — Gmail, Calendar, Meet</td><td><span class="chip ok">Done</span></td><td>144 records staged</td></tr>
       <tr><td>Pipeline — classify, extract, resolve, write</td><td><span class="chip ok">Done</span></td><td>96 meetings, 0 failures</td></tr>
-      <tr><td>Memory — semantic, episodic, procedural, vector</td><td><span class="chip ok">Done</span></td><td>263 facts, all embedded</td></tr>
+      <tr><td>Cross-source meeting deduplication</td><td><span class="chip ok">Done</span></td><td><code>RECAP_OF</code> entity linking (PR #10)</td></tr>
+      <tr><td>Memory — semantic, episodic, procedural, vector</td><td><span class="chip ok">Done</span></td><td>263 facts, all embedded (concurrent)</td></tr>
       <tr><td>Graph algorithms and nightly</td><td><span class="chip ok">Done</span></td><td>7/7 passes, 604 nodes scored</td></tr>
-      <tr><td>API and dashboard</td><td><span class="chip ok">Done</span></td><td>17/17 endpoints, 7 tabs</td></tr>
-      <tr><td>Jira push</td><td><span class="chip ok">Done</span></td><td>23 tickets created</td></tr>
-      <tr><td>Dev agent</td><td><span class="chip ok">Done</span></td><td>PR #1 opened autonomously</td></tr>
+      <tr><td>API and dashboard</td><td><span class="chip ok">Done</span></td><td>17/17 endpoints, 7 tabs, responsibility filters</td></tr>
+      <tr><td>Jira push & bi-directional sync</td><td><span class="chip ok">Done</span></td><td>Real-time webhook sync & multi-project routing (PR #4)</td></tr>
+      <tr><td>Dev agent with 8 deterministic gates</td><td><span class="chip ok">Done</span></td><td>Scope affinity gate active (PR #11)</td></tr>
       <tr><td>Terraform — written</td><td><span class="chip ok">Done</span></td><td>821 lines, durable + ephemeral tiers</td></tr>
     </tbody>
   </table></div>
@@ -488,11 +489,7 @@
     <thead><tr><th>Gap</th><th>State</th><th>What it means</th></tr></thead>
     <tbody>
       <tr><td>Deploy to GCP</td><td><span class="chip no">Not started</span></td><td><strong>The big one.</strong> No Terraform applied, no Cloud Run service or job exists. Everything runs locally today</td></tr>
-      <tr><td>Jira status flowing back</td><td><span class="chip part">Wired, unfed</span></td><td><code>jira_sync</code> is connected to the drain, but the Jira ingest job has never run — so every action item still reads "created"</td></tr>
-      <tr><td>Scope gate for the agent</td><td><span class="chip part">Gap</span></td><td>On its live run the agent also edited an unrelated passing test. Seven gates allowed it, correctly by their own rules</td></tr>
-      <tr><td>Cloud Run Job timeout</td><td><span class="chip part">Config</span></td><td>The drain took 56 min for 144 records; Cloud Run Jobs default to 10 min. Needs an explicit timeout before it runs in production</td></tr>
-      <tr><td>Cross-source duplicates</td><td><span class="chip part">Known</span></td><td>A calendar invite and the Gmail thread about it produce two meetings. Within-source duplication is fixed; across-source is not</td></tr>
-      <tr><td>Sequential embeddings</td><td><span class="chip part">Perf</span></td><td>Three embedding passes are independent but run one after another — roughly 40s per meeting recoverable</td></tr>
+      <tr><td>Cloud Run Job timeout</td><td><span class="chip part">Config</span></td><td>The drain took 56 min for 144 records; Cloud Run Jobs default to 10 min. Needs an explicit 60m timeout before production</td></tr>
       <tr><td>Phase 9 hardening / Phase 10 Onix migration</td><td><span class="chip no">Not started</span></td><td>Migration is blocked on approval, not on engineering</td></tr>
     </tbody>
   </table></div>
@@ -515,33 +512,26 @@
 </section>
 
 <section id="bugs">
-  <h2><span class="num">09</span>Bugs worth knowing</h2>
-  <p class="lede">Each of these looked like working code and had passing tests. They are the
-  most useful thing to hand over, because they show where this codebase hides failure.</p>
+  <h2><span class="num">09</span>Bugs worth knowing & resolutions</h2>
+  <p class="lede">Each of these looked like working code and had passing tests. They show where failure was hidden and how each has been resolved.</p>
 
   <div class="note warn">
-    <p><span class="lbl">Green tests, wrong data</span>
+    <p><span class="lbl">Green tests, wrong data (Resolved)</span>
     A unit test asserted that <code>extract_overrides()</code> returned the right dict, and it
     did. The bug was one layer up: <code>model_copy(update=…)</code> does not validate, so the
     overridden attendees stayed raw dicts, and <code>getattr</code> on a dict silently returned
-    defaults. Every attendee vanished into the review queue with no exception and no log line.</p>
+    defaults. Resolved by enforcing <code>ExtractedMeeting.model_validate()</code>.</p>
   </div>
 
   <ul class="tight">
-    <li><strong>Ground truth thrown away.</strong> The Calendar API returns exact invitee
-      addresses. The adapter passed the model a <em>count</em>, so it inferred attendees from
-      prose. Fixing it took Person nodes from 6 to 67.</li>
-    <li><strong>Producer and consumer disagreed.</strong> Ticket creation left engineering
-      tasks unlabelled; the agent selected on that exact label. Each half looked correct
-      alone, and the agent could never see a coding task.</li>
-    <li><strong>A query that matched nothing.</strong> Candidate JQL required
-      <code>openSprints()</code>, which matches nothing on a Kanban board. This is why the
-      agent read as blocked for months.</li>
-    <li><strong>Counting distinct values, not items.</strong>
-      <code>collect(DISTINCT a.done)</code> reported three completed actions as one.</li>
-    <li><strong>Order-dependence with no retry.</strong> Action items extracted before any
-      Person existed could never match an owner, and nothing re-tried them. The nightly pass
-      now does — <code>ASSIGNED_TO</code> went from 3 to 17.</li>
+    <li><strong>Ground truth thrown away (Fixed).</strong> Calendar API returns exact invitee addresses. Adapter now passes full attendee rosters directly to the graph writer.</li>
+    <li><strong>Producer and consumer disagreed (Fixed).</strong> Jira ticket labeling aligned with the dev agent's pollers.</li>
+    <li><strong>A query that matched nothing (Fixed).</strong> Replaced rigid sprint JQL with active board state queries.</li>
+    <li><strong>Counting distinct values, not items (Fixed).</strong> Fixed Cypher aggregation over distinct node entities.</li>
+    <li><strong>Order-dependence on attendee resolution (Fixed).</strong> The nightly graph pass re-resolves and links unassigned actions.</li>
+    <li><strong>Memgraph pattern sorting constraint (Fixed).</strong> Replaced pattern expressions in <code>ORDER BY</code> with <code>OPTIONAL MATCH</code> degree counts.</li>
+    <li><strong>Action item status overwrite on re-ingestion (Fixed).</strong> Cypher <code>MERGE</code> now uses <code>CASE WHEN coalesce(a.done, false) = true THEN true ELSE $done END</code>.</li>
+    <li><strong>FastAPI query ceiling 422 error (Fixed).</strong> Raised query ceiling limit to 5,000 for large-scale enterprise batches.</li>
   </ul>
 
   <p>The pattern is consistent: none of these were caught by tests, and all were caught by

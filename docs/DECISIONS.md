@@ -946,6 +946,54 @@ already rejected a second advisory layer as noise rather than safety.
 
 ---
 
+## ADR-025 — The eighth gate judges tests on evidence, not on their filenames
+
+**Date:** 2026-09-01 · **Status:** Accepted
+
+**Context.** A known `dev_agent` failure mode is turning a red suite green by editing the
+suite rather than the code. The gate added for this paired each changed test file with the
+changed source files by filename similarity, exempting anything whose name matched one of
+`pipeline`, `doctor`, `api`, `dev_agent`, `sync`, `data_layer`, `pure_core`, `llm_seam`.
+
+That list is very nearly a list of this repo's own test files. Measured against the real
+`tests/` directory it exempted 8 of 12, so the gate could not fire on most of the suite it
+was meant to protect. Its unit test passed because it asserted against
+`tests/test_unrelated_billing.py`, a file the repo does not contain.
+
+The exemption list was not careless — it was load-bearing. Tests here are
+`test_phaseNN_<area>.py` and deliberately do not map one-to-one onto modules, so filename
+pairing produced false positives immediately and the list was what silenced them. The
+approach cannot work under this naming convention.
+
+**Decision.** Judge the change, not the name. Two rules, both evidence-based:
+
+1. Test files changed and no implementation file changed at all. Implementing a ticket
+   touches something other than a test.
+2. A changed test file whose content contains no assertion. A test that asserts nothing
+   cannot fail.
+
+Rule 2 uses the `file_contents` mapping `gate_module_boundaries` already receives, so the
+gate stays pure. A test file with no content supplied fails rather than passing, per the
+standing rule that a gate which cannot run is a failure and never a skip.
+
+**Consequences.** The gate now fires on every file in the suite, and its test asserts that
+by enumerating the real `tests/` directory — a future exemption that quietly re-introduces
+blind spots will fail. Precision is favoured over recall throughout, because a failed gate
+escalates to `NEEDS_HUMAN`, which is terminal: a gate that cries wolf permanently stops good
+runs. So the narrower threat, an agent editing a test that *is* related to its ticket in
+order to weaken it, is only caught when the assertions disappear entirely. Partial weakening
+is left to the LLM reviewer and the human.
+
+**Rejected:** *Keep filename affinity and shorten the exemption list.* The false positives
+it was suppressing are real under `test_phaseNN_<area>.py` naming; a shorter list trades
+blind spots for terminal false positives.
+
+*Match a changed test file against the modules it imports.* Closer to real affinity, but
+`tests/test_phase08_api.py` exercises `jira_client` through the API layer without naming it,
+so legitimate pairings would escalate to `NEEDS_HUMAN`.
+
+---
+
 ## Template
 
 ```
