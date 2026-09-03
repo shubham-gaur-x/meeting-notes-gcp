@@ -874,3 +874,90 @@ def test_a_mapping_attendee_still_resolves_by_email() -> None:
     r = resolve({"name": "Matteo Vaiente", "email": "matteo@onixnet.com"}, Roster([]))
     assert r.email == "matteo@onixnet.com", f"a mapping was dropped: {r.reason}"
     assert r.status == "resolved"
+
+
+def test_email_adapter_resolves_first_name_against_header_recipients() -> None:
+    """EmailAdapter extracts header recipients and enriches first-name mentions."""
+    from meeting_notes.pipeline import EmailAdapter, apply_source_overrides
+
+    adapter = EmailAdapter()
+    payload = {
+        "from": "Mallory Webber <mallory.webber@onixnet.com>",
+        "to": "Michael Baylard <michael.baylard@onixnet.com>, Natalie Miller <natalie.miller@onixnet.com>",
+        "body": "Best, Mallory & Natalie",
+    }
+    overrides = adapter.extract_overrides(payload)
+    assert "_header_recipients" in overrides
+    assert any(r["email"] == "natalie.miller@onixnet.com" for r in overrides["_header_recipients"])
+
+    extracted_meeting = _meeting(attendees=[
+        {"name": "Mallory Webber", "email": "mallory.webber@onixnet.com", "role": "organizer"},
+        {"name": "Natalie", "role": "organizer"},  # no email in extracted body
+    ])
+    enriched = apply_source_overrides(extracted_meeting, overrides)
+    natalie = next(a for a in enriched.attendees if "Natalie" in a.name)
+    assert natalie.email == "natalie.miller@onixnet.com"
+    assert natalie.name == "Natalie Miller"
+
+
+def test_an_ambiguous_first_name_gets_no_header_email() -> None:
+    """Two Natalies on the thread means no match, not whichever parsed first.
+
+    Attaching one person's address to another person's name is unrecoverable
+    downstream -- the graph records it as fact with no sign it was a guess.
+    """
+    from meeting_notes.pipeline import EmailAdapter, apply_source_overrides
+
+    overrides = EmailAdapter().extract_overrides({
+        "from": "Mallory Webber <mallory.webber@onixnet.com>",
+        "to": "Natalie Miller <natalie.miller@onixnet.com>, "
+              "Natalie Okonkwo <natalie.okonkwo@onixnet.com>",
+    })
+    enriched = apply_source_overrides(
+        _meeting(attendees=[{"name": "Natalie", "role": "attendee"}]), overrides
+    )
+    assert enriched.attendees[0].email in (None, "")
+
+    # A full name is still unambiguous when the given name is not.
+    enriched2 = apply_source_overrides(
+        _meeting(attendees=[{"name": "Natalie Okonkwo", "role": "attendee"}]), overrides
+    )
+    assert enriched2.attendees[0].email == "natalie.okonkwo@onixnet.com"
+
+
+def test_the_organizer_is_the_parsed_sender_not_a_substring_match() -> None:
+    """`clean_email in from_str` promoted any address the From line contains.
+
+    "am@onixnet.com" is a substring of "team@onixnet.com", so a plain recipient
+    was recorded as having organised the meeting.
+    """
+    from meeting_notes.pipeline import EmailAdapter
+
+    recipients = EmailAdapter().extract_overrides({
+        "from": "Delivery Team <team@onixnet.com>",
+        "to": "Am Patel <am@onixnet.com>",
+    })["_header_recipients"]
+
+    by_email = {r["email"]: r["role"] for r in recipients}
+    assert by_email["team@onixnet.com"] == "organizer"
+    assert by_email["am@onixnet.com"] == "attendee"
+
+
+def test_a_wide_distribution_list_is_capped() -> None:
+    """Every header address becomes a Person node and an ATTENDED edge."""
+    from meeting_notes.pipeline import MAX_HEADER_ATTENDEES, EmailAdapter
+
+    to = ", ".join(f"Person {i} <p{i}@onixnet.com>" for i in range(MAX_HEADER_ATTENDEES + 40))
+    recipients = EmailAdapter().extract_overrides({"from": "a@onixnet.com", "to": to})
+    assert len(recipients["_header_recipients"]) == MAX_HEADER_ATTENDEES
+
+
+def test_automated_senders_are_not_recorded_as_attendees() -> None:
+    from meeting_notes.pipeline import EmailAdapter
+
+    recipients = EmailAdapter().extract_overrides({
+        "from": "no-reply@atlassian.net",
+        "to": "Michael Baylard <michael.baylard@onixnet.com>, notifications@github.com",
+    })["_header_recipients"]
+
+    assert [r["email"] for r in recipients] == ["michael.baylard@onixnet.com"]

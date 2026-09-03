@@ -679,3 +679,43 @@ async def test_an_untitled_meeting_links_to_nothing() -> None:
         known_people=[],
     )
     assert "RECAP_OF" not in tx.cypher()
+
+
+async def test_a_meeting_with_no_attendees_at_all_prunes_no_reviews() -> None:
+    """An empty extraction must not empty the human's review queue.
+
+    "everyone resolved" and "the model returned nothing this run" both arrive
+    here as an empty review list. The first version deleted every PersonReview
+    on the meeting whenever that list was empty, so one bad extraction silently
+    destroyed the queue -- and the resolution audit trail with it.
+    """
+    from meeting_notes import graph_client
+
+    tx = FakeTx()
+    await graph_client.upsert_meeting_graph(
+        _meeting(attendees=[]), "src-1", driver=FakeDriver(tx), known_people=[]
+    )
+    assert "DELETE" not in tx.cypher().upper()
+
+
+async def test_stale_pending_reviews_are_pruned_but_resolved_ones_are_kept() -> None:
+    """Pruning runs on every write, not only when the new set is empty.
+
+    Only pruning in the empty case left stale entries behind in exactly the
+    runs that produced a new set to compare them against.
+    """
+    from meeting_notes import graph_client
+
+    tx = FakeTx()
+    await graph_client.upsert_meeting_graph(
+        _meeting(attendees=[{"name": "Ghost Person"}]),
+        "src-1",
+        driver=FakeDriver(tx),
+        known_people=[],
+    )
+
+    prune = next((c, p) for c, p in tx.calls if "DETACH DELETE r" in c)
+    cypher, params = prune
+    assert "coalesce(r.status, 'pending') = 'pending'" in cypher, "resolved is an audit trail"
+    assert "NOT r.id IN $keep_ids" in cypher
+    assert len(params["keep_ids"]) == 1, "the review just written must survive its own prune"

@@ -21,15 +21,28 @@ re-resolve owners, it just calls that function.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from email.utils import getaddresses
 from typing import Any, Protocol
 
 import structlog
 
-from meeting_notes import classifier, extractor, meeting_type_router
+from meeting_notes import classifier, extractor, meeting_type_router, person_resolver
 from meeting_notes.config import Settings, get_settings
 from meeting_notes.models import ExtractedMeeting, StagedRecord
 
 log = structlog.get_logger()
+
+# Header recipients are not a field of ExtractedMeeting -- they are evidence
+# used to fill in one, so `apply_source_overrides` consumes this key and it
+# never reaches `model_validate`. Named once, because a literal spelt in two
+# places is a silently-ignored override the day one of them changes.
+HEADER_RECIPIENTS_KEY = "_header_recipients"
+
+MAX_HEADER_ATTENDEES = 25
+
+_AUTOMATED_ADDRESS_MARKERS = (
+    "no-reply", "noreply", "notifications@", "mailer-daemon", "donotreply",
+)
 
 
 @dataclass(frozen=True)
@@ -139,10 +152,61 @@ class EmailAdapter:
         return {"date": date, "platform": "email"}
 
     def extract_overrides(self, payload: dict[str, Any]) -> dict[str, Any]:
-        """Nothing. A mail header date is when the MESSAGE was sent, which is
-        often not when the meeting it discusses happened -- so here the model
-        reading the thread genuinely can do better."""
-        return {}
+        """Enrich extracted attendees with verified RFC-2822 header recipient addresses.
+
+        Note on dates: We deliberately do NOT override `date`. A mail header date
+        is when the message was sent, which is often not when the meeting it discusses
+        happened -- so the model reading the thread body genuinely does better for dates.
+        """
+        recipients = self._attendees(payload)
+        return {HEADER_RECIPIENTS_KEY: recipients} if recipients else {}
+
+    @staticmethod
+    def _attendees(payload: dict[str, Any]) -> list[dict[str, str]]:
+        raw_headers: list[str] = []
+        sender_addresses: set[str] = set()
+        sources = [payload, *(payload.get("messages") or [])]
+        for msg in sources:
+            for field in ("from", "to", "cc"):
+                val = msg.get(field)
+                if val:
+                    raw_headers.append(str(val))
+            # Parsed, not substring-matched: "am@onix.com" is a substring of
+            # "team@onix.com", which would promote a recipient to organizer.
+            for _, addr in getaddresses([str(msg.get("from") or "")]):
+                if addr:
+                    sender_addresses.add(addr.strip().lower())
+
+        seen_emails: set[str] = set()
+        attendees: list[dict[str, str]] = []
+
+        for display_name, email in getaddresses(raw_headers):
+            clean_email = email.strip().lower()
+            if not clean_email or "@" not in clean_email or clean_email in seen_emails:
+                continue
+            if any(bot in clean_email for bot in _AUTOMATED_ADDRESS_MARKERS):
+                continue
+            seen_emails.add(clean_email)
+            clean_name = display_name.strip()
+            if not clean_name:
+                local = clean_email.split("@")[0]
+                clean_name = local.replace(".", " ").replace("_", " ").title()
+            attendees.append({
+                "name": clean_name,
+                "email": clean_email,
+                "role": "organizer" if clean_email in sender_addresses else "attendee",
+            })
+            if len(attendees) >= MAX_HEADER_ATTENDEES:
+                # A wide distribution list would otherwise mint a Person node
+                # and an ATTENDED edge apiece for people who were never in the
+                # room. The extractor's own attendee list stays authoritative.
+                log.warning(
+                    "pipeline.header_recipients_truncated",
+                    step="extract_overrides",
+                    limit=MAX_HEADER_ATTENDEES,
+                )
+                break
+        return attendees
 
     def skip_score_gate(self, payload: dict[str, Any]) -> bool:
         return False
@@ -331,7 +395,55 @@ def apply_source_overrides(
     """
     if not overrides:
         return meeting
-    return ExtractedMeeting.model_validate({**meeting.model_dump(), **overrides})
+
+    overrides_copy = dict(overrides)
+    header_recipients = overrides_copy.pop(HEADER_RECIPIENTS_KEY, None)
+    data = meeting.model_dump()
+
+    if header_recipients:
+        _attach_header_emails(data.get("attendees", []), header_recipients)
+
+    return ExtractedMeeting.model_validate({**data, **overrides_copy})
+
+
+def _attach_header_emails(
+    attendees: list[dict[str, Any]], header_recipients: list[dict[str, str]]
+) -> None:
+    """Fill in missing attendee emails from verified message headers, in place.
+
+    A given name only identifies someone while it is unique among the handful
+    of addresses on the message. Matching the first Katrisa in the headers
+    attaches one person's address to another person's name, and nothing
+    downstream can tell that it guessed -- the same failure `graph_client`'s
+    owner resolution was fixed for, so it is refused the same way here.
+    """
+    by_full: dict[str, list[dict[str, str]]] = {}
+    by_given: dict[str, list[dict[str, str]]] = {}
+    for hr in header_recipients:
+        name = person_resolver.normalize_name(hr.get("name"))
+        if not name:
+            continue
+        by_full.setdefault(name, []).append(hr)
+        parts = name.split()
+        if parts:
+            by_given.setdefault(parts[0], []).append(hr)
+
+    for att in attendees:
+        if att.get("email"):
+            continue
+        att_name = person_resolver.normalize_name(att.get("name"))
+        if not att_name:
+            continue
+
+        matches = by_full.get(att_name) or []
+        if not matches and len(att_name) >= 3 and " " not in att_name:
+            matches = by_given.get(att_name) or []
+        # More than one candidate is not a match, it is a coin toss.
+        if len(matches) != 1:
+            continue
+
+        att["email"] = matches[0].get("email")
+        att["name"] = matches[0].get("name") or att.get("name")
 
 
 async def enrich(
