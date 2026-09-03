@@ -124,6 +124,17 @@ class Settings(BaseSettings):
     jira_confidence_threshold: float = 0.6
     jira_dedup_enabled: bool = True
     jira_dedup_threshold: float = 0.9
+    # Shared machine secret gating POST /webhook/jira/sync. NOT a Jira
+    # credential and not per-person: Jira identity is jira_email/jira_api_token
+    # above, one service account for the whole deployment. This only answers
+    # "may you make this service spend its Jira quota", because that route
+    # costs a full REST sweep per call while the event route beside it cannot
+    # be made to write anything a caller chooses.
+    #
+    # Cloud Run IAM with an OIDC caller is the stronger gate and should become
+    # the primary one once Terraform grows a Cloud Scheduler job. This stays as
+    # defence in depth rather than being replaced by it.
+    jira_sync_trigger_token: str = ""
 
     # ─── Governance ───────────────────────────────────────────────────────
     fact_min_confidence: float = 0.5
