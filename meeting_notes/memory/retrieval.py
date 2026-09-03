@@ -156,19 +156,25 @@ async def assemble_context(
             WHERE coalesce(a.done, false) = false
             RETURN DISTINCT a.id AS id, a.task AS task, a.owner AS owner,
                    a.due AS due, a.priority AS priority, a.jira_key AS jira_key,
-                   m.title AS meeting_title, m.source_id AS source_id, m.date AS date
+                   a.jira_status AS jira_status, a.done AS done,
+                   m.title AS meeting_title, m.source_id AS source_id, m.date AS date,
+                   m.links AS meeting_links
             ORDER BY CASE WHEN a.priority = 'high' THEN 0 ELSE 1 END, a.due ASC
             LIMIT 15
             """
         )
         async for record in actions_res:
             node_ids.append(record["id"])
+            doc_links = [f"[{u}]({u})" for u in (record.get("meeting_links") or []) if isinstance(u, str)]
             links = _links_suffix(
                 _jira_link(record.get("jira_key"), settings),
                 _gmail_link(record.get("source_id")),
+                *doc_links,
             )
+            status = record.get("jira_status") or ("Done" if record.get("done") else "In Progress")
             lines.append(
                 f"ActionItem: Task: {record['task']} | Owner: {record['owner']}"
+                f" | Status: {status}"
                 f" | Due: {record['due'] or 'None'} | Priority: {record['priority']}"
                 f" | Source: {record['meeting_title']}{links}"
             )
@@ -198,7 +204,8 @@ async def assemble_context(
                 MATCH (t:Topic)<-[:DISCUSSED]-(m:Meeting)
                 WHERE t.name CONTAINS topic
                 RETURN DISTINCT m.id AS id, m.title AS title, m.date AS date,
-                                m.summary AS summary, m.source_id AS source_id
+                                m.summary AS summary, m.source_id AS source_id,
+                                m.links AS links
                 ORDER BY m.date DESC
                 LIMIT 10
                 """,
@@ -206,7 +213,8 @@ async def assemble_context(
             )
             async for record in result:
                 node_ids.append(record["id"])
-                links = _links_suffix(_gmail_link(record.get("source_id")))
+                doc_links = [f"[{u}]({u})" for u in (record.get("links") or []) if isinstance(u, str)]
+                links = _links_suffix(_gmail_link(record.get("source_id")), *doc_links)
                 lines.append(
                     f"Meeting ({record['date']}): {record['title']}{links} — {record['summary']}"
                 )
@@ -219,14 +227,15 @@ async def assemble_context(
             """
             MATCH (m:Meeting)-[:PRODUCED]->(d:Decision)
             RETURN DISTINCT d.id AS id, d.text AS text, m.title AS meeting_title,
-                   m.date AS date, m.source_id AS source_id
+                   m.date AS date, m.source_id AS source_id, m.links AS links
             ORDER BY m.date DESC
             LIMIT 8
             """
         )
         async for record in decisions_res:
             node_ids.append(record["id"])
-            links = _links_suffix(_gmail_link(record.get("source_id")))
+            doc_links = [f"[{u}]({u})" for u in (record.get("links") or []) if isinstance(u, str)]
+            links = _links_suffix(_gmail_link(record.get("source_id")), *doc_links)
             lines.append(
                 f"Decision: {record['text']} (Meeting: {record['meeting_title']}{links})"
             )
