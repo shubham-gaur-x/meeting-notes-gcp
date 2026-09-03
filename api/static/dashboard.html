@@ -64,6 +64,12 @@
   .err { color:var(--warn); padding:12px; border:1px solid var(--warn); border-radius:8px; }
   .answer { background:var(--raise); border:1px solid var(--line); border-radius:9px;
             padding:15px; white-space:pre-wrap; }
+  .prompt-card { background:var(--raise); border:1px solid var(--line); border-radius:10px; padding:10px 14px; cursor:pointer; transition:all .15s ease; text-align:left; }
+  .prompt-card:hover { border-color:var(--accent); background:rgba(99,102,241,0.08); transform:translateY(-1px); }
+  .prompt-cat { font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.5px; color:var(--accent); margin-bottom:3px; }
+  .prompt-text { font-size:13px; color:var(--ink); line-height:1.4; }
+  .followup-btn { background:var(--raise); border:1px solid var(--accent); color:var(--accent); padding:6px 12px; border-radius:16px; cursor:pointer; font-size:12px; margin:4px 6px 4px 0; text-align:left; }
+  .followup-btn:hover { background:var(--accent); color:#fff; }
   .scroll { overflow-x:auto; }
   .pill { display:inline-block; background:var(--raise); border:1px solid var(--line);
           border-radius:20px; padding:2px 10px; font-size:11px; margin:0 5px 5px 0; }
@@ -428,21 +434,175 @@ async function openWorkstream(w) {
 }
 
 const EXAMPLES = [
-  "What was decided about the SOW?",
-  "What is happening with the Verizon engagement?",
-  "What are the current blockers?",
-  "What should I follow up on?",
+  "What are all of my open deliverables and high-priority commitments?",
+  "Who is currently waiting on me for deliverables or approvals?",
+  "What key architectural decisions and project milestones were established in recent syncs?",
 ];
-function renderExamples() {
-  $("#examples").innerHTML = `<p class="hint">Try one:</p>` +
-    EXAMPLES.map(q => `<button class="ghost" onclick="askExample(this)">${esc(q)}</button>`).join("");
+
+let SUGGESTED_QUESTIONS = [];
+
+function renderMarkdown(md) {
+  if (!md) return "";
+  let html = esc(md);
+
+  // Fenced Code Blocks (``` ... ```)
+  html = html.replace(/```([\s\S]*?)```/g, (match, p1) => {
+    return `<pre style="background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px;overflow-x:auto;font-family:monospace;font-size:12px;margin:10px 0"><code>${p1.trim()}</code></pre>`;
+  });
+
+  // Headers
+  html = html.replace(/^#### (.*$)/gim, '<h5 style="margin:12px 0 4px;color:var(--ink);font-size:13px;font-weight:600">$1</h5>');
+  html = html.replace(/^### (.*$)/gim, '<h4 style="margin:14px 0 6px;color:var(--ink);font-size:14px;font-weight:600">$1</h4>');
+  html = html.replace(/^## (.*$)/gim, '<h3 style="margin:16px 0 8px;color:var(--ink);font-size:15px;font-weight:600;border-bottom:1px solid var(--line);padding-bottom:4px">$1</h3>');
+  html = html.replace(/^# (.*$)/gim, '<h2 style="margin:18px 0 10px;color:var(--ink);font-size:17px;font-weight:700">$1</h2>');
+
+  // Bold & Italics
+  html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/__(.*?)__/g, '<strong>$1</strong>');
+  html = html.replace(/\*(.*?)\*/g, '<em>$1</em>');
+  html = html.replace(/_([^_]+)_/g, '<em>$1</em>');
+
+  // Links [text](url)
+  html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^\s\)]+)\)/g, '<a href="$2" target="_blank" rel="noopener" style="color:var(--accent);font-weight:600;text-decoration:underline">$1</a>');
+
+  // Inline code
+  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+
+  const lines = html.split("\n");
+  let inUl = false;
+  let inOl = false;
+  let inTable = false;
+  let tableRows = [];
+  const out = [];
+
+  function closeLists() {
+    if (inUl) { out.push('</ul>'); inUl = false; }
+    if (inOl) { out.push('</ol>'); inOl = false; }
+  }
+
+  function flushTable() {
+    if (!inTable) return;
+    if (tableRows.length) {
+      let tblHtml = '<table style="margin:12px 0;width:100%">';
+      const headCols = tableRows[0];
+      tblHtml += '<thead><tr>' + headCols.map(c => `<th>${c}</th>`).join("") + '</tr></thead><tbody>';
+      for (let r = 1; r < tableRows.length; r++) {
+        tblHtml += '<tr>' + tableRows[r].map(c => `<td>${c}</td>`).join("") + '</tr>';
+      }
+      tblHtml += '</tbody></table>';
+      out.push(tblHtml);
+    }
+    tableRows = [];
+    inTable = false;
+  }
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trim();
+
+    // Horizontal Rule (---, ***, ___)
+    if (/^(\-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
+      closeLists();
+      flushTable();
+      out.push('<hr style="border:none;border-top:1px solid var(--line);margin:16px 0">');
+      continue;
+    }
+
+    // Markdown Table Rows (| col | col |)
+    if (trimmed.startsWith("|") && trimmed.endsWith("|")) {
+      closeLists();
+      const cells = trimmed.split("|").slice(1, -1).map(c => c.trim());
+      if (cells.every(c => /^:?-+:?$/.test(c))) {
+        continue;
+      }
+      inTable = true;
+      tableRows.push(cells);
+      continue;
+    } else if (inTable) {
+      flushTable();
+    }
+
+    // Blockquote (> text)
+    if (trimmed.startsWith("&gt; ") || trimmed.startsWith("> ")) {
+      closeLists();
+      const qText = trimmed.replace(/^(&gt;|>)\s*/, "");
+      out.push(`<div class="quote" style="margin:8px 0">${qText}</div>`);
+      continue;
+    }
+
+    // Task Checklist (- [ ] or - [x])
+    if (/^-\s+\[([ xX])\]\s+(.*)$/.test(trimmed)) {
+      if (!inUl) { closeLists(); out.push('<ul style="margin:6px 0 10px;padding-left:20px;line-height:1.6;list-style:none">'); inUl = true; }
+      const isChecked = trimmed.includes("[x]") || trimmed.includes("[X]");
+      const itemText = trimmed.replace(/^-\s+\[([ xX])\]\s+/, "");
+      out.push(`<li><input type="checkbox" ${isChecked ? "checked" : ""} disabled style="margin-right:6px"> ${itemText}</li>`);
+      continue;
+    }
+
+    // Unordered List Items (- or *)
+    if (trimmed.startsWith("- ") || trimmed.startsWith("* ")) {
+      if (inOl) { out.push('</ol>'); inOl = false; }
+      if (!inUl) { out.push('<ul style="margin:6px 0 10px;padding-left:20px;line-height:1.6">'); inUl = true; }
+      out.push(`<li>${trimmed.slice(2)}</li>`);
+      continue;
+    }
+
+    // Ordered List Items (1. 2. etc.)
+    const olMatch = trimmed.match(/^(\d+)\.\s+(.*)$/);
+    if (olMatch) {
+      if (inUl) { out.push('</ul>'); inUl = false; }
+      if (!inOl) { out.push('<ol style="margin:6px 0 10px;padding-left:22px;line-height:1.6">'); inOl = true; }
+      out.push(`<li>${olMatch[2]}</li>`);
+      continue;
+    }
+
+    // Regular text / Paragraphs / HTML Blocks
+    closeLists();
+    if (trimmed) {
+      if (trimmed.startsWith("<h") || trimmed.startsWith("<pre") || trimmed.startsWith("<hr") || trimmed.startsWith("<div")) {
+        out.push(trimmed);
+      } else {
+        out.push(`<p style="margin:8px 0;line-height:1.6">${trimmed}</p>`);
+      }
+    }
+  }
+
+  closeLists();
+  flushTable();
+  return out.join("");
 }
-function askExample(btn) { $("#q").value = btn.textContent; askMemory(); }
+
+async function renderExamples() {
+  const container = $("#examples");
+  if (!container) return;
+  if (!SUGGESTED_QUESTIONS.length) {
+    try {
+      const data = await get("/graph/memory/suggested-questions");
+      SUGGESTED_QUESTIONS = data.questions || [];
+    } catch {
+      SUGGESTED_QUESTIONS = EXAMPLES.map(q => ({ category: "💡 Project Suggestion", question: q }));
+    }
+  }
+
+  container.innerHTML =
+    `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;margin-bottom:14px">` +
+    SUGGESTED_QUESTIONS.map(q =>
+      `<div class="prompt-card" onclick="askQuestion('${esc(q.question).replace(/'/g, "\\'")}')">` +
+      `<div class="prompt-cat">${esc(q.category)}</div>` +
+      `<div class="prompt-text">${esc(q.question)}</div>` +
+      `</div>`
+    ).join("") + `</div>`;
+}
+
+function askQuestion(q) {
+  $("#q").value = q;
+  askMemory();
+}
 
 async function askMemory() {
   const question = $("#q").value.trim();
   if (!question) return;
-  $("#ask-body").innerHTML = empty("Searching your meetings…");
+  $("#ask-body").innerHTML = empty("Searching your meetings & knowledge graph…");
   try {
     const r = await fetch("/graph/memory/query", {
       method: "POST", headers: {"Content-Type": "application/json"},
@@ -450,10 +610,11 @@ async function askMemory() {
     });
     if (!r.ok) throw new Error("query -> " + r.status);
     const d = await r.json();
+    const count = (d.node_ids || []).length;
+    const noun = count === 1 ? "item" : "items";
     $("#ask-body").innerHTML =
-      `<div class="answer">${esc(d.answer)}</div>` +
-      `<p class="muted" style="font-size:12px">Answered from ${esc((d.node_ids || []).length)} ` +
-      `item(s) in your meeting history. If it doesn't know, it says so rather than guessing.</p>`;
+      `<div class="answer" style="line-height:1.6">${renderMarkdown(d.answer)}</div>` +
+      `<p class="muted" style="font-size:12px;margin-top:8px">Answered from ${count} ${noun} in your meeting memory.</p>`;
   } catch (e) { fail("#ask-body", e); }
 }
 

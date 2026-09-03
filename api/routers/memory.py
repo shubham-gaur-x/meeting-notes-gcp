@@ -19,6 +19,13 @@ class MemoryQuery(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
 
 
+@router.get("/memory/suggested-questions")
+async def suggested_questions(_: Principal = Depends(principal)) -> dict[str, Any]:
+    """Dynamically generated project and context-aware questions from graph memory."""
+    questions = await retrieval.generate_suggested_questions()
+    return {"questions": questions, "count": len(questions)}
+
+
 @router.post("/memory/query")
 async def memory_query(body: MemoryQuery, _: Principal = Depends(principal)) -> dict[str, Any]:
     """Answer a natural-language question from the graph.
