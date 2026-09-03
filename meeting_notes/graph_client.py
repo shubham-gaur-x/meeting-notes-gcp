@@ -670,6 +670,54 @@ async def update_action_jira_key(action_id: str, jira_key: str, driver: Any | No
         )
 
 
+async def update_action_linear_info(
+    action_id: str,
+    linear_id: str,
+    linear_identifier: str,
+    linear_url: str,
+    linear_state: str = "Todo",
+    driver: Any | None = None,
+) -> None:
+    """Record filed Linear issue details on the ActionItem."""
+    driver = driver or get_driver()
+    async with driver.session() as session:
+        await session.run(
+            """
+            MATCH (a:ActionItem {id: $id})
+            SET a.linear_id = $linear_id,
+                a.linear_identifier = $linear_identifier,
+                a.linear_url = $linear_url,
+                a.linear_state = $linear_state
+            """,
+            id=action_id,
+            linear_id=linear_id,
+            linear_identifier=linear_identifier,
+            linear_url=linear_url,
+            linear_state=linear_state,
+        )
+
+
+async def update_action_linear_state(
+    action_id: str,
+    linear_state: str,
+    done: bool = False,
+    driver: Any | None = None,
+) -> None:
+    """Update the linear_state and done flag on the ActionItem."""
+    driver = driver or get_driver()
+    async with driver.session() as session:
+        await session.run(
+            """
+            MATCH (a:ActionItem {id: $id})
+            SET a.linear_state = $linear_state,
+                a.done = $done
+            """,
+            id=action_id,
+            linear_state=linear_state,
+            done=done,
+        )
+
+
 async def get_open_actions_for_owner(
     owner_email: str | None = None,
     *,
@@ -677,14 +725,7 @@ async def get_open_actions_for_owner(
     meeting_id: str | None = None,
     driver: Any | None = None,
 ) -> list[dict[str, Any]]:
-    """Same-owner open items, the dedup candidate set jira_pusher scores against.
-
-    `exclude_id` matters: by the time jira_pusher runs, upsert_meeting_graph
-    has already written every action item in the meeting, including the one
-    currently being evaluated. Without excluding it, an item can match itself
-    at similarity 1.0 and link MENTIONED_IN to its own node (v5 excluded this
-    for the same reason, via a.id <> $exclude_id).
-    """
+    """Same-owner open items, the dedup candidate set jira_pusher and linear_pusher score against."""
     driver = driver or get_driver()
     async with driver.session() as session:
         if owner_email:
@@ -692,7 +733,10 @@ async def get_open_actions_for_owner(
                 """
                 MATCH (a:ActionItem)-[:ASSIGNED_TO]->(p:Person {email: $email})
                 WHERE coalesce(a.done, false) = false AND a.id <> $exclude_id
-                RETURN a.id AS id, a.task AS task, a.jira_key AS jira_key, a.embedding AS embedding
+                RETURN a.id AS id, a.task AS task, a.jira_key AS jira_key,
+                       a.linear_id AS linear_id, a.linear_identifier AS linear_identifier,
+                       a.linear_url AS linear_url, a.linear_state AS linear_state,
+                       a.embedding AS embedding
                 """,
                 email=owner_email,
                 exclude_id=exclude_id,
@@ -702,7 +746,10 @@ async def get_open_actions_for_owner(
                 """
                 MATCH (m:Meeting {id: $meeting_id})-[:DISCUSSED*0..1]->(a:ActionItem)
                 WHERE coalesce(a.done, false) = false AND a.id <> $exclude_id
-                RETURN a.id AS id, a.task AS task, a.jira_key AS jira_key, a.embedding AS embedding
+                RETURN a.id AS id, a.task AS task, a.jira_key AS jira_key,
+                       a.linear_id AS linear_id, a.linear_identifier AS linear_identifier,
+                       a.linear_url AS linear_url, a.linear_state AS linear_state,
+                       a.embedding AS embedding
                 """,
                 meeting_id=meeting_id,
                 exclude_id=exclude_id,
