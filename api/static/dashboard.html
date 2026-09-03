@@ -52,8 +52,11 @@
   .card .n { font-size:23px; font-weight:650; line-height:1.15; }
   .card .l { color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.6px; }
   .card.hot .n { color:var(--hot); }
-  table { width:100%; border-collapse:collapse; font-size:13px; }
-  th, td { text-align:left; padding:9px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
+  table { width:100%; border-collapse:collapse; font-size:13px; table-layout:auto; }
+  /* A task or a summary is long free text. Without these it either forces a
+     horizontal scrollbar over the whole panel or gets clipped mid-word. */
+  th, td { text-align:left; padding:9px 10px; border-bottom:1px solid var(--line);
+           vertical-align:top; white-space:normal; word-break:break-word; overflow-wrap:anywhere; }
   th { color:var(--muted); font-weight:500; font-size:11px;
        text-transform:uppercase; letter-spacing:.6px; }
   tr.clickable { cursor:pointer; }
@@ -62,8 +65,23 @@
   .hint { color:var(--muted); font-size:12px; margin:-4px 0 12px; }
   .empty { color:var(--muted); padding:20px; text-align:center; }
   .err { color:var(--warn); padding:12px; border:1px solid var(--warn); border-radius:8px; }
+  /* No `white-space:pre-wrap`: the answer is rendered markdown, so the source
+     newlines are already block elements and preserving them doubles the gaps. */
   .answer { background:var(--raise); border:1px solid var(--line); border-radius:9px;
-            padding:15px; white-space:pre-wrap; }
+            padding:15px; word-break:break-word; overflow-wrap:break-word; }
+  .answer table { margin:14px 0; width:100%; border:1px solid var(--line);
+                  border-radius:6px; overflow:hidden; }
+  .answer table th { background:rgba(255,255,255,0.04); font-weight:600; }
+  .answer table tr:nth-child(even) td { background:rgba(255,255,255,0.02); }
+  .btn-xs { padding:2px 8px; font-size:11px; cursor:pointer; color:#fff; border:none;
+            border-radius:4px; background:var(--accent); }
+  .btn-xs.undo { background:#4a5568; }
+  .pill.done { background:#134e4a; border-color:#134e4a; color:#fff; font-weight:600; }
+  .pill.progress { background:#1e3a8a; border-color:#1e3a8a; color:#fff; font-weight:600; }
+  .subtask { padding-left:14px; border-left:2px solid var(--accent); margin-bottom:2px; }
+  .subtask-of { background:#2d3748; border-color:#2d3748; color:#a0aec0; font-size:10px;
+                margin-right:6px; }
+  .struck { text-decoration:line-through; color:var(--muted); }
   .prompt-card { background:var(--raise); border:1px solid var(--line); border-radius:10px; padding:10px 14px; cursor:pointer; transition:all .15s ease; text-align:left; }
   .prompt-card:hover { border-color:var(--accent); background:rgba(99,102,241,0.08); transform:translateY(-1px); }
   .prompt-cat { font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.5px; color:var(--accent); margin-bottom:3px; }
@@ -134,11 +152,25 @@
   </section>
 
   <section class="panel" id="actions">
-    <div class="row">
-      <button class="action" onclick="loadActions()">Refresh</button>
+    <div class="row" style="flex-wrap:wrap;gap:10px">
+      <select id="astatus" onchange="renderActions()">
+        <option value="open" selected>Open</option>
+        <option value="done">Done</option>
+        <option value="subtasks">Sub-tasks only</option>
+        <option value="all">Everything</option>
+      </select>
+      <select id="aowned" onchange="renderActions()">
+        <option value="all" selected>All owners</option>
+        <option value="named">Named people</option>
+        <option value="queue">Shared queues</option>
+      </select>
       <select id="afilter" onchange="renderActions()"><option value="">Everyone</option></select>
+      <input id="asearch" placeholder="Filter tasks, owners, tickets…" style="min-width:220px"
+             oninput="renderActions()">
+      <button class="action" onclick="loadActions()">Refresh</button>
     </div>
-    <p class="hint">Open commitments pulled out of meetings, soonest deadline first.</p>
+    <p class="hint">Commitments pulled out of meetings, soonest deadline first. A shared queue
+       is an owner no Person node resolved to — a team name rather than someone with an inbox.</p>
     <div class="scroll" id="actions-body"></div>
   </section>
 
@@ -224,9 +256,13 @@ async function get(path) {
 function fail(sel, err) { $(sel).innerHTML = `<div class="err">${esc(err.message)}</div>`; }
 function empty(msg) { return `<div class="empty">${esc(msg)}</div>`; }
 
+// A column is [label, render] or [label, render, width]. The width is set on
+// the header only; the cells inherit it, and repeating it per row is what made
+// a long task column collapse to its content width on some rows and not others.
 function table(rows, cols, clickable) {
   if (!rows || !rows.length) return empty("Nothing here yet.");
-  const head = "<tr>" + cols.map(c => `<th>${esc(c[0])}</th>`).join("") + "</tr>";
+  const head = "<tr>" + cols.map(c =>
+    `<th${c[2] ? ` style="width:${c[2]}"` : ""}>${esc(c[0])}</th>`).join("") + "</tr>";
   const body = rows.map((r, i) =>
     `<tr class="${clickable ? "clickable" : ""}" data-i="${i}">` +
     cols.map(c => `<td>${c[1](r)}</td>`).join("") + "</tr>").join("");
@@ -368,26 +404,109 @@ async function openMeeting(m) {
   } catch (e) { $("#d-body").innerHTML = `<div class="err">${esc(e.message)}</div>`; }
 }
 
+let JIRA_BROWSE_BASE = "";
+
 async function loadActions() {
+  // Read the owner back BEFORE the list is rebuilt. Repopulating the select
+  // resets it to "Everyone", so refreshing while filtered to one person --
+  // which is what Mark Done does -- silently threw the filter away.
+  const owner = $("#afilter") ? $("#afilter").value : "";
   try {
-    const d = await get("/graph/actions/open?limit=200");
+    const d = await get("/graph/actions?status=all&limit=500");
     ACTIONS = d.actions || [];
+    // Never a literal Atlassian domain: a hardcoded tenant is what stops this
+    // repo moving to the Onix project, and it would point one person's
+    // dashboard at another's Jira. Blank means render the key as plain text.
+    JIRA_BROWSE_BASE = d.jira_browse_base || "";
     const owners = [...new Set(ACTIONS.map(a => a.owner).filter(Boolean))].sort();
     $("#afilter").innerHTML = `<option value="">Everyone (${ACTIONS.length})</option>` +
-      owners.map(o => `<option value="${esc(o)}">${esc(o)}</option>`).join("");
+      owners.map(o => `<option value="${esc(o)}"${o === owner ? " selected" : ""}>${esc(o)}</option>`).join("");
     renderActions();
   } catch (e) { fail("#actions-body", e); }
 }
+
+// An owner with no resolved Person carries no email, which is what separates a
+// team name from someone with an inbox. Derived, never a list of org-specific
+// queue names -- such a list is wrong the moment a team is renamed, and wrong
+// from the start in anyone else's deployment.
+function isSharedQueue(a) { return !a.owner_email; }
+
 function renderActions() {
-  const who = $("#afilter").value;
-  const rows = ACTIONS.filter(a => !who || a.owner === who);
+  const who = $("#afilter") ? $("#afilter").value : "";
+  const status = $("#astatus") ? $("#astatus").value : "open";
+  const owned = $("#aowned") ? $("#aowned").value : "all";
+  const search = $("#asearch") ? $("#asearch").value.toLowerCase().trim() : "";
+
+  const rows = ACTIONS.filter(a => {
+    if (who && a.owner !== who) return false;
+    if (status === "open" && a.done) return false;
+    if (status === "done" && !a.done) return false;
+    if (status === "subtasks" && !a.parent_jira_key) return false;
+    if (owned === "named" && isSharedQueue(a)) return false;
+    if (owned === "queue" && !isSharedQueue(a)) return false;
+    if (search) {
+      const haystack = [a.task, a.owner, a.jira_key, a.parent_jira_key]
+        .filter(Boolean).join(" ").toLowerCase();
+      if (!haystack.includes(search)) return false;
+    }
+    return true;
+  });
+
   $("#actions-body").innerHTML = table(rows, [
-    ["Task", r => esc(r.task)],
-    ["Owner", r => esc(r.owner)],
-    ["Due", r => esc(r.due || "—")],
-    ["Priority", r => `<span class="${r.priority === "high" ? "pri-high" : ""}">${esc(r.priority || "—")}</span>`],
-    ["Ticket", r => r.jira_key ? esc(r.jira_key) : `<span class="muted">not filed</span>`],
+    ["Task", r => {
+      const task = `<span class="${r.done ? "struck" : ""}">${esc(r.task)}</span>`;
+      if (!r.parent_jira_key) return task;
+      return `<div class="subtask"><span class="pill subtask-of">Sub-task of ` +
+             `${esc(r.parent_jira_key)}</span>${task}</div>`;
+    }, "34%"],
+    ["Owner", r => esc(r.owner), "15%"],
+    ["Created", r => esc(r.created_at || "—"), "10%"],
+    ["Due", r => esc(r.due || "—"), "10%"],
+    ["Priority", r => `<span class="${r.priority === "high" ? "pri-high" : ""}">${esc(r.priority || "—")}</span>`, "8%"],
+    ["Status", r => r.done
+      ? `<span class="pill done">Done</span>`
+      : `<span class="pill progress">${esc(r.jira_status || "Open")}</span>`, "9%"],
+    ["Ticket", r => {
+      if (!r.jira_key) return `<span class="muted">not filed</span>`;
+      if (!JIRA_BROWSE_BASE) return esc(r.jira_key);
+      return `<a href="${esc(JIRA_BROWSE_BASE + r.jira_key)}" target="_blank" rel="noopener">` +
+             `${esc(r.jira_key)}</a>`;
+    }, "9%"],
+    // No button without a ticket: the status lives in Jira, so there is
+    // nothing to transition and a button that only ever fails is worse than
+    // no button.
+    ["", r => r.jira_key
+      ? `<button class="btn-xs${r.done ? " undo" : ""}" data-key="${esc(r.jira_key)}" ` +
+        `data-done="${r.done ? "0" : "1"}">${r.done ? "Reopen" : "Mark done"}</button>`
+      : "", "5%"],
   ]);
+
+  $("#actions-body").querySelectorAll("button.btn-xs").forEach(b =>
+    b.onclick = () => setActionDone(b, b.dataset.key, b.dataset.done === "1"));
+}
+
+async function setActionDone(button, jiraKey, makeDone) {
+  // Jira, not the graph. The graph is written by the route only once Jira has
+  // accepted the transition -- an optimistic local update would show a done
+  // item that is still open, and the next sync would silently undo it.
+  button.disabled = true;
+  button.textContent = "…";
+  try {
+    const r = await fetch("/jira/transition", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({key: jiraKey, status: makeDone ? "Done" : "In Progress"}),
+    });
+    if (!r.ok) throw new Error("transition -> " + r.status);
+    const d = await r.json();
+    if (!d.transitioned) {
+      throw new Error(`Jira has no "${makeDone ? "Done" : "In Progress"}" transition ` +
+                      `available from ${jiraKey}'s current status`);
+    }
+  } catch (e) {
+    fail("#actions-body", e);
+    return;
+  }
+  await loadActions();
 }
 
 async function loadWorkstreams() {
