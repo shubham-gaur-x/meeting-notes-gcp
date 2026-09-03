@@ -12,6 +12,7 @@ import base64
 import hashlib
 import os
 import stat
+import sys
 import threading
 import urllib.parse
 from collections.abc import Callable
@@ -119,6 +120,12 @@ def test_save_then_load_roundtrips(tmp_path: Path) -> None:
     assert loaded.scopes == original.scopes
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="POSIX permission bits: chmod is a no-op on Windows, so this can only "
+    "ever fail there. It is a real requirement on the Linux runner and in Cloud "
+    "Run, which is where the token file actually lives.",
+)
 def test_saved_file_is_owner_only(tmp_path: Path) -> None:
     path = tmp_path / "token.json"
     save_token(path, _token())

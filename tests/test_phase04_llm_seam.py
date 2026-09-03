@@ -401,7 +401,7 @@ def test_every_line_of_v5s_tuned_prompt_survives_verbatim() -> None:
 
     import re
 
-    match = re.search(r'_SYSTEM_PROMPT = """(.*?)"""', V5_EXTRACTOR.read_text(), re.S)
+    match = re.search(r'_SYSTEM_PROMPT = """(.*?)"""', V5_EXTRACTOR.read_text(encoding="utf-8"), re.S)
     assert match, "could not locate v5's _SYSTEM_PROMPT"
 
     ours = _SYSTEM_PROMPT.splitlines()

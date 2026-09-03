@@ -211,10 +211,10 @@ async def test_the_dashboard_is_served(app: Any) -> None:
 
 
 async def test_github_webhook_rejects_a_bad_signature(app: Any, monkeypatch: Any) -> None:
-    from meeting_notes import config
+    from meeting_notes.config import Settings
 
     monkeypatch.setattr(
-        config, "get_settings",
+        "api.routers.webhooks.get_settings",
         lambda: Settings(_env_file=None, GITHUB_WEBHOOK_SECRET="s3cret", GCP_PROJECT_ID="p"),
     )
     response = await _post(app, "/webhook/github", content=b"{}",
@@ -343,7 +343,7 @@ def test_the_api_contains_no_scheduler() -> None:
     )
     offenders = [
         path.name for path in Path(api.__file__).parent.rglob("*.py")
-        if uses.search(path.read_text())
+        if uses.search(path.read_text(encoding="utf-8"))
     ]
     assert not offenders, f"scheduler used in: {offenders}"
 
@@ -359,7 +359,7 @@ def test_no_route_passes_event_to_structlog() -> None:
     bad = re.compile(r"log\.\w+\([^)]*[^_\w]event\s*=")
     offenders = [
         path.name for path in Path(api.__file__).parent.rglob("*.py")
-        if bad.search(path.read_text())
+        if bad.search(path.read_text(encoding="utf-8"))
     ]
     assert not offenders, f"structlog event= kwarg in: {offenders}"
 
@@ -423,7 +423,7 @@ def test_the_dashboard_is_a_single_file_with_no_build_step() -> None:
 
     import api
 
-    html = (Path(api.__file__).parent / "static" / "dashboard.html").read_text()
+    html = (Path(api.__file__).parent / "static" / "dashboard.html").read_text(encoding="utf-8")
     assert "<script" in html and "</script>" in html
     assert "src=" not in html.split("<script")[1][:200], "no external script tags"
     assert "cdn." not in html and "unpkg" not in html
@@ -442,7 +442,7 @@ def test_the_dashboard_calls_only_routes_that_exist(app: Any) -> None:
 
     import api
 
-    html = (Path(api.__file__).parent / "static" / "dashboard.html").read_text()
+    html = (Path(api.__file__).parent / "static" / "dashboard.html").read_text(encoding="utf-8")
     called = {m for m in re.findall(r'(?:get|fetch)\("(/[a-z0-9/_-]+)', html)}
     known = set(app.openapi()["paths"])
 
@@ -469,7 +469,7 @@ def test_every_tab_has_a_panel_and_a_loader() -> None:
 
     import api
 
-    html = (Path(api.__file__).parent / "static" / "dashboard.html").read_text()
+    html = (Path(api.__file__).parent / "static" / "dashboard.html").read_text(encoding="utf-8")
     tabs = set(re.findall(r'data-panel="([a-z]+)"', html))
 
     assert tabs == {"overview", "meetings", "actions", "workstreams", "graph", "ask", "review"}
@@ -554,7 +554,7 @@ def test_bookkeeping_nodes_are_excluded_from_insights() -> None:
     # fixture replaces those with stubs, so inspecting them checks nothing.
     from pathlib import Path
 
-    source = Path(graph_client.__file__).read_text()
+    source = Path(graph_client.__file__).read_text(encoding="utf-8")
     for name in ("get_all_communities", "get_bridge_nodes", "get_community_members"):
         start = source.index(f"async def {name}(")
         body = source[start : start + 1400]
@@ -569,7 +569,7 @@ def test_the_empty_leaderboard_explains_itself() -> None:
 
     import api
 
-    html = (Path(api.__file__).parent / "static" / "dashboard.html").read_text()
+    html = (Path(api.__file__).parent / "static" / "dashboard.html").read_text(encoding="utf-8")
     assert "opt-in by design" in html
     assert "tracked" in html
 
@@ -639,7 +639,7 @@ def test_the_dashboard_surfaces_decisions_and_action_items() -> None:
 
     import api
 
-    html = (Path(api.__file__).parent / "static" / "dashboard.html").read_text()
+    html = (Path(api.__file__).parent / "static" / "dashboard.html").read_text(encoding="utf-8")
     assert "/graph/decisions" in html, "decisions are never fetched"
     assert "/graph/actions/open" in html, "open action items are never fetched"
     assert "/graph/meeting/" in html, "no per-meeting drill-down"
@@ -651,7 +651,7 @@ def test_the_dashboard_offers_example_questions() -> None:
 
     import api
 
-    html = (Path(api.__file__).parent / "static" / "dashboard.html").read_text()
+    html = (Path(api.__file__).parent / "static" / "dashboard.html").read_text(encoding="utf-8")
     assert "EXAMPLES" in html and "Try one" in html
 
 
@@ -766,7 +766,7 @@ def test_the_overview_does_not_claim_a_period_it_does_not_filter_on() -> None:
 
     import api
 
-    html = (Path(api.__file__).parent / "static" / "dashboard.html").read_text()
+    html = (Path(api.__file__).parent / "static" / "dashboard.html").read_text(encoding="utf-8")
     assert "Everything from the last 7 days" not in html, (
         "a blanket period label over unscoped content"
     )
@@ -829,7 +829,7 @@ def test_the_overview_offers_a_range_selector() -> None:
 
     import api
 
-    html = (Path(api.__file__).parent / "static" / "dashboard.html").read_text()
+    html = (Path(api.__file__).parent / "static" / "dashboard.html").read_text(encoding="utf-8")
     assert 'id="range"' in html, "no range selector"
     for label in ("Past week", "Past month", "Past year", "All time", "Custom"):
         assert label in html, f"missing range option: {label}"
@@ -842,7 +842,7 @@ def test_switching_to_a_custom_range_does_not_leave_a_stale_label() -> None:
 
     import api
 
-    html = (Path(api.__file__).parent / "static" / "dashboard.html").read_text()
+    html = (Path(api.__file__).parent / "static" / "dashboard.html").read_text(encoding="utf-8")
     start = html.index("function onRangeChange()")
     body = html[start : start + 700]
     assert "Pick both dates." in body, (
@@ -877,7 +877,7 @@ def test_the_graph_view_honours_the_tracked_gate() -> None:
     nodes. Same rule as PageRank and centrality: naming a person is opt-in."""
     from pathlib import Path
 
-    source = Path("meeting_notes/graph_client.py").read_text()
+    source = Path("meeting_notes/graph_client.py").read_text(encoding="utf-8")
     start = source.index("async def get_graph_snapshot(")
     assert "_UNTRACKED_PERSON_EXCLUDED" in source[start : start + 1800], (
         "the graph view must reuse the same tracked predicate as the other "
@@ -907,7 +907,7 @@ def test_the_dashboard_has_a_graph_tab() -> None:
 
     import api
 
-    html = (Path(api.__file__).parent / "static" / "dashboard.html").read_text()
+    html = (Path(api.__file__).parent / "static" / "dashboard.html").read_text(encoding="utf-8")
     assert 'data-panel="graph"' in html
     assert "loadGraph" in html
     # No CDN: the renderer has to be inline, like everything else here.

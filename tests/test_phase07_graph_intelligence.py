@@ -327,7 +327,7 @@ def test_only_graph_algorithms_issues_mage_calls() -> None:
     for path in package.rglob("*.py"):
         if path.name == "graph_algorithms.py":
             continue
-        if pattern.search(path.read_text()):
+        if pattern.search(path.read_text(encoding="utf-8")):
             offenders.append(path.name)
 
     assert not offenders, f"MAGE CALL syntax outside graph_algorithms.py: {offenders}"
@@ -546,7 +546,7 @@ def test_memory_sessions_are_written_only_by_episodic() -> None:
     write = re.compile(r"(MERGE|CREATE)\s*\(\s*\w*\s*:\s*MemorySession")
     offenders = [
         path.name for path in package.rglob("*.py")
-        if path.name != "episodic.py" and write.search(path.read_text())
+        if path.name != "episodic.py" and write.search(path.read_text(encoding="utf-8"))
     ]
     assert not offenders, f"MemorySession written outside episodic.py: {offenders}"
 
@@ -627,7 +627,7 @@ def test_pipeline_never_imports_retrieval() -> None:
 
     import meeting_notes.pipeline as pipeline_module
 
-    source = Path(pipeline_module.__file__).read_text()
+    source = Path(pipeline_module.__file__).read_text(encoding="utf-8")
     # An actual import statement, not the word in a comment explaining why it
     # is absent -- an earlier draft matched this module's own docstring.
     importing = re.compile(
@@ -1098,7 +1098,7 @@ def _person_gating_source(fn_name: str) -> str:
     """
     from pathlib import Path
 
-    source = Path("meeting_notes/graph_client.py").read_text()
+    source = Path("meeting_notes/graph_client.py").read_text(encoding="utf-8")
     start = source.index(f"async def {fn_name}(")
     nxt = source.find("\nasync def ", start + 1)
     return source[start : nxt if nxt != -1 else len(source)]
