@@ -7,9 +7,13 @@ authentication. The transport is injectable so the test suite runs with no live 
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import structlog
+
+if TYPE_CHECKING:
+    import httpx
+
 
 from meeting_notes.config import Settings, get_settings
 from meeting_notes.utils import with_retry
@@ -34,6 +38,20 @@ def linear_headers(settings: Settings) -> dict[str, str]:
     }
 
 
+# Module-level client for connection pooling — avoids TCP/TLS setup per request.
+_shared_client: httpx.AsyncClient | None = None
+
+
+def _get_shared_client() -> httpx.AsyncClient:
+    """Lazily create a shared httpx client for connection reuse."""
+    global _shared_client  # noqa: PLW0603
+    if _shared_client is None or _shared_client.is_closed:
+        import httpx
+
+        _shared_client = httpx.AsyncClient(timeout=30.0)
+    return _shared_client
+
+
 async def _default_transport(
     method: str,
     url: str,
@@ -41,14 +59,12 @@ async def _default_transport(
     params: dict[str, Any] | None,
     json_body: dict[str, Any] | None,
 ) -> tuple[int, Any]:
-    import httpx
-
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.request(
-            method, url, headers=headers, params=params, json=json_body
-        )
-        response.raise_for_status()
-        return response.status_code, (response.json() if response.content else None)
+    client = _get_shared_client()
+    response = await client.request(
+        method, url, headers=headers, params=params, json=json_body
+    )
+    response.raise_for_status()
+    return response.status_code, (response.json() if response.content else None)
 
 
 @with_retry(max_attempts=3, base_delay=2.0)
@@ -78,18 +94,18 @@ async def execute_graphql(
     return data
 
 
+# O(1) lookup table — easier to extend than a chain of if/elif.
+_PRIORITY_MAP: dict[str, int] = {
+    "urgent": 1, "critical": 1, "p0": 1, "p1": 1,
+    "high": 2, "p2": 2,
+    "medium": 3, "med": 3, "p3": 3,
+    "low": 4, "p4": 4,
+}
+
+
 def linear_priority_from_name(priority: str) -> int:
     """Map string priority to Linear's integer priority scale (0=None, 1=Urgent, 2=High, 3=Medium, 4=Low)."""
-    p = priority.strip().lower()
-    if p in ("urgent", "critical", "p0", "p1"):
-        return 1
-    if p in ("high", "p2"):
-        return 2
-    if p in ("medium", "med", "p3"):
-        return 3
-    if p in ("low", "p4"):
-        return 4
-    return 0
+    return _PRIORITY_MAP.get(priority.strip().lower(), 0)
 
 
 async def create_issue(

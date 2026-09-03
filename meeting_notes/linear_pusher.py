@@ -288,14 +288,12 @@ async def _find_duplicate(
 
     await link_mentioned_in(match["id"], meeting_id)
     if linear_id:
-        source_url = gmail_thread_url(meeting_id) or ""
-        comment_text = (
-            f"Referenced again in meeting **{meeting.title}** ({meeting.date}) "
-            f"(dedup similarity {match['score']:.2f}).\n"
-            f"Source: {source_url}" if source_url else
+        base_comment = (
             f"Referenced again in meeting **{meeting.title}** ({meeting.date}) "
             f"(dedup similarity {match['score']:.2f})."
         )
+        source_url = gmail_thread_url(meeting_id) or ""
+        comment_text = f"{base_comment}\nSource: {source_url}" if source_url else base_comment
         try:
             await add_comment(linear_id, comment_text)
         except Exception as exc:  # noqa: BLE001
@@ -310,3 +308,4 @@ async def _find_duplicate(
             match.get("linear_state", "Todo"),
         )
     return match
+
