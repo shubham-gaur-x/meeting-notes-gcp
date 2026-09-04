@@ -8,42 +8,57 @@
   :root {
     --bg:#0f1115; --panel:#171a21; --raise:#1e222b; --line:#272b35;
     --ink:#e6e8ec; --muted:#9aa3b2; --accent:#6ea8fe;
+    --accent-hover:#8cbaff; --accent-glow:rgba(110,168,254,0.15);
     --warn:#f0b429; --ok:#4ade80; --hot:#f87171;
+    --shadow:0 8px 30px rgba(0,0,0,0.35);
+    color-scheme: dark light;
   }
   @media (prefers-color-scheme: light) {
-    :root { --bg:#f6f7f9; --panel:#fff; --raise:#f0f2f5; --line:#e2e5ea;
-            --ink:#1a1d23; --muted:#5b6472; --accent:#2563eb; }
+    :root {
+      --bg:#f6f7f9; --panel:#ffffff; --raise:#f0f2f5; --line:#e2e5ea;
+      --ink:#1a1d23; --muted:#5b6472; --accent:#2563eb;
+      --accent-hover:#1d4ed8; --accent-glow:rgba(37,99,235,0.12);
+      --shadow:0 8px 30px rgba(0,0,0,0.08);
+    }
   }
   * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:var(--ink);
-         font:14px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+         font:14px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+         -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale; }
+  body, header, nav, nav button, .panel, .card, input, select, textarea,
+  .chat-chip, .prompt-card, .answer, dialog, .setting-item {
+    transition: background-color 0.22s ease, border-color 0.22s ease, color 0.22s ease, box-shadow 0.22s ease;
+  }
   header { padding:16px 22px; border-bottom:1px solid var(--line);
            display:flex; align-items:baseline; gap:14px; flex-wrap:wrap; }
-  h1 { font-size:15px; margin:0; font-weight:600; }
+  h1 { font-size:15px; margin:0; font-weight:600; letter-spacing:-0.2px; }
   h3 { font-size:13px; text-transform:uppercase; letter-spacing:.7px;
        color:var(--muted); margin:22px 0 10px; font-weight:600; }
   .dlg-body h3:first-child { margin-top:0; }
   .sub { color:var(--muted); font-size:12px; }
   nav { display:flex; gap:4px; padding:12px 22px 0; flex-wrap:wrap; }
   nav button { background:transparent; border:1px solid transparent; color:var(--muted);
-               padding:8px 15px; border-radius:8px 8px 0 0; cursor:pointer; font-size:13px; }
+               padding:8px 15px; border-radius:8px 8px 0 0; cursor:pointer; font-size:13px; font-family:inherit; }
   nav button:hover { color:var(--ink); }
   nav button.active { color:var(--ink); background:var(--panel);
-                      border-color:var(--line); border-bottom-color:var(--panel); }
+                      border-color:var(--line); border-bottom-color:var(--panel); font-weight:500; }
   main { padding:0 22px 48px; }
   .panel { display:none; background:var(--panel); border:1px solid var(--line);
            border-radius:0 10px 10px 10px; padding:20px; }
   .panel.active { display:block; }
   .row { display:flex; gap:10px; align-items:center; margin-bottom:14px; flex-wrap:wrap; }
   input, select { background:var(--bg); border:1px solid var(--line); color:var(--ink);
-                  padding:9px 11px; border-radius:7px; font-size:13px; }
+                  padding:9px 11px; border-radius:7px; font-size:13px; font-family:inherit; }
+  input:focus, select:focus { outline:none; border-color:var(--accent); }
   input { min-width:min(420px, 100%); }
   button.action { background:var(--accent); border:none; color:#fff; padding:9px 15px;
-                  border-radius:7px; cursor:pointer; font-size:13px; }
-  button.action:hover { filter:brightness(1.08); }
+                  border-radius:7px; cursor:pointer; font-size:13px; font-family:inherit;
+                  font-weight:500; transition:all .15s ease; }
+  button.action:hover { filter:brightness(1.08); transform:translateY(-1px); }
+  button.action:active { transform:translateY(0); }
   button.ghost { background:var(--raise); border:1px solid var(--line); color:var(--ink);
                  padding:6px 11px; border-radius:20px; cursor:pointer; font-size:12px;
-                 margin:0 4px 6px 0; }
+                 margin:0 4px 6px 0; font-family:inherit; transition:all .15s ease; }
   button.ghost:hover { border-color:var(--accent); color:var(--accent); }
   .cards { display:grid; grid-template-columns:repeat(auto-fill,minmax(132px,1fr));
            gap:10px; margin-bottom:6px; }
@@ -53,8 +68,6 @@
   .card .l { color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.6px; }
   .card.hot .n { color:var(--hot); }
   table { width:100%; border-collapse:collapse; font-size:13px; table-layout:auto; }
-  /* A task or a summary is long free text. Without these it either forces a
-     horizontal scrollbar over the whole panel or gets clipped mid-word. */
   th, td { text-align:left; padding:9px 10px; border-bottom:1px solid var(--line);
            vertical-align:top; white-space:normal; word-break:break-word; overflow-wrap:anywhere; }
   th { color:var(--muted); font-weight:500; font-size:11px;
@@ -65,16 +78,14 @@
   .hint { color:var(--muted); font-size:12px; margin:-4px 0 12px; }
   .empty { color:var(--muted); padding:20px; text-align:center; }
   .err { color:var(--warn); padding:12px; border:1px solid var(--warn); border-radius:8px; }
-  /* No `white-space:pre-wrap`: the answer is rendered markdown, so the source
-     newlines are already block elements and preserving them doubles the gaps. */
-  .answer { background:var(--raise); border:1px solid var(--line); border-radius:9px;
-            padding:15px; word-break:break-word; overflow-wrap:break-word; }
+  .answer { background:var(--raise); border:1px solid var(--line); border-radius:10px;
+            padding:18px; word-break:break-word; overflow-wrap:break-word; line-height:1.6; }
   .answer table { margin:14px 0; width:100%; border:1px solid var(--line);
                   border-radius:6px; overflow:hidden; }
   .answer table th { background:rgba(255,255,255,0.04); font-weight:600; }
   .answer table tr:nth-child(even) td { background:rgba(255,255,255,0.02); }
-  .btn-xs { padding:2px 8px; font-size:11px; cursor:pointer; color:#fff; border:none;
-            border-radius:4px; background:var(--accent); }
+  .btn-xs { padding:3px 8px; font-size:11px; cursor:pointer; color:#fff; border:none;
+            border-radius:4px; background:var(--accent); font-family:inherit; }
   .btn-xs.undo { background:#4a5568; }
   .pill.done { background:#134e4a; border-color:#134e4a; color:#fff; font-weight:600; }
   .pill.progress { background:#1e3a8a; border-color:#1e3a8a; color:#fff; font-weight:600; }
@@ -82,34 +93,145 @@
   .subtask-of { background:#2d3748; border-color:#2d3748; color:#a0aec0; font-size:10px;
                 margin-right:6px; }
   .struck { text-decoration:line-through; color:var(--muted); }
-  .prompt-card { background:var(--raise); border:1px solid var(--line); border-radius:10px; padding:10px 14px; cursor:pointer; transition:all .15s ease; text-align:left; }
-  .prompt-card:hover { border-color:var(--accent); background:rgba(99,102,241,0.08); transform:translateY(-1px); }
-  .prompt-cat { font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.5px; color:var(--accent); margin-bottom:3px; }
-  .prompt-text { font-size:13px; color:var(--ink); line-height:1.4; }
-  .followup-btn { background:var(--raise); border:1px solid var(--accent); color:var(--accent); padding:6px 12px; border-radius:16px; cursor:pointer; font-size:12px; margin:4px 6px 4px 0; text-align:left; }
-  .followup-btn:hover { background:var(--accent); color:#fff; }
+  
+  /* Conversational Chat UI */
+  .chat-input-wrapper { margin-bottom:10px; }
+  .chat-input-box { display:flex; align-items:flex-end; gap:8px; background:var(--bg);
+                    border:1px solid var(--line); border-radius:12px; padding:8px 10px;
+                    transition:border-color .16s ease, box-shadow .16s ease; width:100%; }
+  .chat-input-box:focus-within { border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-glow); }
+  textarea.chat-input { background:transparent; border:none; color:var(--ink);
+                        flex:1; min-height:28px; max-height:220px; resize:none; padding:4px 6px;
+                        box-sizing:border-box; font-family:inherit; font-size:13.5px; line-height:1.5;
+                        overflow-y:auto; outline:none; }
+  .chat-input-actions { display:flex; align-items:center; gap:6px; flex-shrink:0; }
+  .chat-btn-send { background:var(--accent); border:none; color:#fff; padding:7px 15px;
+                   border-radius:8px; cursor:pointer; font-size:13px; font-weight:600;
+                   display:inline-flex; align-items:center; gap:6px; transition:all .15s ease;
+                   height:36px; font-family:inherit; }
+  .chat-btn-send:hover { background:var(--accent-hover); transform:translateY(-1px); }
+  .chat-btn-send:disabled { opacity:.6; cursor:not-allowed; transform:none; }
+  .chat-btn-settings { background:var(--raise); border:1px solid var(--line); color:var(--muted);
+                       height:36px; width:36px; border-radius:8px; cursor:pointer;
+                       display:inline-flex; align-items:center; justify-content:center;
+                       transition:all .15s ease; }
+  .chat-btn-settings:hover { color:var(--ink); border-color:var(--accent); background:var(--panel); }
+
+  /* Filters Row */
+  .chat-filters-row { display:flex; align-items:center; gap:8px; margin:10px 0 14px; flex-wrap:wrap; }
+  .filter-badge { display:inline-flex; align-items:center; gap:4px; font-size:11px;
+                  font-weight:600; text-transform:uppercase; letter-spacing:.5px; color:var(--muted); }
+  .chat-select { background:var(--raise); border:1px solid var(--line); color:var(--ink);
+                 padding:5px 10px; font-size:12px; border-radius:6px; cursor:pointer;
+                 transition:border-color .15s ease, background .15s ease; font-family:inherit; }
+  .chat-select.active-filter { border-color:var(--accent); background:var(--accent-glow);
+                               color:var(--accent); font-weight:600; }
+  .clear-filters-btn { background:none; border:none; color:var(--muted); font-size:11px;
+                       cursor:pointer; text-decoration:underline; padding:2px 6px; font-family:inherit; }
+  .clear-filters-btn:hover { color:var(--hot); }
+
+  /* Query Chips & AI Suggestions */
+  .chat-chips-wrap { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:12px; }
+  .chat-chip { display:inline-flex; align-items:center; gap:6px; background:var(--raise);
+               border:1px solid var(--line); color:var(--ink); padding:7px 13px; border-radius:18px;
+               cursor:pointer; font-size:12px; line-height:1.35; transition:all .16s ease;
+               text-align:left; font-family:inherit; user-select:none; }
+  .chat-chip:hover { border-color:var(--accent); background:var(--accent-glow);
+                     color:var(--ink); transform:translateY(-1px); box-shadow:0 2px 8px rgba(0,0,0,0.08); }
+  .chat-chip:active { transform:translateY(0); }
+  .chat-chip .chip-icon { color:var(--accent); flex-shrink:0; }
+  .chat-chip:focus-visible, .prompt-card:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+
+  .prompt-card { background:var(--raise); border:1px solid var(--line); border-radius:10px;
+                 padding:11px 14px; cursor:pointer; transition:all .16s ease; text-align:left; }
+  .prompt-card:hover { border-color:var(--accent); background:var(--accent-glow); transform:translateY(-1px);
+                       box-shadow:0 3px 10px rgba(0,0,0,0.08); }
+  .prompt-cat { font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.5px;
+                color:var(--accent); margin-bottom:3px; }
+  .prompt-text { font-size:13px; color:var(--ink); line-height:1.45; }
+  .followup-btn { background:var(--raise); border:1px solid var(--accent); color:var(--accent);
+                  padding:6px 12px; border-radius:16px; cursor:pointer; font-size:12px;
+                  margin:4px 6px 4px 0; text-align:left; font-family:inherit; transition:all .15s ease; }
+  .followup-btn:hover { background:var(--accent); color:#fff; transform:translateY(-1px); }
+
+  /* Message Stream & Answer Display */
+  .chat-user-msg { background:var(--raise); border:1px solid var(--line); border-radius:10px;
+                   padding:12px 16px; margin-bottom:14px; display:flex; flex-direction:column; gap:4px; }
+  .chat-user-meta { display:flex; align-items:center; gap:8px; font-size:11px; color:var(--muted);
+                    text-transform:uppercase; letter-spacing:.5px; font-weight:600; }
+  .chat-user-text { font-size:14px; color:var(--ink); line-height:1.5; font-weight:500; }
+
+  .chat-loading { background:var(--raise); border:1px solid var(--line); border-radius:10px;
+                  padding:16px 18px; display:flex; align-items:center; gap:12px; color:var(--muted);
+                  font-size:13px; margin-bottom:14px; }
+  .pulse-dot { width:8px; height:8px; background:var(--accent); border-radius:50%;
+               animation:pulse 1.4s ease-in-out infinite; flex-shrink:0; }
+  @keyframes pulse { 0%, 100% { opacity:.3; transform:scale(.85); } 50% { opacity:1; transform:scale(1.2); } }
+
+  .answer-toolbar { display:flex; align-items:center; justify-content:space-between; gap:8px;
+                    padding-bottom:10px; margin-bottom:12px; border-bottom:1px solid var(--line);
+                    flex-wrap:wrap; }
+  .answer-badge { display:inline-flex; align-items:center; gap:6px; font-size:11px;
+                  font-weight:600; text-transform:uppercase; letter-spacing:.5px; color:var(--accent); }
+  .copy-btn { display:inline-flex; align-items:center; gap:6px; background:var(--panel);
+              border:1px solid var(--line); color:var(--ink); padding:5px 11px; border-radius:6px;
+              font-size:11.5px; font-weight:500; cursor:pointer; transition:all .15s ease; font-family:inherit; }
+  .copy-btn:hover { border-color:var(--accent); color:var(--accent); }
+  .copy-btn.copied { background:rgba(74,222,128,0.15); border-color:var(--ok); color:var(--ok); }
+
+  .copy-icon-btn { background:none; border:none; color:var(--muted); cursor:pointer;
+                   padding:2px 5px; border-radius:4px; display:inline-flex; align-items:center;
+                   transition:all .15s ease; vertical-align:middle; }
+  .copy-icon-btn:hover { color:var(--accent); background:var(--raise); }
+  .copy-icon-btn.copied { color:var(--ok); }
+
+  .code-block-wrap { background:var(--panel); border:1px solid var(--line); border-radius:8px;
+                     margin:12px 0; overflow:hidden; }
+  .code-header { display:flex; justify-content:space-between; align-items:center;
+                 padding:6px 10px; background:rgba(255,255,255,0.02); border-bottom:1px solid var(--line);
+                 font-size:11px; }
+  .code-lang { color:var(--muted); text-transform:uppercase; font-size:10px;
+               letter-spacing:.6px; font-weight:600; }
+  .code-block-wrap pre { padding:10px 12px; margin:0; overflow-x:auto;
+                         font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; line-height:1.5; }
+
+  /* Settings Modal & Switches */
+  .switch { position:relative; display:inline-block; width:44px; height:24px; flex-shrink:0; }
+  .switch input { opacity:0; width:0; height:0; position:absolute; }
+  .slider { position:absolute; cursor:pointer; inset:0; background-color:var(--raise);
+            border:1px solid var(--line); transition:all .2s cubic-bezier(.4,0,.2,1); border-radius:24px; }
+  .slider::before { position:absolute; content:""; height:16px; width:16px; left:3px; bottom:3px;
+                    background-color:var(--muted); transition:all .2s cubic-bezier(.4,0,.2,1); border-radius:50%; }
+  .switch input:checked + .slider { background-color:var(--accent); border-color:var(--accent); }
+  .switch input:checked + .slider::before { transform:translateX(20px); background-color:#fff; }
+  .switch input:focus-visible + .slider { outline:2px solid var(--accent); outline-offset:2px; }
+
+  .setting-row { display:flex; justify-content:space-between; align-items:center;
+                 padding:14px 0; border-bottom:1px solid var(--line); gap:16px; }
+  .setting-item { display:flex; justify-content:space-between; align-items:center;
+                  background:var(--raise); border:1px solid var(--line); padding:9px 12px;
+                  border-radius:7px; margin-bottom:6px; font-size:13px; gap:10px; }
+  .del-btn { background:none; border:none; color:var(--muted); cursor:pointer;
+             padding:4px; border-radius:4px; display:inline-flex; align-items:center;
+             justify-content:center; transition:all .15s ease; }
+  .del-btn:hover { color:var(--hot); background:rgba(248,113,113,0.12); }
+
+  /* General Components */
   .scroll { overflow-x:auto; }
   .pill { display:inline-block; background:var(--raise); border:1px solid var(--line);
           border-radius:20px; padding:2px 10px; font-size:11px; margin:0 5px 5px 0; }
   .pri-high { color:var(--hot); font-weight:600; }
   .quote { border-left:2px solid var(--accent); padding:2px 0 2px 12px; margin:0 0 10px; }
   code { font:12px ui-monospace,SFMono-Regular,Menlo,monospace; color:var(--accent); }
-  .chat-chip { display:inline-flex; align-items:center; gap:6px; background:var(--raise); border:1px solid var(--line); color:var(--ink); padding:6px 12px; border-radius:16px; cursor:pointer; font-size:12px; margin:0 6px 6px 0; transition:all .15s ease; text-align:left; }
-  .chat-chip:hover { border-color:var(--accent); background:rgba(99,102,241,0.08); transform:translateY(-1px); }
-  .chat-chip .chip-icon { font-size:13px; color:var(--accent); }
-  .setting-row { display:flex; justify-content:space-between; align-items:center; padding:12px 0; border-bottom:1px solid var(--line); }
-  .setting-item { display:flex; justify-content:space-between; align-items:center; background:var(--raise); border:1px solid var(--line); padding:9px 12px; border-radius:7px; margin-bottom:6px; font-size:13px; gap:10px; }
-  .del-btn { background:none; border:none; color:var(--muted); cursor:pointer; font-size:15px; padding:2px 6px; border-radius:4px; }
-  .del-btn:hover { color:var(--hot); background:rgba(248,113,113,0.1); }
-  textarea.chat-input { background:var(--bg); border:1px solid var(--line); color:var(--ink); min-width:min(520px, 100%); flex:1; min-height:38px; max-height:220px; resize:none; padding:8px 12px; box-sizing:border-box; border-radius:8px; font-family:inherit; font-size:13px; line-height:1.45; overflow-y:auto; }
-  textarea.chat-input:focus { outline:none; border-color:var(--accent); }
   dialog { background:var(--panel); color:var(--ink); border:1px solid var(--line);
-           border-radius:12px; padding:0; max-width:min(760px,92vw); width:100%; }
-  dialog::backdrop { background:rgba(0,0,0,.6); }
+           border-radius:12px; padding:0; max-width:min(760px,92vw); width:100%; box-shadow:var(--shadow); }
+  dialog::backdrop { background:rgba(0,0,0,.65); backdrop-filter:blur(3px); }
   .dlg-head { padding:18px 20px 12px; border-bottom:1px solid var(--line);
               display:flex; justify-content:space-between; gap:12px; align-items:flex-start; }
   .dlg-body { padding:18px 20px 22px; max-height:70vh; overflow:auto; }
-  .x { background:none; border:none; color:var(--muted); font-size:20px; cursor:pointer; }
+  .x { background:none; border:none; color:var(--muted); font-size:20px; cursor:pointer;
+       padding:2px 6px; border-radius:4px; transition:color .15s ease; }
+  .x:hover { color:var(--ink); }
 </style>
 </head>
 <body>
@@ -204,7 +326,7 @@
     <p class="hint">The most connected part of the graph, and the links among it.
        Drag to pan, scroll to zoom, hover a node for its name.</p>
     <div id="graph-legend" class="row" style="gap:14px;flex-wrap:wrap;margin-bottom:6px"></div>
-    <canvas id="graph-canvas" style="width:100%;height:560px;border:1px solid #222;
+    <canvas id="graph-canvas" style="width:100%;height:560px;border:1px solid var(--line);
        border-radius:8px;cursor:grab;display:block"></canvas>
     <div id="graph-body"></div>
   </section>
@@ -217,35 +339,59 @@
   </section>
 
   <section class="panel" id="ask">
-    <div class="row" style="align-items:flex-start;gap:8px;margin-bottom:10px">
-      <textarea id="q" class="chat-input" rows="1"
-                placeholder="Ask anything about your meetings… (Enter to send, Shift+Enter for new line)"
-                onkeydown="handleChatKeydown(event)"
-                oninput="autoGrowTextarea(this)"></textarea>
-      <button class="action" onclick="askMemory()" style="height:38px;padding:0 18px">Ask</button>
-      <button class="ghost" onclick="openChatSettings()" title="Chat Query &amp; Suggestions Settings"
-              style="height:38px;padding:0 12px;margin:0;display:inline-flex;align-items:center;justify-content:center">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block">
-          <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path>
-          <circle cx="12" cy="12" r="3"></circle>
-        </svg>
-      </button>
+    <div class="chat-input-wrapper">
+      <div class="chat-input-box">
+        <textarea id="q" class="chat-input" rows="1"
+                  placeholder="Ask anything about your meetings… (Enter to send, Shift+Enter for new line)"
+                  onkeydown="handleChatKeydown(event)"
+                  oninput="autoGrowTextarea(this)"></textarea>
+        <div class="chat-input-actions">
+          <button type="button" class="chat-btn-settings" onclick="openChatSettings()" title="Chat Query &amp; Suggestions Settings" aria-label="Settings">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path>
+              <circle cx="12" cy="12" r="3"></circle>
+            </svg>
+          </button>
+          <button type="button" id="ask-btn" class="chat-btn-send" onclick="askMemory()" title="Send Question (Enter)" aria-label="Send Question">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <line x1="22" y1="2" x2="11" y2="13"></line>
+              <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+            </svg>
+            <span>Ask</span>
+          </button>
+        </div>
+      </div>
     </div>
-    <div class="row" style="gap:8px;align-items:center;margin-bottom:12px">
-      <span class="muted" style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.6px">Filter Scope:</span>
-      <select id="chat-scope" style="padding:4px 9px;font-size:12px;border-radius:6px">
+
+    <div class="chat-filters-row">
+      <div class="filter-badge">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--accent)" aria-hidden="true">
+          <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"></polygon>
+        </svg>
+        <span>Scope:</span>
+      </div>
+      <select id="chat-scope" class="chat-select" onchange="onChatFilterChange()">
         <option value="">All Memory &amp; Graph</option>
         <option value="ActionItem">Open Deliverables &amp; Actions</option>
         <option value="Decision">Decisions &amp; Milestones</option>
         <option value="Meeting">Recent Meetings</option>
       </select>
-      <select id="chat-timeframe" style="padding:4px 9px;font-size:12px;border-radius:6px">
+      <div class="filter-badge" style="margin-left:4px">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--accent)" aria-hidden="true">
+          <circle cx="12" cy="12" r="10"></circle>
+          <polyline points="12 6 12 12 16 14"></polyline>
+        </svg>
+        <span>Timeframe:</span>
+      </div>
+      <select id="chat-timeframe" class="chat-select" onchange="onChatFilterChange()">
         <option value="">All Time</option>
         <option value="7">Past 7 Days</option>
         <option value="30">Past 30 Days</option>
         <option value="90">Past Quarter</option>
       </select>
+      <button type="button" id="chat-clear-filters" class="clear-filters-btn" style="display:none" onclick="clearChatFilters()">Clear filters</button>
     </div>
+
     <div id="chat-suggestions" style="margin-bottom:14px"></div>
     <div id="ask-body"></div>
   </section>
@@ -261,36 +407,43 @@
 <dialog id="detail">
   <div class="dlg-head">
     <div><strong id="d-title"></strong><div class="muted" id="d-meta"></div></div>
-    <button class="x" onclick="document.getElementById('detail').close()">&times;</button>
+    <button class="x" onclick="document.getElementById('detail').close()" aria-label="Close dialog">&times;</button>
   </div>
   <div class="dlg-body" id="d-body"></div>
 </dialog>
 
 <dialog id="chat-settings-modal">
   <div class="dlg-head">
-    <div><strong>Chat &amp; Suggestions Settings</strong><div class="muted" style="font-size:12px">Configure common queries and AI-seeded suggestions</div></div>
-    <button class="x" onclick="document.getElementById('chat-settings-modal').close()">&times;</button>
+    <div>
+      <strong style="font-size:14px">Chat &amp; Suggestions Settings</strong>
+      <div class="muted" style="font-size:12px">Configure common queries and AI-seeded suggestions</div>
+    </div>
+    <button class="x" onclick="document.getElementById('chat-settings-modal').close()" aria-label="Close settings">&times;</button>
   </div>
   <div class="dlg-body">
     <div class="setting-row">
       <div>
-        <strong>AI-Seeded Suggested Questions</strong>
-        <div class="muted" style="font-size:12px">Dynamically surface suggested questions from active action items and decisions in graph memory</div>
+        <strong style="font-size:13.5px;color:var(--ink)">AI-Seeded Suggested Questions</strong>
+        <div class="muted" style="font-size:12px;margin-top:2px">Dynamically surface suggested questions from active action items and decisions in graph memory</div>
       </div>
-      <input type="checkbox" id="toggle-ai-questions" style="width:20px;height:20px;cursor:pointer" onchange="onToggleAiQuestions(this.checked)">
+      <label class="switch" title="Toggle AI-Seeded Suggested Questions">
+        <input type="checkbox" id="toggle-ai-questions" onchange="onToggleAiQuestions(this.checked)">
+        <span class="slider"></span>
+      </label>
     </div>
 
-    <h3 style="margin:20px 0 8px">Custom Common Questions</h3>
-    <p class="hint" style="margin-bottom:10px">Quick questions pinned right beneath your chat input. Click to ask immediately.</p>
+    <h3 style="margin:20px 0 6px">Custom Common Questions</h3>
+    <p class="hint" style="margin-bottom:12px">Quick questions pinned right beneath your chat input. Click to ask immediately.</p>
     
-    <div id="custom-queries-list" style="margin-bottom:12px"></div>
+    <div id="custom-queries-list" style="margin-bottom:14px"></div>
 
-    <div class="row" style="gap:8px;margin-bottom:16px">
+    <div class="row" style="gap:8px;margin-bottom:16px;flex-wrap:nowrap">
       <input id="new-query-input" placeholder="Enter a new common question…" style="flex:1" onkeydown="if(event.key==='Enter')addCustomQuery()">
-      <button class="action" onclick="addCustomQuery()">+ Add</button>
+      <button class="action" onclick="addCustomQuery()" style="white-space:nowrap">+ Add</button>
     </div>
 
-    <div style="display:flex;justify-content:flex-end">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px">
+      <span class="muted" style="font-size:11px" id="settings-save-notice"></span>
       <button class="ghost" onclick="resetDefaultQueries()">Reset to Defaults</button>
     </div>
   </div>
@@ -518,9 +671,10 @@ function renderActions() {
   $("#actions-body").innerHTML = table(rows, [
     ["Task", r => {
       const task = `<span class="${r.done ? "struck" : ""}">${esc(r.task)}</span>`;
-      if (!r.parent_jira_key) return task;
+      const copyBtn = `<button type="button" class="copy-icon-btn" onclick="copyTaskText(this, '${esc(r.task).replace(/'/g, "\\'")}')" title="Copy deliverable description" aria-label="Copy deliverable"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg></button>`;
+      if (!r.parent_jira_key) return `<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:6px">${task}${copyBtn}</div>`;
       return `<div class="subtask"><span class="pill subtask-of">Sub-task of ` +
-             `${esc(r.parent_jira_key)}</span>${task}</div>`;
+             `${esc(r.parent_jira_key)}</span><div style="display:flex;align-items:flex-start;justify-content:space-between;gap:6px">${task}${copyBtn}</div></div>`;
     }, "34%"],
     ["Owner", r => esc(r.owner), "15%"],
     ["Created", r => esc(r.created_at || "—"), "10%"],
@@ -620,8 +774,17 @@ function renderMarkdown(md) {
   let html = esc(md);
 
   // Fenced Code Blocks (``` ... ```)
-  html = html.replace(/```([\s\S]*?)```/g, (match, p1) => {
-    return `<pre style="background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px;overflow-x:auto;font-family:monospace;font-size:12px;margin:10px 0"><code>${p1.trim()}</code></pre>`;
+  html = html.replace(/```([a-zA-Z0-9_-]*)\n?([\s\S]*?)```/g, (match, lang, code) => {
+    const cleanCode = code.trim();
+    return `<div class="code-block-wrap">` +
+      `<div class="code-header">` +
+      `<span class="code-lang">${lang || "code"}</span>` +
+      `<button type="button" class="copy-btn btn-xs" onclick="copyCode(this)" title="Copy code snippet" aria-label="Copy snippet">` +
+      `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>` +
+      `<span>Copy</span></button>` +
+      `</div>` +
+      `<pre><code>${cleanCode}</code></pre>` +
+      `</div>`;
   });
 
   // Headers
@@ -792,21 +955,45 @@ function setAiQuestionsEnabled(enabled) {
 }
 
 function autoGrowTextarea(el) {
+  if (!el) return;
   el.style.height = "auto";
-  el.style.height = Math.min(el.scrollHeight, 220) + "px";
+  const newH = Math.min(el.scrollHeight, 220);
+  el.style.height = Math.max(28, newH) + "px";
 }
 
 function handleChatKeydown(e) {
+  if (e.isComposing || e.keyCode === 229) return;
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();
     askMemory();
   }
 }
 
+function onChatFilterChange() {
+  const scope = $("#chat-scope");
+  const tf = $("#chat-timeframe");
+  const clearBtn = $("#chat-clear-filters");
+  const hasFilter = Boolean((scope && scope.value) || (tf && tf.value));
+
+  if (scope) scope.classList.toggle("active-filter", Boolean(scope.value));
+  if (tf) tf.classList.toggle("active-filter", Boolean(tf.value));
+  if (clearBtn) clearBtn.style.display = hasFilter ? "inline-block" : "none";
+}
+
+function clearChatFilters() {
+  const scope = $("#chat-scope");
+  const tf = $("#chat-timeframe");
+  if (scope) { scope.value = ""; scope.classList.remove("active-filter"); }
+  if (tf) { tf.value = ""; tf.classList.remove("active-filter"); }
+  const clearBtn = $("#chat-clear-filters");
+  if (clearBtn) clearBtn.style.display = "none";
+}
+
 function openChatSettings() {
   const dlg = $("#chat-settings-modal");
   if (!dlg) return;
-  $("#toggle-ai-questions").checked = isAiQuestionsEnabled();
+  const toggle = $("#toggle-ai-questions");
+  if (toggle) toggle.checked = isAiQuestionsEnabled();
   renderCustomQueriesList();
   dlg.showModal();
 }
@@ -821,22 +1008,44 @@ function renderCustomQueriesList() {
   }
   container.innerHTML = queries.map((q, idx) => `
     <div class="setting-item">
-      <span>${esc(q)}</span>
-      <button class="del-btn" title="Delete question" onclick="deleteCustomQuery(${idx})">&times;</button>
+      <span style="flex:1;word-break:break-word">${esc(q)}</span>
+      <button type="button" class="del-btn" title="Delete question" aria-label="Delete question" onclick="deleteCustomQuery(${idx})">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <polyline points="3 6 5 6 21 6"></polyline>
+          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+        </svg>
+      </button>
     </div>
   `).join("");
+}
+
+function showSettingsNotice(msg) {
+  const notice = $("#settings-save-notice");
+  if (notice) {
+    notice.textContent = msg;
+    setTimeout(() => { if (notice.textContent === msg) notice.textContent = ""; }, 2500);
+  }
 }
 
 function addCustomQuery() {
   const input = $("#new-query-input");
   const val = input.value.trim();
-  if (!val) return;
+  if (!val) {
+    input.focus();
+    input.style.borderColor = "var(--warn)";
+    setTimeout(() => { input.style.borderColor = ""; }, 1200);
+    return;
+  }
   const queries = getCustomCommonQueries();
   if (!queries.includes(val)) {
     queries.push(val);
     saveCustomCommonQueries(queries);
+    showSettingsNotice("Added question");
+  } else {
+    showSettingsNotice("Already in list");
   }
   input.value = "";
+  input.focus();
   renderCustomQueriesList();
   renderChatSuggestions();
 }
@@ -848,20 +1057,24 @@ function deleteCustomQuery(idx) {
     saveCustomCommonQueries(queries);
     renderCustomQueriesList();
     renderChatSuggestions();
+    showSettingsNotice("Deleted question");
   }
 }
 
 function resetDefaultQueries() {
   saveCustomCommonQueries([...DEFAULT_COMMON_QUERIES]);
   setAiQuestionsEnabled(true);
-  $("#toggle-ai-questions").checked = true;
+  const toggle = $("#toggle-ai-questions");
+  if (toggle) toggle.checked = true;
   renderCustomQueriesList();
   renderChatSuggestions();
+  showSettingsNotice("Reset to defaults");
 }
 
 function onToggleAiQuestions(checked) {
   setAiQuestionsEnabled(checked);
   renderChatSuggestions();
+  showSettingsNotice(checked ? "AI suggestions enabled" : "AI suggestions paused");
 }
 
 let SUGGESTED_QUESTIONS = [];
@@ -879,14 +1092,14 @@ async function renderChatSuggestions() {
   if (commonQueries.length > 0) {
     html += `<div style="margin-bottom:12px">` +
       `<div class="sub" style="margin-bottom:6px;font-weight:600;letter-spacing:.5px;text-transform:uppercase;display:flex;align-items:center;gap:6px">` +
-      `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--accent)"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>` +
+      `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--accent)" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>` +
       `<span>Common Questions</span></div>` +
-      `<div style="display:flex;flex-wrap:wrap;align-items:center">` +
+      `<div class="chat-chips-wrap">` +
       commonQueries.map(q =>
-        `<div class="chat-chip" onclick="askQuestion('${esc(q).replace(/'/g, "\\'")}')">` +
-        `<svg class="chip-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>` +
+        `<button type="button" class="chat-chip" onclick="askQuestion('${esc(q).replace(/'/g, "\\'")}')">` +
+        `<svg class="chip-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"></polyline></svg>` +
         `<span>${esc(q)}</span>` +
-        `</div>`
+        `</button>`
       ).join("") +
       `</div></div>`;
   }
@@ -903,13 +1116,13 @@ async function renderChatSuggestions() {
     }
 
     if (SUGGESTED_QUESTIONS.length > 0) {
-      html += `<div style="margin-top:6px">` +
+      html += `<div style="margin-top:8px">` +
         `<div class="sub" style="margin-bottom:6px;font-weight:600;letter-spacing:.5px;text-transform:uppercase;display:flex;align-items:center;gap:6px">` +
-        `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--accent)"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>` +
+        `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--accent)" aria-hidden="true"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>` +
         `<span>AI Suggested from Active Action Items &amp; Workstreams</span></div>` +
         `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px">` +
         SUGGESTED_QUESTIONS.map(q =>
-          `<div class="prompt-card" onclick="askQuestion('${esc(q.question).replace(/'/g, "\\'")}')">` +
+          `<div class="prompt-card" tabindex="0" role="button" onkeydown="if(event.key==='Enter'||event.key===' ')askQuestion('${esc(q.question).replace(/'/g, "\\'")}')" onclick="askQuestion('${esc(q.question).replace(/'/g, "\\'")}')">` +
           `<div class="prompt-cat">${esc(q.category)}</div>` +
           `<div class="prompt-text">${esc(q.question)}</div>` +
           `</div>`
@@ -929,17 +1142,97 @@ function askQuestion(q) {
 }
 
 let LAST_RAW_ANSWER = "";
+let currentQueryAbortController = null;
+
+function copyTextToClipboard(text, btn, successLabel = "Copied!") {
+  if (!text || !btn) return;
+  const labelSpan = btn.querySelector("span") || btn;
+  const origText = labelSpan.textContent;
+  const origSvg = btn.querySelector("svg") ? btn.querySelector("svg").outerHTML : "";
+
+  const finish = () => {
+    btn.classList.add("copied");
+    labelSpan.textContent = successLabel;
+    const curSvg = btn.querySelector("svg");
+    if (curSvg) {
+      curSvg.outerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"></polyline></svg>`;
+    }
+    setTimeout(() => {
+      btn.classList.remove("copied");
+      labelSpan.textContent = origText;
+      const checkSvg = btn.querySelector("svg");
+      if (checkSvg && origSvg) {
+        checkSvg.outerHTML = origSvg;
+      }
+    }, 2200);
+  };
+
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(finish).catch(() => fallbackCopy(text, finish));
+  } else {
+    fallbackCopy(text, finish);
+  }
+}
+
+function fallbackCopy(text, cb) {
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.style.position = "fixed";
+  ta.style.top = "0";
+  ta.style.left = "0";
+  ta.style.opacity = "0";
+  document.body.appendChild(ta);
+  ta.focus();
+  ta.select();
+  try {
+    document.execCommand("copy");
+    if (cb) cb();
+  } catch {}
+  document.body.removeChild(ta);
+}
 
 function copyAnswerText(btn) {
   if (!LAST_RAW_ANSWER) return;
-  navigator.clipboard.writeText(LAST_RAW_ANSWER).then(() => {
-    const label = btn.querySelector("span");
-    if (label) {
-      const orig = label.textContent;
-      label.textContent = "Copied!";
-      setTimeout(() => { label.textContent = orig; }, 2000);
+  copyTextToClipboard(LAST_RAW_ANSWER, btn, "Copied Answer!");
+}
+
+function extractDeliverables(md) {
+  if (!md) return "";
+  const lines = md.split("\n");
+  const deliverables = [];
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line) continue;
+    if (/^-\s+\[([ xX])\]\s+(.*)$/.test(line)) {
+      deliverables.push(line);
+      continue;
     }
-  }).catch(() => {});
+    if (/^[-*]\s+\*\*(Task|Action|Deliverable|Item|Todo|Decision):?\*\*/i.test(line)) {
+      deliverables.push(line);
+      continue;
+    }
+    if (/^(Owner|Due Date|Due|Priority|Status):/i.test(line)) {
+      deliverables.push("  " + line);
+      continue;
+    }
+  }
+  return deliverables.length ? deliverables.join("\n") : "";
+}
+
+function copyDeliverablesText(btn) {
+  const deliverables = extractDeliverables(LAST_RAW_ANSWER);
+  if (!deliverables) return;
+  copyTextToClipboard(deliverables, btn, "Copied Deliverables!");
+}
+
+function copyCode(btn) {
+  const pre = btn.closest(".code-block-wrap")?.querySelector("pre code");
+  if (!pre) return;
+  copyTextToClipboard(pre.textContent, btn, "Copied!");
+}
+
+function copyTaskText(btn, taskText) {
+  copyTextToClipboard(taskText, btn, "Copied!");
 }
 
 async function askMemory() {
@@ -957,11 +1250,54 @@ async function askMemory() {
     payloadQuestion += ` (${constraints.join(", ")})`;
   }
 
-  $("#ask-body").innerHTML = empty("Searching your meetings & knowledge graph…");
+  // Cancel prior in-flight request to prevent race conditions & memory leaks
+  if (currentQueryAbortController) {
+    currentQueryAbortController.abort();
+  }
+  currentQueryAbortController = new AbortController();
+
+  const askBtn = $("#ask-btn");
+  if (askBtn) {
+    askBtn.disabled = true;
+    askBtn.classList.add("loading");
+  }
+
+  const now = new Date();
+  const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  let filterPills = "";
+  if (scope) filterPills += `<span class="pill" style="font-size:10px;margin:0">Scope: ${esc(scope)}</span>`;
+  if (timeframe) filterPills += `<span class="pill" style="font-size:10px;margin:0">Past ${esc(timeframe)}d</span>`;
+
+  // Render user prompt card & animated pulse loading state
+  $("#ask-body").innerHTML = `
+    <div class="chat-user-msg">
+      <div class="chat-user-meta">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+        <span>You</span>
+        <span>·</span>
+        <span>${timeStr}</span>
+        ${filterPills}
+      </div>
+      <div class="chat-user-text">${esc(question)}</div>
+    </div>
+    <div class="chat-loading" id="chat-loading-state">
+      <div class="pulse-dot"></div>
+      <span>Consulting knowledge graph, episodic memory &amp; decisions…</span>
+    </div>
+  `;
+
+  // Reset textarea & height
+  textarea.value = "";
+  autoGrowTextarea(textarea);
+
+  $("#ask-body").scrollIntoView({ behavior: "smooth", block: "nearest" });
+
   try {
     const r = await fetch("/graph/memory/query", {
-      method: "POST", headers: {"Content-Type": "application/json"},
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
       body: JSON.stringify({question: payloadQuestion}),
+      signal: currentQueryAbortController.signal,
     });
     if (!r.ok) throw new Error("query -> " + r.status);
     const d = await r.json();
@@ -969,11 +1305,13 @@ async function askMemory() {
     const count = (d.node_ids || []).length;
     const noun = count === 1 ? "item" : "items";
 
+    const deliverablesText = extractDeliverables(LAST_RAW_ANSWER);
+
     let entitiesHtml = "";
     const topics = (d.entities?.topics || []).filter(Boolean);
     const people = (d.entities?.people || []).filter(Boolean);
     if (topics.length || people.length) {
-      entitiesHtml += `<div style="margin-top:12px;display:flex;flex-wrap:wrap;align-items:center;gap:6px">` +
+      entitiesHtml += `<div style="margin-top:14px;display:flex;flex-wrap:wrap;align-items:center;gap:6px">` +
         `<span class="muted" style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px">Related Entities:</span>` +
         topics.map(t => `<span class="pill" style="cursor:pointer" onclick="askQuestion('What are the key decisions, deliverables, and updates regarding ${esc(t).replace(/'/g, "\\'")}')">📂 ${esc(t)}</span>`).join("") +
         people.map(p => `<span class="pill" style="cursor:pointer" onclick="askQuestion('What deliverables and action items are assigned to or involve ${esc(p).replace(/'/g, "\\'")}')">👤 ${esc(p)}</span>`).join("") +
@@ -982,25 +1320,58 @@ async function askMemory() {
 
     let followupsHtml = "";
     if ((d.suggested_followups || []).length) {
-      followupsHtml += `<div style="margin-top:10px;display:flex;flex-wrap:wrap;align-items:center">` +
+      followupsHtml += `<div style="margin-top:12px;display:flex;flex-wrap:wrap;align-items:center">` +
         `<span class="muted" style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-right:6px">Follow-ups:</span>` +
-        d.suggested_followups.map(f => `<button class="followup-btn" onclick="askQuestion('${esc(f).replace(/'/g, "\\'")}')">↪ ${esc(f)}</button>`).join("") +
+        d.suggested_followups.map(f => `<button type="button" class="followup-btn" onclick="askQuestion('${esc(f).replace(/'/g, "\\'")}')">↪ ${esc(f)}</button>`).join("") +
         `</div>`;
     }
 
-    $("#ask-body").innerHTML =
-      `<div class="answer" style="line-height:1.6;position:relative">` +
-      `<div style="display:flex;justify-content:flex-end;margin-bottom:8px">` +
-      `<button class="ghost" onclick="copyAnswerText(this)" style="padding:4px 10px;font-size:11px;margin:0;display:inline-flex;align-items:center;gap:5px" title="Copy answer to clipboard">` +
-      `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>` +
-      `<span>Copy Answer</span></button>` +
-      `</div>` +
-      `<div>${renderMarkdown(d.answer)}</div>` +
-      `</div>` +
-      entitiesHtml +
-      followupsHtml +
-      `<p class="muted" style="font-size:12px;margin-top:10px">Answered from ${count} ${noun} in your meeting memory.</p>`;
-  } catch (e) { fail("#ask-body", e); }
+    const copyDeliverablesBtn = deliverablesText ? `
+      <button type="button" class="copy-btn" onclick="copyDeliverablesText(this)" title="Copy action items & deliverables only" aria-label="Copy deliverables">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 11 12 14 22 4"></polyline><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg>
+        <span>Copy Deliverables</span>
+      </button>
+    ` : "";
+
+    const answerHtml = `
+      <div class="answer" style="position:relative">
+        <div class="answer-toolbar">
+          <div class="answer-badge">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
+            <span>Meeting Memory Analysis</span>
+          </div>
+          <div style="display:flex;gap:6px;align-items:center">
+            ${copyDeliverablesBtn}
+            <button type="button" class="copy-btn" onclick="copyAnswerText(this)" title="Copy full markdown answer to clipboard" aria-label="Copy Answer">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+              <span>Copy Answer</span>
+            </button>
+          </div>
+        </div>
+        <div class="answer-markdown">${renderMarkdown(d.answer)}</div>
+      </div>
+      ${entitiesHtml}
+      ${followupsHtml}
+      <p class="muted" style="font-size:12px;margin-top:12px">Answered from ${count} ${noun} in your meeting memory.</p>
+    `;
+
+    const loadingState = $("#chat-loading-state");
+    if (loadingState) {
+      loadingState.outerHTML = answerHtml;
+    } else {
+      $("#ask-body").innerHTML = answerHtml;
+    }
+
+    $("#ask-body").scrollIntoView({ behavior: "smooth", block: "nearest" });
+  } catch (e) {
+    if (e.name === "AbortError") return;
+    fail("#ask-body", e);
+  } finally {
+    if (askBtn) {
+      askBtn.disabled = false;
+      askBtn.classList.remove("loading");
+    }
+  }
 }
 
 async function loadReview() {
@@ -1201,6 +1572,13 @@ const LOADERS = {
   ask: renderChatSuggestions,
   review: loadReview,
 };
+
+// Dismiss modals when clicking their backdrop
+document.querySelectorAll("dialog").forEach(dlg => {
+  dlg.addEventListener("click", e => {
+    if (e.target === dlg) dlg.close();
+  });
+});
 
 loadHealth();
 loadOverview();
