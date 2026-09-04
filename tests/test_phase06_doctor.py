@@ -333,3 +333,22 @@ def test_parser_accepts_tier_and_env() -> None:
 
 def test_parser_defaults_to_tier_zero() -> None:
     assert build_parser().parse_args([]).tier == 0
+
+
+def test_direct_execution_does_not_raise_module_not_found() -> None:
+    """MNV-108: `python scripts/doctor.py` should not crash with ModuleNotFoundError."""
+    import subprocess
+    import sys
+
+    repo_root = Path(__file__).resolve().parent.parent
+    script_path = repo_root / "scripts" / "doctor.py"
+
+    result = subprocess.run(
+        [sys.executable, str(script_path)],
+        capture_output=True,
+        text=True,
+        cwd=str(repo_root),
+    )
+
+    assert "ModuleNotFoundError" not in result.stderr
+
