@@ -67,9 +67,13 @@ async def embed_meeting(
     driver: Any = None,
     settings: Settings | None = None,
     embed: Any = None,
+    semaphore: asyncio.Semaphore | None = None,
 ) -> bool:
     """Embed a meeting's summary onto Meeting.embedding."""
-    vector = await embed_text(summary, settings=settings, embed=embed)
+    resolved = settings or get_settings()
+    sem = semaphore or asyncio.Semaphore(max(1, resolved.embedding_concurrency))
+    async with sem:
+        vector = await embed_text(summary, settings=resolved, embed=embed)
     if vector is None:
         return False
 
@@ -97,10 +101,15 @@ async def _embed_pending(
     driver: Any,
     settings: Settings | None,
     embed: Any,
+    semaphore: asyncio.Semaphore,
 ) -> int:
     """Embed rows that have no embedding yet. Idempotent by construction —
     the fetch filters on `embedding IS NULL`, so a MERGE-matched node from an
     earlier meeting is embedded once and not re-embedded on every ingestion.
+
+    `semaphore` is shared across all embedding passes (meetings, actions, facts)
+    so total concurrent Vertex API calls stay within
+    `settings.embedding_concurrency` regardless of how many passes run.
     """
     async with driver.session() as session:
         result = await session.run(fetch_cypher, meeting_id=meeting_id)
@@ -110,8 +119,6 @@ async def _embed_pending(
         return 0
 
     now = datetime.now(UTC).isoformat()
-    limit = (settings or get_settings()).embedding_concurrency
-    semaphore = asyncio.Semaphore(max(1, limit))
 
     async def embed_one(row: dict[str, Any]) -> int:
         # The model call is what the semaphore bounds; the write is cheap and
@@ -129,10 +136,17 @@ async def _embed_pending(
 
 
 async def embed_action_items_for_meeting(
-    meeting_id: str, *, driver: Any = None, settings: Settings | None = None, embed: Any = None
+    meeting_id: str,
+    *,
+    driver: Any = None,
+    settings: Settings | None = None,
+    embed: Any = None,
+    semaphore: asyncio.Semaphore | None = None,
 ) -> int:
     """Embed this meeting's un-embedded ActionItems — the dedup similarity input."""
     driver = driver or _driver()
+    resolved = settings or get_settings()
+    sem = semaphore or asyncio.Semaphore(max(1, resolved.embedding_concurrency))
     count = await _embed_pending(
         """
         MATCH (m:Meeting {id: $meeting_id})-[:FOLLOWS_UP]->(a:ActionItem)
@@ -143,7 +157,7 @@ async def embed_action_items_for_meeting(
         MATCH (a:ActionItem {id: $id})
         SET a.embedding = $embedding, a.embedding_updated_at = $now
         """,
-        meeting_id, "task", driver=driver, settings=settings, embed=embed,
+        meeting_id, "task", driver=driver, settings=resolved, embed=embed, semaphore=sem,
     )
     if count:
         log.info("vector.actions_embedded", meeting_id=meeting_id, count=count)
@@ -151,10 +165,17 @@ async def embed_action_items_for_meeting(
 
 
 async def embed_facts_for_meeting(
-    meeting_id: str, *, driver: Any = None, settings: Settings | None = None, embed: Any = None
+    meeting_id: str,
+    *,
+    driver: Any = None,
+    settings: Settings | None = None,
+    embed: Any = None,
+    semaphore: asyncio.Semaphore | None = None,
 ) -> int:
     """Embed Facts attached to this meeting that have no embedding yet."""
     driver = driver or _driver()
+    resolved = settings or get_settings()
+    sem = semaphore or asyncio.Semaphore(max(1, resolved.embedding_concurrency))
     count = await _embed_pending(
         """
         MATCH (m:Meeting {id: $meeting_id})-[:HAS_FACT]->(f:Fact)
@@ -165,7 +186,7 @@ async def embed_facts_for_meeting(
         MATCH (f:Fact {id: $id})
         SET f.embedding = $embedding, f.embedding_updated_at = $now
         """,
-        meeting_id, "text", driver=driver, settings=settings, embed=embed,
+        meeting_id, "text", driver=driver, settings=resolved, embed=embed, semaphore=sem,
     )
     if count:
         log.info("vector.facts_embedded", meeting_id=meeting_id, count=count)

@@ -1182,3 +1182,67 @@ def test_automated_senders_are_not_recorded_as_attendees() -> None:
     })["_header_recipients"]
 
     assert [r["email"] for r in recipients] == ["michael.baylard@onixnet.com"]
+
+
+async def test_enrich_runs_all_steps_and_shields_embedding_failures(monkeypatch) -> None:
+    """enrich() must produce outcomes for all ENRICH_STEPS and remain resilient
+    if an embedding call fails."""
+    from meeting_notes.pipeline import ENRICH_STEPS, enrich
+
+    meeting = _meeting()
+
+    # Mock the internal modules to avoid live DB/GCP calls
+    import meeting_notes.graph_algorithms as ga
+    import meeting_notes.memory.episodic as me
+    import meeting_notes.memory.procedural as mp
+    import meeting_notes.memory.semantic as ms
+    import meeting_notes.memory.vector as mv
+
+    async def _mock_facts(*a, **k):
+        return 3
+
+    async def _mock_rel(*a, **k):
+        return 2
+
+    async def _mock_temporal(*a, **k):
+        return True
+
+    async def _mock_causality(*a, **k):
+        return 1
+
+    async def _mock_proc(*a, **k):
+        return None
+
+    monkeypatch.setattr(ms, "extract_facts", _mock_facts)
+    monkeypatch.setattr(ms, "strengthen_relationships", _mock_rel)
+    monkeypatch.setattr(me, "link_temporal_chain", _mock_temporal)
+    monkeypatch.setattr(me, "detect_causality", _mock_causality)
+    monkeypatch.setattr(mp, "match_to_procedure", _mock_proc)
+
+    async def _mock_embed_meeting(*a, **k):
+        return [0.1] * 768
+
+    async def _mock_embed_actions(*a, **k):
+        raise RuntimeError("simulated Vertex AI embedding timeout")
+
+    async def _mock_embed_facts(*a, **k):
+        return 4
+
+    async def _mock_algo(*a, **k):
+        return {"pagerank": True}
+
+    monkeypatch.setattr(mv, "embed_meeting", _mock_embed_meeting)
+    monkeypatch.setattr(mv, "embed_action_items_for_meeting", _mock_embed_actions)
+    monkeypatch.setattr(mv, "embed_facts_for_meeting", _mock_embed_facts)
+    monkeypatch.setattr(ga, "run_fast", _mock_algo)
+
+    outcome = await enrich(meeting, "meeting-123")
+
+    assert tuple(outcome.keys()) == ENRICH_STEPS
+    assert outcome["facts"] == 3
+    assert outcome["embed_meeting"] == [0.1] * 768
+    # The failed step is shielded and set to None
+    assert outcome["embed_actions"] is None
+    assert outcome["embed_facts"] == 4
+    assert outcome["algorithms"] == {"pagerank": True}
+
