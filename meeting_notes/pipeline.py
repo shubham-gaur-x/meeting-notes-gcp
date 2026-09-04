@@ -491,7 +491,12 @@ async def enrich(
         ("procedures", lambda: procedural.match_to_procedure(meeting, meeting_id)),
     ]
     embed_steps: list[tuple[str, Any]] = [
-        ("embed_meeting", lambda: vector.embed_meeting(meeting_id, meeting.summary, settings=settings)),
+        (
+            "embed_meeting",
+            lambda: vector.embed_meeting(
+                meeting_id, meeting.summary, settings=settings, semaphore=_embed_sem
+            ),
+        ),
         (
             "embed_actions",
             lambda: vector.embed_action_items_for_meeting(

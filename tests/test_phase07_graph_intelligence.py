@@ -1041,7 +1041,7 @@ async def test_pending_rows_are_embedded_concurrently() -> None:
 
     in_flight = 0
     peak = 0
-    CONCURRENCY_LIMIT = 3  # small so the test is fast but meaningful
+    concurrency_limit = 3  # small so the test is fast but meaningful
 
     async def slow_embed(text, settings=None):
         nonlocal in_flight, peak
@@ -1078,11 +1078,11 @@ async def test_pending_rows_are_embedded_concurrently() -> None:
         def session(self):
             return _Session()
 
-    # Pass a shared semaphore with limit=CONCURRENCY_LIMIT so slow_embed (the
+    # Pass a shared semaphore with limit=concurrency_limit so slow_embed (the
     # real embed function) runs through the actual asyncio.Semaphore code path.
     # This catches the "per-pass semaphore" bug where 3 independent semaphores
     # of size N allow up to 3*N in-flight calls instead of N.
-    shared_sem = asyncio.Semaphore(CONCURRENCY_LIMIT)
+    shared_sem = asyncio.Semaphore(concurrency_limit)
     count = await vector._embed_pending(
         "MATCH ... RETURN a.id AS id, a.task AS task", "MATCH ... SET a.embedding = $embedding",
         "m1", "task", driver=_Driver(), settings=None, embed=slow_embed, semaphore=shared_sem,
@@ -1093,8 +1093,93 @@ async def test_pending_rows_are_embedded_concurrently() -> None:
         f"embeddings ran one at a time (peak in-flight={peak}); they are "
         "independent calls and must overlap"
     )
-    assert peak <= CONCURRENCY_LIMIT, (
-        f"semaphore ceiling breached: peak in-flight={peak} exceeded limit={CONCURRENCY_LIMIT}"
+    assert peak <= concurrency_limit, (
+        f"semaphore ceiling breached: peak in-flight={peak} exceeded limit={concurrency_limit}"
+    )
+
+
+async def test_enrich_shared_semaphore_bounds_all_three_embedding_passes(monkeypatch) -> None:
+    """Driving enrich() with a stubbed llm_client.embed and limit of 2 must
+    strictly cap in-flight embedding calls to 2 across embed_meeting,
+    embed_actions, and embed_facts combined."""
+    import asyncio
+
+    from meeting_notes import graph_algorithms, llm_client
+    from meeting_notes.config import Settings
+    from meeting_notes.memory import episodic, procedural, semantic, vector
+    from meeting_notes.pipeline import enrich
+
+    meeting = _meeting(summary="Project kickoff discussion")
+
+    async def _mock_noop(*a, **k):
+        return None
+
+    monkeypatch.setattr(semantic, "extract_facts", _mock_noop)
+    monkeypatch.setattr(semantic, "strengthen_relationships", _mock_noop)
+    monkeypatch.setattr(episodic, "link_temporal_chain", _mock_noop)
+    monkeypatch.setattr(episodic, "detect_causality", _mock_noop)
+    monkeypatch.setattr(procedural, "match_to_procedure", _mock_noop)
+    monkeypatch.setattr(graph_algorithms, "run_fast", _mock_noop)
+
+    in_flight = 0
+    peak = 0
+    concurrency_limit = 2
+
+    async def slow_embed(text, settings=None):
+        nonlocal in_flight, peak
+        in_flight += 1
+        peak = max(peak, in_flight)
+        await asyncio.sleep(0.05)
+        in_flight -= 1
+        return [0.1] * 768
+
+    monkeypatch.setattr(llm_client, "embed", slow_embed)
+
+    class _Result:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def __aiter__(self):
+            self._it = iter(self._rows)
+            return self
+
+        async def __anext__(self):
+            try:
+                return next(self._it)
+            except StopIteration:
+                raise StopAsyncIteration from None
+
+    class _Session:
+        async def run(self, cypher, **kw):
+            if "RETURN" in cypher:
+                rows = [
+                    {"id": f"id-{i}", "task": f"task-{i}", "text": f"fact-{i}"}
+                    for i in range(5)
+                ]
+                return _Result(rows)
+            return None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+    class _Driver:
+        def session(self):
+            return _Session()
+
+    monkeypatch.setattr(vector, "_driver", lambda: _Driver())
+
+    custom_settings = Settings(embedding_concurrency=concurrency_limit)
+    outcome = await enrich(meeting, "m-test", settings=custom_settings)
+
+    assert outcome["embed_meeting"] is True
+    assert outcome["embed_actions"] == 5
+    assert outcome["embed_facts"] == 5
+    assert peak > 1, f"passes should run concurrently; peak={peak}"
+    assert peak <= concurrency_limit, (
+        f"shared semaphore breached: peak={peak} exceeded limit={concurrency_limit}"
     )
 
 

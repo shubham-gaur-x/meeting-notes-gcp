@@ -67,9 +67,13 @@ async def embed_meeting(
     driver: Any = None,
     settings: Settings | None = None,
     embed: Any = None,
+    semaphore: asyncio.Semaphore | None = None,
 ) -> bool:
     """Embed a meeting's summary onto Meeting.embedding."""
-    vector = await embed_text(summary, settings=settings, embed=embed)
+    resolved = settings or get_settings()
+    sem = semaphore or asyncio.Semaphore(max(1, resolved.embedding_concurrency))
+    async with sem:
+        vector = await embed_text(summary, settings=resolved, embed=embed)
     if vector is None:
         return False
 
