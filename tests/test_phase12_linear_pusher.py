@@ -121,6 +121,11 @@ async def test_linear_pusher_dedup_comments_on_existing_issue() -> None:
     async def mock_link_mentioned_in(action_id: str, meeting_id: str) -> None:
         linked_mentioned_in.append((action_id, meeting_id))
 
+    updated_linear_info: list[tuple[Any, ...]] = []
+
+    async def mock_update_linear_info(*args: Any, **kwargs: Any) -> None:
+        updated_linear_info.append(args)
+
     settings = Settings(
         linear_api_key="test_api_key",
         linear_team_id="team_1",
@@ -133,12 +138,13 @@ async def test_linear_pusher_dedup_comments_on_existing_issue() -> None:
     created_ids = await linear_pusher.push_action_items_to_linear(
         [meeting.action_items[0]],  # Only the first item
         meeting,
-        source_id="gmail_thread_abc123",
+        source_id="gmail:abc123",
         settings=settings,
         get_open_actions=mock_get_open_actions,
         embed=mock_embed,
         add_comment=mock_add_comment,
         link_mentioned_in=mock_link_mentioned_in,
+        update_linear_info=mock_update_linear_info,
     )
 
     # Near-duplicate should NOT create a new Linear issue
@@ -146,4 +152,34 @@ async def test_linear_pusher_dedup_comments_on_existing_issue() -> None:
     assert len(added_comments) == 1
     assert added_comments[0][0] == "iss_existing_99"
     assert "Referenced again in meeting" in added_comments[0][1]
+    assert "https://mail.google.com/mail/u/0/#inbox/abc123" in added_comments[0][1]
     assert len(linked_mentioned_in) == 1
+    assert len(updated_linear_info) == 1
+
+
+@pytest.mark.asyncio
+async def test_linear_pusher_idempotent_skip() -> None:
+    created_issues: list[dict[str, Any]] = []
+
+    async def mock_create_issue(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        created_issues.append(kwargs)
+        return {"id": "iss_new", "identifier": "ENG-102"}
+
+    settings = Settings(
+        linear_api_key="test_api_key",
+        linear_team_id="team_1",
+    )
+    meeting = _sample_meeting()
+    meeting.action_items[0].linear_identifier = "ENG-EXISTING"
+
+    created_ids = await linear_pusher.push_action_items_to_linear(
+        [meeting.action_items[0]],
+        meeting,
+        source_id="gmail_thread_abc123",
+        settings=settings,
+        create_issue=mock_create_issue,
+    )
+
+    assert created_ids == ["ENG-EXISTING"]
+    assert len(created_issues) == 0
+
