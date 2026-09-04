@@ -58,8 +58,8 @@ def build_system_prompt(type_hint: str | None = None) -> str:
 def _extract_raw_urls(text: str) -> list[str]:
     """Harvest real resource and document URLs from source text.
 
-    Filters out XML namespaces, image/logo assets, and webmail anchors so
-    only genuine document, project, and reference links enter the graph.
+    Filters out XML namespaces, image/logo assets, font files, and webmail anchors
+    so only genuine document, project, and reference links enter the graph.
     """
     import re
 
@@ -73,11 +73,14 @@ def _extract_raw_urls(text: str) -> list[str]:
     noise_domains = (
         "schemas.microsoft.com",
         "schemas.openxmlformats.org",
+        "schemas.google.com",
         "w3.org",
         "xmlsoap.org",
         "mail.google.com/mail",
         "gstatic.com",
         "googleusercontent.com",
+        "fonts.googleapis.com",
+        "fonts.gstatic.com",
     )
 
     noise_extensions = (
@@ -90,10 +93,17 @@ def _extract_raw_urls(text: str) -> list[str]:
         ".webp",
         ".css",
         ".js",
+        ".woff",
+        ".woff2",
+        ".ttf",
+        ".otf",
+        ".map",
     )
 
     for u in urls:
-        u = u.rstrip(".,;:)>]")
+        # Decode HTML entities commonly present in email/calendar HTML
+        u = u.replace("&amp;", "&").strip()
+        u = u.lstrip("(\"'<[").rstrip(".,;:)>]'\"")
         if len(u) < 10:
             continue
         u_lower = u.lower()
