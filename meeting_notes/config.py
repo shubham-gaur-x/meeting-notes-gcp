@@ -139,10 +139,16 @@ class Settings(BaseSettings):
     # costs a full REST sweep per call while the event route beside it cannot
     # be made to write anything a caller chooses.
     #
-    # Cloud Run IAM with an OIDC caller is the stronger gate and should become
-    # the primary one once Terraform grows a Cloud Scheduler job. This stays as
-    # defence in depth rather than being replaced by it.
     jira_sync_trigger_token: str = ""
+
+    # ─── Linear (Epics, Projects, Sub-projects, Tasks) ────────────────────
+    issue_tracker: Literal["jira", "linear", "both", "none"] = "jira"
+    linear_api_key: str = ""
+    linear_team_id: str = ""
+    linear_default_project_id: str | None = None
+    linear_confidence_threshold: float = 0.6
+    linear_dedup_enabled: bool = True
+    linear_dedup_threshold: float = 0.9
 
     # ─── Governance ───────────────────────────────────────────────────────
     fact_min_confidence: float = 0.5
