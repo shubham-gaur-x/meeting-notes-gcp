@@ -202,3 +202,176 @@ async def test_graphql_error_handling() -> None:
         await linear_client.execute_graphql(
             "query { viewer { id } }", settings=settings, transport=mock_error_transport
         )
+
+
+@pytest.mark.asyncio
+async def test_get_issue_and_update_issue() -> None:
+    async def mock_transport(
+        method: str,
+        url: str,
+        headers: dict[str, str],
+        params: dict[str, Any] | None,
+        json_body: dict[str, Any] | None,
+    ) -> tuple[int, Any]:
+        assert json_body is not None
+        query = json_body.get("query", "")
+        if "query Issue(" in query:
+            return 200, {
+                "data": {
+                    "issue": {
+                        "id": "iss_101",
+                        "identifier": "ENG-101",
+                        "title": "Existing issue",
+                        "priority": 2,
+                        "state": {"id": "st_todo", "name": "Todo", "type": "unstarted"},
+                    }
+                }
+            }
+        if "mutation IssueUpdate(" in query:
+            input_vars = json_body.get("variables", {}).get("input", {})
+            return 200, {
+                "data": {
+                    "issueUpdate": {
+                        "success": True,
+                        "issue": {
+                            "id": "iss_101",
+                            "identifier": "ENG-101",
+                            "title": input_vars.get("title", "Existing issue"),
+                            "priority": input_vars.get("priority", 2),
+                            "state": {"id": "st_todo", "name": "Todo", "type": "unstarted"},
+                        },
+                    }
+                }
+            }
+        return 400, {"errors": [{"message": "Unknown query"}]}
+
+    settings = Settings(linear_api_key="test_key", linear_team_id="team_eng_1")
+    issue = await linear_client.get_issue("iss_101", settings=settings, transport=mock_transport)
+    assert issue is not None
+    assert issue["id"] == "iss_101"
+    assert issue["identifier"] == "ENG-101"
+
+    updated = await linear_client.update_issue(
+        "iss_101",
+        title="Updated issue title",
+        priority="urgent",
+        settings=settings,
+        transport=mock_transport,
+    )
+    assert updated["title"] == "Updated issue title"
+    assert updated["priority"] == 1
+
+
+@pytest.mark.asyncio
+async def test_workflow_state_resolution_and_caching() -> None:
+    call_count = 0
+
+    async def mock_transport(
+        method: str,
+        url: str,
+        headers: dict[str, str],
+        params: dict[str, Any] | None,
+        json_body: dict[str, Any] | None,
+    ) -> tuple[int, Any]:
+        nonlocal call_count
+        call_count += 1
+        return 200, {
+            "data": {
+                "workflowStates": {
+                    "nodes": [
+                        {"id": "st_1", "name": "Backlog", "type": "backlog"},
+                        {"id": "st_2", "name": "Todo", "type": "unstarted"},
+                        {"id": "st_3", "name": "In Progress", "type": "started"},
+                        {"id": "st_4", "name": "Done", "type": "completed"},
+                        {"id": "st_5", "name": "Canceled", "type": "canceled"},
+                    ]
+                }
+            }
+        }
+
+    settings = Settings(linear_api_key="test_key", linear_team_id="team_cached_1")
+    done_state = await linear_client.resolve_workflow_state(
+        "done", team_id="team_cached_1", settings=settings, transport=mock_transport
+    )
+    assert done_state is not None
+    assert done_state["id"] == "st_4"
+    assert done_state["name"] == "Done"
+
+    # Second call uses cache and should not call mock_transport again
+    todo_state = await linear_client.resolve_workflow_state(
+        "unstarted", team_id="team_cached_1", settings=settings, transport=mock_transport
+    )
+    assert todo_state is not None
+    assert todo_state["id"] == "st_2"
+    assert call_count == 1
+
+    # Resolve by ID directly
+    direct_state = await linear_client.resolve_workflow_state(
+        "st_3", team_id="team_cached_1", settings=settings, transport=mock_transport
+    )
+    assert direct_state is not None
+    assert direct_state["name"] == "In Progress"
+
+
+@pytest.mark.asyncio
+async def test_create_issue_relation_and_attachment() -> None:
+    async def mock_transport(
+        method: str,
+        url: str,
+        headers: dict[str, str],
+        params: dict[str, Any] | None,
+        json_body: dict[str, Any] | None,
+    ) -> tuple[int, Any]:
+        assert json_body is not None
+        query = json_body.get("query", "")
+        if "IssueRelationCreate" in query:
+            return 200, {
+                "data": {
+                    "issueRelationCreate": {
+                        "success": True,
+                        "issueRelation": {
+                            "id": "rel_1",
+                            "type": "blocks",
+                            "issue": {"id": "iss_1", "identifier": "ENG-1"},
+                            "relatedIssue": {"id": "iss_2", "identifier": "ENG-2"},
+                        },
+                    }
+                }
+            }
+        if "AttachmentCreate" in query:
+            return 200, {
+                "data": {
+                    "attachmentCreate": {
+                        "success": True,
+                        "attachment": {
+                            "id": "att_1",
+                            "url": "https://mail.google.com/mail/u/0/#all/xyz",
+                            "title": "Meeting Thread",
+                        },
+                    }
+                }
+            }
+        return 400, {"errors": [{"message": "Unknown query"}]}
+
+    settings = Settings(linear_api_key="test_key", linear_team_id="team_eng_1")
+    rel = await linear_client.create_issue_relation(
+        "iss_1", "iss_2", relation_type="blocks", settings=settings, transport=mock_transport
+    )
+    assert rel["id"] == "rel_1"
+    assert rel["type"] == "blocks"
+
+    att = await linear_client.create_attachment(
+        "iss_1",
+        "https://mail.google.com/mail/u/0/#all/xyz",
+        title="Meeting Thread",
+        settings=settings,
+        transport=mock_transport,
+    )
+    assert att["id"] == "att_1"
+    assert att["url"] == "https://mail.google.com/mail/u/0/#all/xyz"
+
+
+@pytest.mark.asyncio
+async def test_close_shared_client() -> None:
+    await linear_client.close_shared_client()
+    assert linear_client._shared_client is None

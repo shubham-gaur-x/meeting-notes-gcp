@@ -86,3 +86,70 @@ async def test_linear_ops_health(app) -> None:
             assert data["status"] == "ok"
             assert data["connected"] is True
             assert data["projects_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_linear_ops_link(app) -> None:
+    with patch(
+        "meeting_notes.linear_client.create_issue_relation",
+        new_callable=AsyncMock,
+        return_value={"id": "rel_123", "type": "blocks"},
+    ):
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.post(
+                "/linear/link",
+                json={
+                    "issue_id": "iss_1",
+                    "related_issue_id": "iss_2",
+                    "link_type": "blocks",
+                },
+            )
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["issue_id"] == "iss_1"
+            assert data["related_issue_id"] == "iss_2"
+            assert data["link_type"] == "blocks"
+            assert data["relation_id"] == "rel_123"
+            assert data["success"] is True
+
+
+@pytest.mark.asyncio
+async def test_linear_ops_get_issue_found_and_not_found(app) -> None:
+    with patch(
+        "meeting_notes.linear_client.get_issue",
+        new_callable=AsyncMock,
+        side_effect=lambda issue_id: (
+            {"id": issue_id, "identifier": "ENG-42", "title": "Sample Issue"}
+            if issue_id == "iss_found"
+            else None
+        ),
+    ):
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.get("/linear/issue/iss_found")
+            assert resp.status_code == 200
+            assert resp.json()["issue"]["identifier"] == "ENG-42"
+
+            resp_404 = await client.get("/linear/issue/iss_missing")
+            assert resp_404.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_linear_ops_resolve_state(app) -> None:
+    with patch(
+        "meeting_notes.linear_client.resolve_workflow_state",
+        new_callable=AsyncMock,
+        return_value={"id": "st_done", "name": "Done", "type": "completed"},
+    ):
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.get("/linear/states/resolve?name=Done")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["query"] == "Done"
+            assert data["state"]["id"] == "st_done"
+

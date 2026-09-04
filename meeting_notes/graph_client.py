@@ -718,6 +718,50 @@ async def update_action_linear_state(
         )
 
 
+async def update_action_linear_status_by_ref(
+    linear_ref: str,
+    linear_state: str,
+    done: bool = False,
+    driver: Any | None = None,
+) -> bool:
+    """Update linear_state and done flag on ActionItem matching linear_id or linear_identifier."""
+    driver = driver or get_driver()
+    async with driver.session() as session:
+        result = await session.run(
+            """
+            MATCH (a:ActionItem)
+            WHERE a.linear_id = $linear_ref OR a.linear_identifier = $linear_ref
+            SET a.linear_state = $linear_state,
+                a.done = $done
+            RETURN a.id AS id
+            """,
+            linear_ref=linear_ref,
+            linear_state=linear_state,
+            done=done,
+        )
+        return bool([r async for r in result])
+
+
+async def link_action_linear_parent(
+    parent_linear_ref: str, child_action_id: str, driver: Any | None = None
+) -> bool:
+    """MERGE `(parent)-[:PARENT_OF]->(child)` where parent is identified by linear_id or linear_identifier."""
+    driver = driver or get_driver()
+    async with driver.session() as session:
+        result = await session.run(
+            """
+            MATCH (parent:ActionItem)
+            WHERE parent.linear_id = $parent_ref OR parent.linear_identifier = $parent_ref
+            MATCH (child:ActionItem {id: $child_id})
+            MERGE (parent)-[:PARENT_OF]->(child)
+            RETURN child.id AS id
+            """,
+            parent_ref=parent_linear_ref,
+            child_id=child_action_id,
+        )
+        return bool([r async for r in result])
+
+
 async def get_open_actions_for_owner(
     owner_email: str | None = None,
     *,
@@ -970,6 +1014,8 @@ async def get_all_actions(
                    coalesce(substring(a.created_at, 0, 10), m.date, '') AS created_at,
                    a.priority AS priority, a.jira_key AS jira_key,
                    a.jira_status AS jira_status, coalesce(a.done, false) AS done,
+                   a.linear_id AS linear_id, a.linear_identifier AS linear_identifier,
+                   a.linear_url AS linear_url, a.linear_state AS linear_state,
                    p.email AS owner_email,
                    parent.id AS parent_id, parent.task AS parent_task,
                    parent.jira_key AS parent_jira_key
