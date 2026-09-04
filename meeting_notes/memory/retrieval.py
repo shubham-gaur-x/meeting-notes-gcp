@@ -47,6 +47,10 @@ SYNTHESIS_SYSTEM_PREFIX = (
     "- Structure your answer with rich, scannable formatting (e.g. bold deliverable "
     "titles, clear stakeholder headers, and inline attribute metadata) — never just "
     "a flat list of plain bullets.\n"
+    "- Distinguish clearly between open deliverables ([OPEN]) and completed items "
+    "([DONE]). When asked about pending tasks or priorities, focus on active open items. "
+    "When asked about ticket or task statuses, accurately cite whether they are completed "
+    "or in progress based on their context status.\n"
     # Links are reproduced, never composed. The earlier wording told the model
     # to ALWAYS include a link and showed it the URL shapes, which is a recipe
     # for a confidently invented Jira key -- and a fabricated link is worse
@@ -106,6 +110,81 @@ async def extract_entities(
     }
 
 
+_DOC_PATTERNS: tuple[tuple[str, str], ...] = (
+    ("docs.google.com/presentation", "Google Slides"),
+    ("docs.google.com/document", "Google Doc"),
+    ("docs.google.com/spreadsheets", "Google Sheet"),
+    ("docs.google.com/forms", "Google Form"),
+    ("drive.google.com", "Google Drive"),
+    ("meet.google.com", "Google Meet"),
+    ("optum", "Optum Form"),
+    ("memberforms", "Optum Form"),
+)
+
+
+def format_doc_link(url: str) -> str:
+    """Format a raw URL into a concise, semantic markdown link.
+
+    Avoids duplicating long raw URLs as link text (saving context tokens)
+    while providing clear, human-scannable anchor labels.
+    """
+    if not url or not isinstance(url, str):
+        return ""
+    u = url.strip()
+    if u.startswith("[") and "](" in u:
+        return u
+    if not u.startswith("http://") and not u.startswith("https://"):
+        return ""
+
+    u_lower = u.lower()
+    for pattern, label in _DOC_PATTERNS:
+        if pattern in u_lower:
+            return f"[{label}]({u})"
+
+    if "atlassian.net" in u_lower:
+        import re
+
+        key_match = re.search(r"/browse/([A-Z][A-Z0-9]+-\d+)", u)
+        if key_match:
+            label = f"Jira {key_match.group(1)}"
+        elif "/wiki/" in u_lower:
+            label = "Confluence Doc"
+        else:
+            label = "Atlassian"
+        return f"[{label}]({u})"
+
+    try:
+        from urllib.parse import urlparse
+
+        netloc = urlparse(u).netloc.lower()
+        if netloc.startswith("www."):
+            netloc = netloc[4:]
+        label = f"Doc ({netloc})" if netloc else "Document"
+    except Exception:
+        label = "Document"
+
+    return f"[{label}]({u})"
+
+
+def _format_doc_links(urls: list[Any] | None, seen_urls: set[str] | None = None) -> list[str]:
+    """Format a list of raw document URLs with deduplication against seen URLs."""
+    if not urls:
+        return []
+    seen = seen_urls if seen_urls is not None else set()
+    formatted_links: list[str] = []
+    for u in urls:
+        if not isinstance(u, str):
+            continue
+        u_clean = u.strip()
+        if not u_clean or u_clean in seen:
+            continue
+        seen.add(u_clean)
+        link_md = format_doc_link(u_clean)
+        if link_md:
+            formatted_links.append(link_md)
+    return formatted_links
+
+
 def _jira_link(jira_key: str | None, settings: Settings) -> str | None:
     """Markdown link to a Jira issue, or None when we cannot build a real one.
 
@@ -131,6 +210,132 @@ def _links_suffix(*links: str | None) -> str:
     return f" | Links: {' '.join(present)}" if present else ""
 
 
+def _format_action_context_line(record: dict[str, Any], settings: Settings) -> str:
+    """Format one ActionItem record into a grounded, token-efficient context line."""
+    is_done = bool(record.get("done")) or str(record.get("jira_status", "")).lower() in (
+        "done",
+        "closed",
+        "resolved",
+    )
+    state_tag = "[DONE]" if is_done else "[OPEN]"
+    raw_status = record.get("jira_status")
+    if raw_status:
+        status_label = raw_status.title() if raw_status.islower() else raw_status
+    else:
+        status_label = "Done" if is_done else "In Progress"
+
+    jira_key = record.get("jira_key")
+    if jira_key:
+        jira_info = f" | Jira: {jira_key} (Status: {status_label})"
+    else:
+        jira_info = f" | Status: {status_label}"
+
+    seen_urls: set[str] = set()
+    jira_l = _jira_link(jira_key, settings)
+    if jira_key and settings.jira_domain:
+        seen_urls.add(f"https://{settings.jira_domain.strip()}/browse/{jira_key}")
+
+    source_id = record.get("source_id")
+    gmail_l = _gmail_link(source_id)
+    if source_id:
+        g_url = gmail_thread_url(source_id)
+        if g_url:
+            seen_urls.add(g_url)
+
+    doc_links = _format_doc_links(record.get("meeting_links"), seen_urls)
+    links = _links_suffix(jira_l, gmail_l, *doc_links)
+    due_str = record.get("due") or "None"
+
+    return (
+        f"ActionItem: {state_tag} Task: {record['task']} | Owner: {record['owner']}"
+        f"{jira_info} | Due: {due_str} | Priority: {record['priority']}"
+        f" | Source: {record['meeting_title']}{links}"
+    )
+
+
+async def _query_actions_context(
+    session: Any, mentioned_jira_keys: list[str], settings: Settings
+) -> tuple[list[str], list[str]]:
+    """Query top action items and specifically mentioned Jira keys."""
+    lines: list[str] = []
+    node_ids: list[str] = []
+    seen_action_ids: set[str] = set()
+
+    actions_res = await session.run(
+        """
+        MATCH (m:Meeting)-[:FOLLOWS_UP]->(a:ActionItem)
+        RETURN DISTINCT a.id AS id, a.task AS task, a.owner AS owner,
+               a.due AS due, a.priority AS priority, a.jira_key AS jira_key,
+               a.jira_status AS jira_status, coalesce(a.done, false) AS done,
+               m.title AS meeting_title, m.source_id AS source_id, m.date AS date,
+               m.links AS meeting_links
+        ORDER BY CASE WHEN coalesce(a.done, false) = false THEN 0 ELSE 1 END,
+                 CASE WHEN a.priority = 'high' THEN 0 ELSE 1 END,
+                 a.due ASC
+        LIMIT 25
+        """
+    )
+    async for record in actions_res:
+        seen_action_ids.add(record["id"])
+        node_ids.append(record["id"])
+        lines.append(_format_action_context_line(record, settings))
+
+    if mentioned_jira_keys:
+        key_res = await session.run(
+            """
+            MATCH (m:Meeting)-[:FOLLOWS_UP]->(a:ActionItem)
+            WHERE toUpper(a.jira_key) IN $keys
+            RETURN DISTINCT a.id AS id, a.task AS task, a.owner AS owner,
+                   a.due AS due, a.priority AS priority, a.jira_key AS jira_key,
+                   a.jira_status AS jira_status, coalesce(a.done, false) AS done,
+                   m.title AS meeting_title, m.source_id AS source_id, m.date AS date,
+                   m.links AS meeting_links
+            LIMIT 10
+            """,
+            keys=mentioned_jira_keys,
+        )
+        async for record in key_res:
+            if record["id"] not in seen_action_ids:
+                seen_action_ids.add(record["id"])
+                node_ids.append(record["id"])
+                lines.append(_format_action_context_line(record, settings))
+
+    return lines, node_ids
+
+
+async def _query_topics_context(session: Any, topics: list[str]) -> tuple[list[str], list[str]]:
+    """Query meetings by topic and format their context lines."""
+    lines: list[str] = []
+    node_ids: list[str] = []
+    result = await session.run(
+        """
+        UNWIND $topics AS topic
+        MATCH (t:Topic)<-[:DISCUSSED]-(m:Meeting)
+        WHERE t.name CONTAINS topic
+        RETURN DISTINCT m.id AS id, m.title AS title, m.date AS date,
+                        m.summary AS summary, m.source_id AS source_id,
+                        m.links AS links
+        ORDER BY m.date DESC
+        LIMIT 10
+        """,
+        topics=topics,
+    )
+    async for record in result:
+        node_ids.append(record["id"])
+        seen_urls: set[str] = set()
+        gmail_l = _gmail_link(record.get("source_id"))
+        if record.get("source_id"):
+            g_url = gmail_thread_url(record["source_id"])
+            if g_url:
+                seen_urls.add(g_url)
+        doc_links = _format_doc_links(record.get("links"), seen_urls)
+        links = _links_suffix(gmail_l, *doc_links)
+        lines.append(
+            f"Meeting ({record['date']}): {record['title']}{links} — {record['summary']}"
+        )
+    return lines, node_ids
+
+
 async def assemble_context(
     entities: dict[str, Any],
     question: str,
@@ -140,6 +345,8 @@ async def assemble_context(
     search_meetings: Any = None,
 ) -> tuple[list[str], list[str]]:
     """Gather graph context for a question. Returns (context_lines, node_ids)."""
+    import re
+
     settings = settings or get_settings()
     driver = driver or _driver()
     lines: list[str] = []
@@ -148,30 +355,14 @@ async def assemble_context(
     people = [p for p in entities.get("people", []) if isinstance(p, str)]
     topics = [t.lower().strip() for t in entities.get("topics", []) if isinstance(t, str)]
 
+    # Check for specific Jira ticket keys mentioned in the question (e.g. MDP-25)
+    mentioned_jira_keys = [k.upper() for k in re.findall(r"\b[A-Za-z][A-Za-z0-9]+-\d+\b", question)]
+
     async with driver.session() as session:
-        # 1. Action Items (always queried to surface open commitments & deliverables)
-        actions_res = await session.run(
-            """
-            MATCH (m:Meeting)-[:FOLLOWS_UP]->(a:ActionItem)
-            WHERE coalesce(a.done, false) = false
-            RETURN DISTINCT a.id AS id, a.task AS task, a.owner AS owner,
-                   a.due AS due, a.priority AS priority, a.jira_key AS jira_key,
-                   m.title AS meeting_title, m.source_id AS source_id, m.date AS date
-            ORDER BY CASE WHEN a.priority = 'high' THEN 0 ELSE 1 END, a.due ASC
-            LIMIT 15
-            """
-        )
-        async for record in actions_res:
-            node_ids.append(record["id"])
-            links = _links_suffix(
-                _jira_link(record.get("jira_key"), settings),
-                _gmail_link(record.get("source_id")),
-            )
-            lines.append(
-                f"ActionItem: Task: {record['task']} | Owner: {record['owner']}"
-                f" | Due: {record['due'] or 'None'} | Priority: {record['priority']}"
-                f" | Source: {record['meeting_title']}{links}"
-            )
+        # 1. Action Items (surfacing open deliverables, done states, and specific tickets)
+        act_lines, act_ids = await _query_actions_context(session, mentioned_jira_keys, settings)
+        lines.extend(act_lines)
+        node_ids.extend(act_ids)
 
         # 2. People
         if people:
@@ -192,24 +383,9 @@ async def assemble_context(
 
         # 3. Topics & Meetings
         if topics:
-            result = await session.run(
-                """
-                UNWIND $topics AS topic
-                MATCH (t:Topic)<-[:DISCUSSED]-(m:Meeting)
-                WHERE t.name CONTAINS topic
-                RETURN DISTINCT m.id AS id, m.title AS title, m.date AS date,
-                                m.summary AS summary, m.source_id AS source_id
-                ORDER BY m.date DESC
-                LIMIT 10
-                """,
-                topics=topics,
-            )
-            async for record in result:
-                node_ids.append(record["id"])
-                links = _links_suffix(_gmail_link(record.get("source_id")))
-                lines.append(
-                    f"Meeting ({record['date']}): {record['title']}{links} — {record['summary']}"
-                )
+            top_lines, top_ids = await _query_topics_context(session, topics)
+            lines.extend(top_lines)
+            node_ids.extend(top_ids)
 
         # 4. Decisions. PRODUCED, not DECIDED: `_write_decisions` and every
         # other reader in graph_client use PRODUCED, so DECIDED matched nothing
@@ -219,14 +395,21 @@ async def assemble_context(
             """
             MATCH (m:Meeting)-[:PRODUCED]->(d:Decision)
             RETURN DISTINCT d.id AS id, d.text AS text, m.title AS meeting_title,
-                   m.date AS date, m.source_id AS source_id
+                   m.date AS date, m.source_id AS source_id, m.links AS links
             ORDER BY m.date DESC
             LIMIT 8
             """
         )
         async for record in decisions_res:
             node_ids.append(record["id"])
-            links = _links_suffix(_gmail_link(record.get("source_id")))
+            seen_urls = set()
+            gmail_l = _gmail_link(record.get("source_id"))
+            if record.get("source_id"):
+                g_url = gmail_thread_url(record["source_id"])
+                if g_url:
+                    seen_urls.add(g_url)
+            doc_links = _format_doc_links(record.get("links"), seen_urls)
+            links = _links_suffix(gmail_l, *doc_links)
             lines.append(
                 f"Decision: {record['text']} (Meeting: {record['meeting_title']}{links})"
             )

@@ -655,3 +655,170 @@ async def test_chat_list_reaches_the_backend_and_parses() -> None:
 
     result = await chat_list("s", "u", settings=_vertex_settings(), transport=transport)
     assert result == ["fact one", "fact two"]
+
+
+# ─── raw url extraction & repair links merging ───────────────────────────────
+
+
+def test_extract_raw_urls_harvests_valid_document_links() -> None:
+    from meeting_notes.extractor import _extract_raw_urls
+
+    text = (
+        "Please review the design spec at https://docs.google.com/document/d/123/edit "
+        "and the project board at https://michael-baylard.atlassian.net/browse/MDP-45. "
+        "Also see https://drive.google.com/file/d/456/view."
+    )
+    urls = _extract_raw_urls(text)
+    assert urls == [
+        "https://docs.google.com/document/d/123/edit",
+        "https://michael-baylard.atlassian.net/browse/MDP-45",
+        "https://drive.google.com/file/d/456/view",
+    ]
+
+
+def test_extract_raw_urls_filters_noise_domains_and_image_assets() -> None:
+    from meeting_notes.extractor import _extract_raw_urls
+
+    text = (
+        "Check namespace http://schemas.microsoft.com/office/2004/12/omml and "
+        "http://www.w3.org/1999/xhtml. Logo at https://cdn.example.com/logo.png and "
+        "https://mail.google.com/mail/u/0/#inbox. "
+        "Real doc: https://company.atlassian.net/wiki/spaces/ENG/pages/789."
+    )
+    urls = _extract_raw_urls(text)
+    assert urls == ["https://company.atlassian.net/wiki/spaces/ENG/pages/789"]
+
+
+def test_repair_merges_raw_urls_with_extracted_links() -> None:
+    from meeting_notes.extractor import repair
+
+    raw_data = {
+        "title": "Architecture Sync",
+        "links": ["https://docs.google.com/document/d/extracted"],
+    }
+    context = {
+        "text": "Meeting notes with additional doc https://docs.google.com/document/d/raw_in_body",
+    }
+    repaired = repair(raw_data, context=context)
+    assert repaired["links"] == [
+        "https://docs.google.com/document/d/extracted",
+        "https://docs.google.com/document/d/raw_in_body",
+    ]
+
+
+def test_extract_raw_urls_decodes_html_entities_and_trims_punctuation() -> None:
+    from meeting_notes.extractor import _extract_raw_urls
+
+    text = (
+        'See slides at <https://docs.google.com/presentation/d/123/edit?disco=abc&amp;usp=sharing> '
+        'and Optum form at ("https://memberforms.optum.com/hsa-verify.pdf"). '
+        "Also Google Meet: [https://meet.google.com/xhs-wiuc-bzp]."
+    )
+    urls = _extract_raw_urls(text)
+    assert urls == [
+        "https://docs.google.com/presentation/d/123/edit?disco=abc&usp=sharing",
+        "https://memberforms.optum.com/hsa-verify.pdf",
+        "https://meet.google.com/xhs-wiuc-bzp",
+    ]
+
+
+def test_extract_raw_urls_filters_fonts_and_schema_domains() -> None:
+    from meeting_notes.extractor import _extract_raw_urls
+
+    text = (
+        "Styles: https://fonts.googleapis.com/css?family=Roboto and "
+        "font: https://fonts.gstatic.com/s/roboto.woff2. "
+        "Schema: http://schemas.google.com/g/2005. "
+        "Valid: https://docs.google.com/spreadsheets/d/abc/edit."
+    )
+    urls = _extract_raw_urls(text)
+    assert urls == ["https://docs.google.com/spreadsheets/d/abc/edit"]
+
+
+def test_format_doc_link_semantic_anchors() -> None:
+    from meeting_notes.memory.retrieval import format_doc_link
+
+    assert format_doc_link("https://docs.google.com/presentation/d/123/edit") == (
+        "[Google Slides](https://docs.google.com/presentation/d/123/edit)"
+    )
+    assert format_doc_link("https://docs.google.com/document/d/456/edit") == (
+        "[Google Doc](https://docs.google.com/document/d/456/edit)"
+    )
+    assert format_doc_link("https://docs.google.com/spreadsheets/d/789/edit") == (
+        "[Google Sheet](https://docs.google.com/spreadsheets/d/789/edit)"
+    )
+    assert format_doc_link("https://docs.google.com/forms/d/e/abc/viewform") == (
+        "[Google Form](https://docs.google.com/forms/d/e/abc/viewform)"
+    )
+    assert format_doc_link("https://drive.google.com/file/d/def/view") == (
+        "[Google Drive](https://drive.google.com/file/d/def/view)"
+    )
+    assert format_doc_link("https://meet.google.com/xhs-wiuc-bzp") == (
+        "[Google Meet](https://meet.google.com/xhs-wiuc-bzp)"
+    )
+    assert format_doc_link("https://memberforms.optum.com/hsa-id.pdf") == (
+        "[Optum Form](https://memberforms.optum.com/hsa-id.pdf)"
+    )
+    assert format_doc_link("https://onixnet.atlassian.net/browse/MDP-27") == (
+        "[Jira MDP-27](https://onixnet.atlassian.net/browse/MDP-27)"
+    )
+    assert format_doc_link("https://onixnet.atlassian.net/wiki/spaces/ENG/overview") == (
+        "[Confluence Doc](https://onixnet.atlassian.net/wiki/spaces/ENG/overview)"
+    )
+    assert format_doc_link("https://example.com/handbook") == (
+        "[Doc (example.com)](https://example.com/handbook)"
+    )
+
+
+def test_rag_token_economy_benchmark() -> None:
+    """Benchmark asserting that semantic anchor formatting delivers >35% token savings
+    compared to repeating raw URLs as markdown anchor text ([url](url))."""
+    from meeting_notes.memory.retrieval import format_doc_link
+
+    sample_urls = [
+        "https://docs.google.com/presentation/d/1hw1J48S0dVxfZ09n1GJerQmt1z7PTN_fbxRiJy1I1bo/edit?disco=AAACFxAZSzg&usp=comment_email_document&ts=6a84c96e&usp_dm=false",
+        "https://memberforms.optum.com/content/dam/memberforms/forms/HSA_Identity_Verification_Form.pdf",
+        "https://michael-baylard.atlassian.net/browse/MDP-27",
+        "https://docs.google.com/document/d/1abcXYZ987longdocumentidentifierexamplepathwithmanysubsegments/edit?tab=t.0#heading=h.12345",
+    ]
+
+    naive_chars = sum(len(f"[{u}]({u})") for u in sample_urls)
+    optimized_chars = sum(len(format_doc_link(u)) for u in sample_urls)
+
+    savings_ratio = (naive_chars - optimized_chars) / naive_chars
+    assert savings_ratio >= 0.35, f"Expected at least 35% token savings, got {savings_ratio:.2%}"
+
+
+def test_format_doc_links_deduplication_and_filtering() -> None:
+    from meeting_notes.memory.retrieval import _format_doc_links
+
+    seen = {"https://michael-baylard.atlassian.net/browse/MDP-27"}
+    raw_urls = [
+        "https://michael-baylard.atlassian.net/browse/MDP-27",  # Duplicate of seen
+        "https://docs.google.com/document/d/123/edit",
+        "https://docs.google.com/document/d/123/edit",  # Duplicate in list
+        "",  # Empty string
+        12345,  # Non-string
+        "not-a-url",  # Invalid URL
+        "https://docs.google.com/presentation/d/456/edit",
+    ]
+    formatted = _format_doc_links(raw_urls, seen_urls=seen)
+    assert formatted == [
+        "[Google Doc](https://docs.google.com/document/d/123/edit)",
+        "[Google Slides](https://docs.google.com/presentation/d/456/edit)",
+    ]
+
+
+def test_zero_hallucination_and_grounding_invariants() -> None:
+    from meeting_notes.memory.retrieval import format_doc_link
+
+    # Non-http strings must never hallucinate a URL
+    assert format_doc_link("ftp://bad-link.com") == ""
+    assert format_doc_link("javascript:alert(1)") == ""
+    assert format_doc_link("") == ""
+    assert format_doc_link(None) == ""  # type: ignore
+
+    # Already formatted markdown links are preserved verbatim
+    already_formatted = "[Custom Label](https://custom.org/doc)"
+    assert format_doc_link(already_formatted) == already_formatted
+
