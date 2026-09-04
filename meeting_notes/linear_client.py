@@ -43,13 +43,33 @@ _shared_client: httpx.AsyncClient | None = None
 
 
 def _get_shared_client() -> httpx.AsyncClient:
-    """Lazily create a shared httpx client for connection reuse."""
+    """Lazily create a shared httpx client with optimized connection pooling and timeouts."""
     global _shared_client  # noqa: PLW0603
     if _shared_client is None or _shared_client.is_closed:
         import httpx
 
-        _shared_client = httpx.AsyncClient(timeout=30.0)
+        limits = httpx.Limits(
+            max_keepalive_connections=20,
+            max_connections=100,
+            keepalive_expiry=30.0,
+        )
+        timeout = httpx.Timeout(
+            timeout=30.0,
+            connect=10.0,
+            read=30.0,
+            write=30.0,
+            pool=10.0,
+        )
+        _shared_client = httpx.AsyncClient(limits=limits, timeout=timeout)
     return _shared_client
+
+
+async def close_shared_client() -> None:
+    """Explicitly close the shared httpx client session."""
+    global _shared_client  # noqa: PLW0603
+    if _shared_client is not None and not _shared_client.is_closed:
+        await _shared_client.aclose()
+        _shared_client = None
 
 
 async def _default_transport(
@@ -59,11 +79,35 @@ async def _default_transport(
     params: dict[str, Any] | None,
     json_body: dict[str, Any] | None,
 ) -> tuple[int, Any]:
+    import httpx
+
     client = _get_shared_client()
-    response = await client.request(
-        method, url, headers=headers, params=params, json=json_body
-    )
-    response.raise_for_status()
+    try:
+        response = await client.request(
+            method, url, headers=headers, params=params, json=json_body
+        )
+    except httpx.TimeoutException as exc:
+        log.warning("linear.timeout", error=str(exc), method=method, url=url)
+        raise
+    except httpx.NetworkError as exc:
+        log.warning("linear.network_error", error=str(exc), method=method, url=url)
+        raise
+
+    if response.status_code == 429:
+        retry_after = response.headers.get("Retry-After")
+        log.warning("linear.rate_limited", retry_after=retry_after, status=429)
+        response.raise_for_status()
+
+    # For 4xx responses, extract GraphQL error payloads if present in JSON body
+    if response.status_code >= 400:
+        try:
+            body = response.json()
+            if isinstance(body, dict) and "errors" in body:
+                return response.status_code, body
+        except Exception:
+            pass
+        response.raise_for_status()
+
     return response.status_code, (response.json() if response.content else None)
 
 
@@ -264,14 +308,21 @@ async def add_comment(
     return comment
 
 
-async def transition_issue(
+async def update_issue(
     issue_id: str,
-    state_id: str,
     *,
+    state_id: str | None = None,
+    title: str | None = None,
+    description: str | None = None,
+    priority: str | int | None = None,
+    assignee_id: str | None = None,
+    project_id: str | None = None,
+    parent_id: str | None = None,
+    due_date: str | None = None,
     settings: Settings | None = None,
     transport: Transport | None = None,
 ) -> dict[str, Any]:
-    """Update the workflow state of a Linear issue."""
+    """Update fields on an existing Linear issue."""
     settings = settings or get_settings()
     mutation = """
     mutation IssueUpdate($id: String!, $input: IssueUpdateInput!) {
@@ -280,36 +331,137 @@ async def transition_issue(
         issue {
           id
           identifier
+          title
+          description
+          url
+          priority
           state {
             id
             name
             type
           }
+          project {
+            id
+            name
+          }
+          parent {
+            id
+            identifier
+          }
         }
       }
     }
     """
+    input_data: dict[str, Any] = {}
+    if state_id is not None:
+        input_data["stateId"] = state_id
+    if title is not None:
+        input_data["title"] = title
+    if description is not None:
+        input_data["description"] = description
+    if priority is not None:
+        input_data["priority"] = (
+            linear_priority_from_name(priority) if isinstance(priority, str) else priority
+        )
+    if assignee_id is not None:
+        input_data["assigneeId"] = assignee_id
+    if project_id is not None:
+        input_data["projectId"] = project_id
+    if parent_id is not None:
+        input_data["parentId"] = parent_id
+    if due_date is not None:
+        input_data["dueDate"] = due_date
+
     data = await execute_graphql(
-        mutation, {"id": issue_id, "input": {"stateId": state_id}}, settings=settings, transport=transport
+        mutation, {"id": issue_id, "input": input_data}, settings=settings, transport=transport
     )
     result = data.get("issueUpdate", {})
     if not result.get("success"):
         raise RuntimeError("Linear issueUpdate mutation returned success=false")
 
     issue: dict[str, Any] = result.get("issue", {})
-    log.info("linear.issue_transitioned", id=issue.get("id"), state=issue.get("state"))
+    log.info("linear.issue_updated", id=issue.get("id"), identifier=issue.get("identifier"))
     return issue
+
+
+async def transition_issue(
+    issue_id: str,
+    state_id: str,
+    *,
+    settings: Settings | None = None,
+    transport: Transport | None = None,
+) -> dict[str, Any]:
+    """Update the workflow state of a Linear issue."""
+    return await update_issue(
+        issue_id, state_id=state_id, settings=settings, transport=transport
+    )
+
+
+async def get_issue(
+    issue_id: str,
+    *,
+    settings: Settings | None = None,
+    transport: Transport | None = None,
+) -> dict[str, Any] | None:
+    """Retrieve an issue from Linear by ID or identifier (e.g. 'ENG-42')."""
+    settings = settings or get_settings()
+    query = """
+    query Issue($id: String!) {
+      issue(id: $id) {
+        id
+        identifier
+        title
+        description
+        url
+        priority
+        state {
+          id
+          name
+          type
+          color
+        }
+        project {
+          id
+          name
+        }
+        parent {
+          id
+          identifier
+        }
+      }
+    }
+    """
+    data = await execute_graphql(query, {"id": issue_id}, settings=settings, transport=transport)
+    issue: dict[str, Any] | None = data.get("issue")
+    return issue
+
+
+# In-memory TTL cache for workflow states per team: {team_id: (timestamp, states)}
+_workflow_states_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+_CACHE_TTL_SECONDS = 300.0
 
 
 async def list_workflow_states(
     team_id: str | None = None,
     *,
+    use_cache: bool = True,
     settings: Settings | None = None,
     transport: Transport | None = None,
 ) -> list[dict[str, Any]]:
-    """List workflow states available for a team in Linear."""
+    """List workflow states available for a team in Linear, with caching."""
+    import time
+
     settings = settings or get_settings()
     team_id = team_id or settings.linear_team_id
+    if not team_id:
+        return []
+
+    now = time.time()
+    if use_cache and team_id in _workflow_states_cache:
+        cached_time, cached_states = _workflow_states_cache[team_id]
+        if now - cached_time < _CACHE_TTL_SECONDS:
+            return cached_states
+
     query = """
     query WorkflowStates($teamId: String) {
       workflowStates(filter: { team: { id: { eq: $teamId } } }) {
@@ -324,7 +476,122 @@ async def list_workflow_states(
     """
     data = await execute_graphql(query, {"teamId": team_id}, settings=settings, transport=transport)
     states: list[dict[str, Any]] = data.get("workflowStates", {}).get("nodes", [])
+    if states:
+        _workflow_states_cache[team_id] = (now, states)
     return states
+
+
+async def resolve_workflow_state(
+    state_name_or_id: str,
+    team_id: str | None = None,
+    *,
+    settings: Settings | None = None,
+    transport: Transport | None = None,
+) -> dict[str, Any] | None:
+    """Resolve a workflow state by ID, name, or type (case-insensitive)."""
+    if not state_name_or_id:
+        return None
+    target = state_name_or_id.strip()
+    target_lower = target.lower()
+
+    states = await list_workflow_states(team_id, settings=settings, transport=transport)
+    for st in states:
+        if st.get("id") == target:
+            return st
+    for st in states:
+        if (st.get("name") or "").strip().lower() == target_lower:
+            return st
+    for st in states:
+        if (st.get("type") or "").strip().lower() == target_lower:
+            return st
+
+    return {"id": target, "name": target, "type": "unknown"}
+
+
+async def create_issue_relation(
+    issue_id: str,
+    related_issue_id: str,
+    relation_type: str = "related",
+    *,
+    settings: Settings | None = None,
+    transport: Transport | None = None,
+) -> dict[str, Any]:
+    """Relate two issues in Linear (e.g. 'related', 'blocks', 'duplicate')."""
+    settings = settings or get_settings()
+    mutation = """
+    mutation IssueRelationCreate($input: IssueRelationCreateInput!) {
+      issueRelationCreate(input: $input) {
+        success
+        issueRelation {
+          id
+          type
+          issue {
+            id
+            identifier
+          }
+          relatedIssue {
+            id
+            identifier
+          }
+        }
+      }
+    }
+    """
+    input_data = {
+        "issueId": issue_id,
+        "relatedIssueId": related_issue_id,
+        "type": relation_type,
+    }
+    data = await execute_graphql(mutation, {"input": input_data}, settings=settings, transport=transport)
+    result = data.get("issueRelationCreate", {})
+    if not result.get("success"):
+        raise RuntimeError("Linear issueRelationCreate mutation returned success=false")
+    relation: dict[str, Any] = result.get("issueRelation", {})
+    log.info(
+        "linear.relation_created",
+        issue_id=issue_id,
+        related_id=related_issue_id,
+        type=relation_type,
+    )
+    return relation
+
+
+async def create_attachment(
+    issue_id: str,
+    url: str,
+    title: str = "Meeting Thread",
+    *,
+    subtitle: str | None = None,
+    settings: Settings | None = None,
+    transport: Transport | None = None,
+) -> dict[str, Any]:
+    """Attach an external link (e.g. Gmail thread URL) to a Linear issue."""
+    settings = settings or get_settings()
+    mutation = """
+    mutation AttachmentCreate($input: AttachmentCreateInput!) {
+      attachmentCreate(input: $input) {
+        success
+        attachment {
+          id
+          url
+          title
+        }
+      }
+    }
+    """
+    input_data: dict[str, Any] = {
+        "issueId": issue_id,
+        "url": url,
+        "title": title,
+    }
+    if subtitle:
+        input_data["subtitle"] = subtitle
+
+    data = await execute_graphql(mutation, {"input": input_data}, settings=settings, transport=transport)
+    result = data.get("attachmentCreate", {})
+    attachment: dict[str, Any] = result.get("attachment", {})
+    log.info("linear.attachment_created", issue_id=issue_id, url=url)
+    return attachment
 
 
 async def list_projects(

@@ -112,11 +112,19 @@ async def push_action_items_to_linear(
     for i, action in enumerate(action_items):
         action_id = uuid5_id("action", f"{source_id}:{i}:{action.task}")
 
+        # Idempotency check: if action is already ticketed, do not re-create
+        existing_ident = getattr(action, "linear_identifier", None) or getattr(action, "linear_id", None)
+        if existing_ident:
+            log.info("linear_pusher.already_synced", action_id=action_id, identifier=existing_ident)
+            created_identifiers.append(existing_ident)
+            continue
+
         if await _is_gated(
             action,
             action_id,
             meeting,
             meeting_id,
+            source_id,
             settings,
             mark_needs_review=mark_needs_review,
             get_open_actions=get_open_actions,
@@ -153,7 +161,8 @@ async def _is_gated(
     action_id: str,
     meeting: ExtractedMeeting,
     meeting_id: str,
-    settings: Settings,
+    source_id: str = "",
+    settings: Settings | None = None,
     *,
     mark_needs_review: Any,
     get_open_actions: Any,
@@ -163,6 +172,7 @@ async def _is_gated(
     update_linear_info: Any,
 ) -> bool:
     """Check confidence threshold and semantic deduplication."""
+    settings = settings or get_settings()
     if action.confidence < settings.linear_confidence_threshold:
         await mark_needs_review(action_id, f"confidence {action.confidence:.2f} below threshold")
         log.info(
@@ -178,6 +188,7 @@ async def _is_gated(
             action_id,
             meeting,
             meeting_id,
+            source_id=source_id,
             get_open_actions=get_open_actions,
             embed=embed,
             link_mentioned_in=link_mentioned_in,
@@ -223,12 +234,14 @@ async def _create_linear_issue(
         desc_lines.append(f"**Attendees:** {', '.join(attendee_names)}")
 
     description = "\n\n".join(desc_lines)
+    parent_id = getattr(action, "parent_id", None)
 
     try:
         issue = await create_issue(
             title=action.task[:255],
             description=description,
             priority=action.priority,
+            parent_id=parent_id,
             due_date=action.due,
             settings=settings,
         )
@@ -238,6 +251,11 @@ async def _create_linear_issue(
         linear_state = (issue.get("state") or {}).get("name", "Todo")
 
         await update_linear_info(action_id, linear_id, linear_identifier, linear_url, linear_state)
+        if hasattr(action, "linear_id"):
+            action.linear_id = linear_id
+        if hasattr(action, "linear_identifier"):
+            action.linear_identifier = linear_identifier
+
         log.info(
             "linear_pusher.issue_created",
             identifier=linear_identifier,
@@ -255,6 +273,7 @@ async def _find_duplicate(
     action_id: str,
     meeting: ExtractedMeeting,
     meeting_id: str,
+    source_id: str = "",
     *,
     get_open_actions: Any,
     embed: Any,
@@ -292,7 +311,8 @@ async def _find_duplicate(
             f"Referenced again in meeting **{meeting.title}** ({meeting.date}) "
             f"(dedup similarity {match['score']:.2f})."
         )
-        source_url = gmail_thread_url(meeting_id) or ""
+        # Prefer source_id if present; fallback to meeting_id
+        source_url = gmail_thread_url(source_id) or gmail_thread_url(meeting_id) or ""
         comment_text = f"{base_comment}\nSource: {source_url}" if source_url else base_comment
         try:
             await add_comment(linear_id, comment_text)
@@ -307,5 +327,10 @@ async def _find_duplicate(
             match.get("linear_url", ""),
             match.get("linear_state", "Todo"),
         )
+        if hasattr(action, "linear_id"):
+            action.linear_id = linear_id
+        if hasattr(action, "linear_identifier"):
+            action.linear_identifier = linear_identifier
+
     return match
 
