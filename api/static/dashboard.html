@@ -103,7 +103,7 @@
   textarea.chat-input { background:transparent; border:none; color:var(--ink);
                         flex:1; min-height:28px; max-height:220px; resize:none; padding:4px 6px;
                         box-sizing:border-box; font-family:inherit; font-size:13.5px; line-height:1.5;
-                        overflow-y:auto; outline:none; }
+                        overflow-y:hidden; outline:none; }
   .chat-input-actions { display:flex; align-items:center; gap:6px; flex-shrink:0; }
   .chat-btn-send { background:var(--accent); border:none; color:#fff; padding:7px 15px;
                    border-radius:8px; cursor:pointer; font-size:13px; font-weight:600;
@@ -957,8 +957,14 @@ function setAiQuestionsEnabled(enabled) {
 function autoGrowTextarea(el) {
   if (!el) return;
   el.style.height = "auto";
-  const newH = Math.min(el.scrollHeight, 220);
-  el.style.height = Math.max(28, newH) + "px";
+  const scrollH = el.scrollHeight;
+  if (scrollH > 220) {
+    el.style.height = "220px";
+    el.style.overflowY = "auto";
+  } else {
+    el.style.height = Math.max(28, scrollH) + "px";
+    el.style.overflowY = "hidden";
+  }
 }
 
 function handleChatKeydown(e) {
