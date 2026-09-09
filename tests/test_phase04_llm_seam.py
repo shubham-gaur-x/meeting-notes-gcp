@@ -705,3 +705,42 @@ def test_repair_merges_raw_urls_with_extracted_links() -> None:
         "https://docs.google.com/document/d/raw_in_body",
     ]
 
+
+def test_extract_raw_urls_harvests_ecosystem_platform_links() -> None:
+    """Explicitly verifies Linear, Lucid, Chat, Meet, Google Skills, and Databricks links are harvested."""
+    from meeting_notes.extractor import _extract_raw_urls
+
+    platform_text = (
+        "Check Linear issue https://linear.app/ag-team/issue/ENG-402/pipeline-scale. "
+        "System architecture diagram: https://lucid.app/lucidchart/98765/edit. "
+        "Also see whiteboard at https://lucidchart.com/documents/view/54321. "
+        "Slack discussion thread: https://workspace.slack.com/archives/C012345/p1693000000. "
+        "Google Chat channel: https://chat.google.com/room/AAAA1234567. "
+        "Sync call was held at https://meet.google.com/abc-defg-hij with "
+        "Zoom backup at https://zoom.us/j/9876543210. "
+        "Prerequisite coursework: https://www.cloudskillsboost.google/paths/18/course/42 and "
+        "https://skills.google/certification/data-engineer. "
+        "Databricks certification track: https://academy.databricks.com/pathway/data-engineering "
+        "and workspace notebook https://dbc-corp.cloud.databricks.com/?o=12345#notebook/67890."
+    )
+
+    urls = _extract_raw_urls(platform_text)
+
+    expected = [
+        "https://linear.app/ag-team/issue/ENG-402/pipeline-scale",
+        "https://lucid.app/lucidchart/98765/edit",
+        "https://lucidchart.com/documents/view/54321",
+        "https://workspace.slack.com/archives/C012345/p1693000000",
+        "https://chat.google.com/room/AAAA1234567",
+        "https://meet.google.com/abc-defg-hij",
+        "https://zoom.us/j/9876543210",
+        "https://www.cloudskillsboost.google/paths/18/course/42",
+        "https://skills.google/certification/data-engineer",
+        "https://academy.databricks.com/pathway/data-engineering",
+        "https://dbc-corp.cloud.databricks.com/?o=12345#notebook/67890",
+    ]
+
+    for expected_url in expected:
+        assert expected_url in urls, f"Missing expected platform link: {expected_url}"
+
+
