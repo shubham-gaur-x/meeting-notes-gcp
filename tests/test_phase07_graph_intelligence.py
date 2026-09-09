@@ -1342,3 +1342,44 @@ async def test_assemble_context_direct_jira_key_lookup() -> None:
     assert "act-99" in node_ids
     assert any("ActionItem: [DONE]" in line and "MDP-99" in line for line in lines)
     assert any("Status: Closed" in line for line in lines)
+
+
+async def test_assemble_context_direct_linear_key_lookup() -> None:
+    from meeting_notes.config import Settings
+    from meeting_notes.memory import retrieval
+
+    settings = Settings(jira_domain="test.atlassian.net", fact_min_confidence=0.5)
+    session = FakeSession(results={
+        "toUpper(a.linear_identifier) IN $keys": [
+            {
+                "id": "act-101",
+                "task": "Build high-throughput pipeline drain",
+                "owner": "Sarah Chen",
+                "due": "2026-09-15",
+                "priority": "high",
+                "linear_identifier": "ENG-101",
+                "linear_state": "In Progress",
+                "linear_url": "https://linear.app/ag-team/issue/ENG-101",
+                "done": False,
+                "meeting_title": "Scale Sync",
+                "source_id": None,
+                "date": "2026-09-02",
+                "meeting_links": ["https://lucid.app/lucidchart/123/edit"],
+            }
+        ]
+    })
+    driver = FakeDriver(session)
+
+    lines, node_ids = await retrieval.assemble_context(
+        entities={"people": [], "topics": []},
+        question="Can you check on ENG-101 and where its spec is?",
+        driver=driver,
+        settings=settings,
+    )
+
+    assert "act-101" in node_ids
+    assert any("ActionItem: [OPEN]" in line and "ENG-101" in line for line in lines)
+    assert any("Linear: ENG-101 (Status: In Progress)" in line for line in lines)
+    assert any("[Linear ENG-101](https://linear.app/ag-team/issue/ENG-101)" in line for line in lines)
+    assert any("[Lucidchart](https://lucid.app/lucidchart/123/edit)" in line for line in lines)
+
