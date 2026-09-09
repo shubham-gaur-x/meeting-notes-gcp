@@ -60,6 +60,23 @@ async def embed_text(
         return None
 
 
+async def embed_batch_texts(
+    texts: list[str], *, settings: Settings | None = None, embed_batch_fn: Any = None
+) -> list[list[float] | None]:
+    if not texts:
+        return []
+    if embed_batch_fn is None:
+        from meeting_notes import llm_client
+
+        embed_batch_fn = llm_client.embed_batch
+    try:
+        results: list[list[float] | None] = await embed_batch_fn(texts, settings=settings)
+        return results
+    except Exception as exc:  # noqa: BLE001
+        log.warning("vector.embed_batch_failed", error=str(exc))
+        return [None] * len(texts)
+
+
 async def embed_meeting(
     meeting_id: str,
     summary: str,
@@ -101,7 +118,8 @@ async def _embed_pending(
     driver: Any,
     settings: Settings | None,
     embed: Any,
-    semaphore: asyncio.Semaphore,
+    semaphore: asyncio.Semaphore | None = None,
+    embed_batch_fn: Any = None,
 ) -> int:
     """Embed rows that have no embedding yet. Idempotent by construction —
     the fetch filters on `embedding IS NULL`, so a MERGE-matched node from an
@@ -120,19 +138,34 @@ async def _embed_pending(
 
     now = datetime.now(UTC).isoformat()
 
-    async def embed_one(row: dict[str, Any]) -> int:
-        # The model call is what the semaphore bounds; the write is cheap and
-        # already serialised by the driver's own pool.
-        async with semaphore:
-            vector = await embed_text(row[text_field], settings=settings, embed=embed)
-        if vector is None:
-            return 0
-        async with driver.session() as session:
-            await session.run(write_cypher, id=row["id"], embedding=vector, now=now)
-        return 1
+    # If a custom scalar embed function was supplied without embed_batch_fn, preserve the per-item path:
+    if embed is not None and embed_batch_fn is None:
+        resolved = settings or get_settings()
+        sem = semaphore or asyncio.Semaphore(max(1, resolved.embedding_concurrency))
 
-    written = await asyncio.gather(*(embed_one(row) for row in pending))
-    return sum(written)
+        async def embed_one(row: dict[str, Any]) -> int:
+            async with sem:
+                vector = await embed_text(row[text_field], settings=settings, embed=embed)
+            if vector is None:
+                return 0
+            async with driver.session() as session:
+                await session.run(write_cypher, id=row["id"], embedding=vector, now=now)
+            return 1
+
+        written = await asyncio.gather(*(embed_one(row) for row in pending))
+        return sum(written)
+
+    # Otherwise, use high-throughput batch embedding:
+    texts = [r[text_field] for r in pending]
+    vectors = await embed_batch_texts(texts, settings=settings, embed_batch_fn=embed_batch_fn)
+
+    count = 0
+    async with driver.session() as session:
+        for row, vector in zip(pending, vectors, strict=False):
+            if vector is not None:
+                await session.run(write_cypher, id=row["id"], embedding=vector, now=now)
+                count += 1
+    return count
 
 
 async def embed_action_items_for_meeting(
@@ -142,6 +175,7 @@ async def embed_action_items_for_meeting(
     settings: Settings | None = None,
     embed: Any = None,
     semaphore: asyncio.Semaphore | None = None,
+    embed_batch_fn: Any = None,
 ) -> int:
     """Embed this meeting's un-embedded ActionItems — the dedup similarity input."""
     driver = driver or _driver()
@@ -157,7 +191,13 @@ async def embed_action_items_for_meeting(
         MATCH (a:ActionItem {id: $id})
         SET a.embedding = $embedding, a.embedding_updated_at = $now
         """,
-        meeting_id, "task", driver=driver, settings=resolved, embed=embed, semaphore=sem,
+        meeting_id,
+        "task",
+        driver=driver,
+        settings=resolved,
+        embed=embed,
+        semaphore=sem,
+        embed_batch_fn=embed_batch_fn,
     )
     if count:
         log.info("vector.actions_embedded", meeting_id=meeting_id, count=count)
@@ -171,6 +211,7 @@ async def embed_facts_for_meeting(
     settings: Settings | None = None,
     embed: Any = None,
     semaphore: asyncio.Semaphore | None = None,
+    embed_batch_fn: Any = None,
 ) -> int:
     """Embed Facts attached to this meeting that have no embedding yet."""
     driver = driver or _driver()
@@ -186,7 +227,13 @@ async def embed_facts_for_meeting(
         MATCH (f:Fact {id: $id})
         SET f.embedding = $embedding, f.embedding_updated_at = $now
         """,
-        meeting_id, "text", driver=driver, settings=resolved, embed=embed, semaphore=sem,
+        meeting_id,
+        "text",
+        driver=driver,
+        settings=resolved,
+        embed=embed,
+        semaphore=sem,
+        embed_batch_fn=embed_batch_fn,
     )
     if count:
         log.info("vector.facts_embedded", meeting_id=meeting_id, count=count)
