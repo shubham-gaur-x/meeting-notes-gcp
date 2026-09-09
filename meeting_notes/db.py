@@ -52,6 +52,9 @@ CREATE TABLE IF NOT EXISTS staged_records (
     fetched_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     processed    BOOLEAN NOT NULL DEFAULT FALSE,
     processed_at TIMESTAMPTZ,
+    attempts     INT NOT NULL DEFAULT 0,
+    last_error   TEXT,
+    status       TEXT NOT NULL DEFAULT 'pending',
     UNIQUE (source_type, source_id)
 );
 
@@ -144,9 +147,10 @@ UPDATE dev_agent_runs SET state_payload = $2::jsonb WHERE ticket_key = $1
 # Must be run inside a transaction — the row locks are held until it commits.
 
 CLAIM_SQL = """
-SELECT id, source_id, source_type, payload, fetched_at, processed
+SELECT id, source_id, source_type, payload, fetched_at, processed,
+       coalesce(attempts, 0) AS attempts, last_error, coalesce(status, 'pending') AS status
 FROM staged_records
-WHERE processed = FALSE
+WHERE processed = FALSE AND coalesce(attempts, 0) < $2
 ORDER BY fetched_at
 FOR UPDATE SKIP LOCKED
 LIMIT $1
@@ -160,7 +164,8 @@ RETURNING id
 """
 
 LIST_BY_TYPE_SQL = """
-SELECT id, source_id, source_type, payload, fetched_at, processed
+SELECT id, source_id, source_type, payload, fetched_at, processed,
+       coalesce(attempts, 0) AS attempts, last_error, coalesce(status, 'pending') AS status
 FROM staged_records
 WHERE source_type = $1
 ORDER BY fetched_at
@@ -170,8 +175,19 @@ DELETE_STAGED_SQL = "DELETE FROM staged_records WHERE source_id = ANY($1::text[]
 
 _MARK_PROCESSED_SQL = """
 UPDATE staged_records
-SET processed = TRUE, processed_at = now()
+SET processed = TRUE, processed_at = now(), status = 'processed'
 WHERE id = $1::uuid
+"""
+
+_RECORD_DRAIN_FAILURE_SQL = """
+UPDATE staged_records
+SET attempts = coalesce(attempts, 0) + 1,
+    last_error = $2,
+    processed = CASE WHEN coalesce(attempts, 0) + 1 >= $3 THEN TRUE ELSE FALSE END,
+    processed_at = CASE WHEN coalesce(attempts, 0) + 1 >= $3 THEN now() ELSE NULL END,
+    status = CASE WHEN coalesce(attempts, 0) + 1 >= $3 THEN 'dead_letter' ELSE 'retry' END
+WHERE id = $1::uuid
+RETURNING attempts, processed, status
 """
 
 _GET_WATERMARK_SQL = "SELECT value FROM watermarks WHERE source_type = $1"
@@ -260,6 +276,13 @@ async def apply_migrations(pool: asyncpg.Pool | None = None) -> None:
     pool = pool or await get_pool()
     async with pool.acquire() as conn:
         await conn.execute(SCHEMA_SQL)
+        await conn.execute(
+            """
+            ALTER TABLE staged_records ADD COLUMN IF NOT EXISTS attempts INT NOT NULL DEFAULT 0;
+            ALTER TABLE staged_records ADD COLUMN IF NOT EXISTS last_error TEXT;
+            ALTER TABLE staged_records ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending';
+            """
+        )
         await conn.execute(DEV_AGENT_SCHEMA_SQL)
     log.info("db.migrations_applied")
 
@@ -281,8 +304,10 @@ async def stage_record(
     return str(row["id"]) if row else None
 
 
-async def claim_batch(limit: int, pool: asyncpg.Pool | None = None) -> list[StagedRecord]:
-    """Claim up to `limit` unprocessed records (ADR-006).
+async def claim_batch(
+    limit: int, max_attempts: int = 3, pool: asyncpg.Pool | None = None
+) -> list[StagedRecord]:
+    """Claim up to `limit` unprocessed records (ADR-006) with attempts < max_attempts.
 
     Rows stay locked for the life of the transaction opened here, so two
     concurrent drains take disjoint batches. Note the batch is returned after
@@ -292,7 +317,7 @@ async def claim_batch(limit: int, pool: asyncpg.Pool | None = None) -> list[Stag
     """
     pool = pool or await get_pool()
     async with pool.acquire() as conn, conn.transaction():
-        rows = await conn.fetch(CLAIM_SQL, limit)
+        rows = await conn.fetch(CLAIM_SQL, limit, max_attempts)
     return [
         StagedRecord(
             id=str(r["id"]),
@@ -301,6 +326,9 @@ async def claim_batch(limit: int, pool: asyncpg.Pool | None = None) -> list[Stag
             payload=json.loads(r["payload"]) if isinstance(r["payload"], str) else r["payload"],
             fetched_at=r["fetched_at"].isoformat(),
             processed=r["processed"],
+            attempts=r["attempts"] if "attempts" in r else 0,
+            last_error=r["last_error"] if "last_error" in r else None,
+            status=r["status"] if "status" in r else "pending",
         )
         for r in rows
     ]
@@ -360,6 +388,31 @@ async def mark_processed(record_id: str, pool: asyncpg.Pool | None = None) -> No
     pool = pool or await get_pool()
     async with pool.acquire() as conn:
         await conn.execute(_MARK_PROCESSED_SQL, record_id)
+
+
+async def record_drain_failure(
+    record_id: str,
+    error: str,
+    max_attempts: int = 3,
+    pool: asyncpg.Pool | None = None,
+) -> tuple[int, bool, str]:
+    """Record a drain failure for a staged record, incrementing its attempt counter.
+
+    If attempts >= max_attempts, marks the record processed with status 'dead_letter'
+    to prevent poison pills from looping forever.
+    Returns (attempts, is_processed, status).
+    """
+    pool = pool or await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            _RECORD_DRAIN_FAILURE_SQL,
+            record_id,
+            error[:2000],
+            max_attempts,
+        )
+    if row:
+        return row["attempts"], row["processed"], row["status"]
+    return 1, False, "retry"
 
 
 async def get_watermark(source_type: str, pool: asyncpg.Pool | None = None) -> str | None:

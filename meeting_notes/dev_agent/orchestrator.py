@@ -117,27 +117,61 @@ async def find_sprint_candidates(settings: Settings | None = None) -> list[dict[
     extracted ActionItem below `dev_agent_confidence_threshold`, it is held
     back even though it is labelled — the label alone is not trusted. A
     ticket with no linked ActionItem (human-authored) passes this gate.
+    Supports both Jira and Linear trackers based on settings.issue_tracker.
     """
     from meeting_notes import graph_client, jira_client
 
     settings = settings or get_settings()
-    candidates = await jira_client.list_active_sprint_tickets(
-        settings.jira_project_key,
-        ["To Do"],
-        ["dev-agent"],
-        ["meeting-action-item"],
-        settings=settings,
-    )
-    eligible = []
-    for ticket in candidates:
-        conf = await graph_client.get_action_confidence(ticket["key"])
-        if conf is not None and conf < settings.dev_agent_confidence_threshold:
-            log.info(
-                "orchestrator.triage.low_confidence_skip",
-                key=ticket["key"], confidence=round(conf, 2),
+    tracker = getattr(settings, "issue_tracker", "jira").lower()
+    eligible: list[dict[str, Any]] = []
+
+    # 1. Jira candidates
+    if tracker in ("jira", "both") and settings.jira_enabled:
+        candidates = await jira_client.list_active_sprint_tickets(
+            settings.jira_project_key,
+            ["To Do"],
+            ["dev-agent"],
+            ["meeting-action-item"],
+            settings=settings,
+        )
+        for ticket in candidates:
+            conf = await graph_client.get_action_confidence(ticket["key"])
+            if conf is not None and conf < settings.dev_agent_confidence_threshold:
+                log.info(
+                    "orchestrator.triage.low_confidence_skip",
+                    key=ticket["key"], confidence=round(conf, 2),
+                )
+                continue
+            eligible.append({**ticket, "tracker": "jira"})
+
+    # 2. Linear candidates
+    if tracker in ("linear", "both") and getattr(settings, "linear_api_key", None):
+        try:
+            from meeting_notes import linear_client
+
+            linear_issues = await linear_client.search_issues(
+                "label:dev-agent",
+                settings=settings,
             )
-            continue
-        eligible.append(ticket)
+            for issue in linear_issues:
+                key = issue.get("identifier") or issue.get("id", "")
+                conf = await graph_client.get_action_confidence(key)
+                if conf is not None and conf < settings.dev_agent_confidence_threshold:
+                    log.info(
+                        "orchestrator.triage.linear_low_confidence_skip",
+                        key=key, confidence=round(conf, 2),
+                    )
+                    continue
+                eligible.append({
+                    "key": key,
+                    "id": issue.get("id"),
+                    "summary": issue.get("title", ""),
+                    "description": issue.get("description", ""),
+                    "tracker": "linear",
+                })
+        except Exception as exc:
+            log.warning("orchestrator.linear_candidates_failed", error=str(exc))
+
     return eligible
 
 
@@ -189,10 +223,67 @@ class _Dependencies:
     review_pr: Any
 
 
+async def _default_transition_issue(key: str, status: str, *, settings: Settings | None = None) -> None:
+    settings = settings or get_settings()
+    if "-" in key and not key.startswith("SCRUM") and getattr(settings, "linear_api_key", None):
+        try:
+            from meeting_notes import linear_client
+
+            resolved_state = await linear_client.resolve_workflow_state(status, settings=settings)
+            if resolved_state:
+                await linear_client.transition_issue(key, resolved_state["id"], settings=settings)
+                return
+        except Exception:
+            pass
+    from meeting_notes import jira_client
+
+    await jira_client.transition_issue(key, status, settings=settings)
+
+
+async def _default_add_comment(key: str, body: str, *, settings: Settings | None = None) -> None:
+    settings = settings or get_settings()
+    if "-" in key and not key.startswith("SCRUM") and getattr(settings, "linear_api_key", None):
+        try:
+            from meeting_notes import linear_client
+
+            issue = await linear_client.get_issue(key, settings=settings)
+            if issue and issue.get("id"):
+                await linear_client.add_comment(issue["id"], body, settings=settings)
+                return
+        except Exception:
+            pass
+    from meeting_notes import jira_client
+
+    await jira_client.add_comment(key, body, settings=settings)
+
+
+async def _default_get_issue_detail(key: str, *, settings: Settings | None = None) -> dict[str, Any]:
+    settings = settings or get_settings()
+    if "-" in key and not key.startswith("SCRUM") and getattr(settings, "linear_api_key", None):
+        try:
+            from meeting_notes import linear_client
+
+            issue = await linear_client.get_issue(key, settings=settings)
+            if issue:
+                return {
+                    "key": issue.get("identifier") or key,
+                    "id": issue.get("id"),
+                    "summary": issue.get("title", ""),
+                    "description": issue.get("description", ""),
+                    "tracker": "linear",
+                }
+        except Exception:
+            pass
+    from meeting_notes import jira_client
+
+    detail = await jira_client.get_issue_detail(key, settings=settings)
+    return detail
+
+
 def _default_dependencies() -> dict[str, Any]:
     """The real implementations. Imported here rather than at module scope so
     importing the orchestrator does not drag in a database driver."""
-    from meeting_notes import db, jira_client
+    from meeting_notes import db
     from meeting_notes.dev_agent import (
         gate_runner,
         gemini_runner,
@@ -207,9 +298,9 @@ def _default_dependencies() -> dict[str, Any]:
         "set_state": db.set_dev_agent_state,
         "get_run": db.get_dev_agent_run,
         "finish_run": db.finish_dev_agent_run,
-        "transition_issue": jira_client.transition_issue,
-        "add_comment": jira_client.add_comment,
-        "get_issue_detail": jira_client.get_issue_detail,
+        "transition_issue": _default_transition_issue,
+        "add_comment": _default_add_comment,
+        "get_issue_detail": _default_get_issue_detail,
         "ensure_repo_cloned": git_ops.ensure_repo_cloned,
         "create_worktree": git_ops.create_worktree,
         "remove_worktree": git_ops.remove_worktree,

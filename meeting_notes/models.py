@@ -146,3 +146,7 @@ class StagedRecord(BaseModel):
     payload: dict[str, Any]
     fetched_at: str
     processed: bool = False
+    attempts: int = 0
+    last_error: str | None = None
+    status: str = "pending"
+
