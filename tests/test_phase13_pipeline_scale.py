@@ -207,3 +207,141 @@ async def test_find_sprint_candidates_picks_up_linear_tickets(monkeypatch: pytes
     assert candidates[0]["key"] == "ENG-42"
     assert candidates[0]["tracker"] == "linear"
     assert "repo: acme/payments" in candidates[0]["description"]
+
+
+@pytest.mark.asyncio
+async def test_dlq_db_inspection_and_replay() -> None:
+    """Verify list_dead_letter_records, replay, and get_queue_stats db procedures."""
+    from datetime import UTC, datetime
+
+    from meeting_notes import db
+
+    class FakeConn:
+        async def fetch(self, query: str, *args: Any) -> list[dict[str, Any]]:
+            return [
+                {
+                    "id": "11111111-1111-1111-1111-111111111111",
+                    "source_id": "bad-email-1",
+                    "source_type": "email",
+                    "payload": '{"text": "malformed"}',
+                    "fetched_at": datetime.now(UTC),
+                    "processed": True,
+                    "attempts": 3,
+                    "last_error": "JSONDecodeError: Unterminated string",
+                    "status": "dead_letter",
+                }
+            ]
+
+        async def fetchval(self, query: str, *args: Any) -> Any:
+            if "REPLAY_DLQ" in query or "UPDATE staged_records" in query:
+                return "11111111-1111-1111-1111-111111111111"
+            return None
+
+        async def fetchrow(self, query: str, *args: Any) -> dict[str, Any]:
+            return {"total": 10, "pending": 4, "retry": 1, "dead_letter": 2, "processed": 3}
+
+        async def execute(self, query: str, *args: Any) -> str:
+            return "UPDATE 2"
+
+    class FakePool:
+        def acquire(self) -> Any:
+            class _Ctx:
+                async def __aenter__(self) -> FakeConn:
+                    return FakeConn()
+
+                async def __aexit__(self, *exc: Any) -> bool:
+                    return False
+
+            return _Ctx()
+
+        async def fetch(self, query: str, *args: Any) -> list[dict[str, Any]]:
+            return await FakeConn().fetch(query, *args)
+
+        async def fetchrow(self, query: str, *args: Any) -> dict[str, Any]:
+            return await FakeConn().fetchrow(query, *args)
+
+    pool = FakePool()  # type: ignore[assignment]
+
+    dlq_records = await db.list_dead_letter_records(limit=10, pool=pool)
+    assert len(dlq_records) == 1
+    assert dlq_records[0].source_id == "bad-email-1"
+    assert dlq_records[0].attempts == 3
+    assert dlq_records[0].status == "dead_letter"
+
+    replayed = await db.replay_dead_letter_record("11111111-1111-1111-1111-111111111111", pool=pool)
+    assert replayed is True
+
+    replayed_all = await db.replay_all_dead_letter_records(pool=pool)
+    assert replayed_all == 2
+
+    stats = await db.get_queue_stats(pool=pool)
+    assert stats["total"] == 10
+    assert stats["dead_letter"] == 2
+    assert stats["pending"] == 4
+
+
+@pytest.mark.asyncio
+async def test_pipeline_dlq_api_endpoints(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test /pipeline/stats, /pipeline/dlq, and /pipeline/dlq/replay REST endpoints."""
+    from httpx import ASGITransport, AsyncClient
+
+    from api.main import create_app
+    from meeting_notes.models import StagedRecord
+
+    async def mock_stats() -> dict[str, int]:
+        return {"total": 5, "pending": 2, "retry": 0, "dead_letter": 1, "processed": 2}
+
+    async def mock_list_dlq(limit: int = 50) -> list[StagedRecord]:
+        return [
+            StagedRecord(
+                id="test-uuid",
+                source_id="msg-42",
+                source_type="email",
+                payload={"bad": True},
+                fetched_at="2026-09-09T12:00:00Z",
+                processed=True,
+                attempts=3,
+                last_error="ValidationError: Missing title",
+                status="dead_letter",
+            )
+        ]
+
+    async def mock_replay_one(rec_id: str) -> bool:
+        return rec_id == "test-uuid"
+
+    async def mock_replay_all() -> int:
+        return 1
+
+    monkeypatch.setattr("meeting_notes.db.get_queue_stats", mock_stats)
+    monkeypatch.setattr("meeting_notes.db.list_dead_letter_records", mock_list_dlq)
+    monkeypatch.setattr("meeting_notes.db.replay_dead_letter_record", mock_replay_one)
+    monkeypatch.setattr("meeting_notes.db.replay_all_dead_letter_records", mock_replay_all)
+
+    app = create_app()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        # 1. GET /pipeline/stats
+        resp = await client.get("/pipeline/stats")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["stats"]["total"] == 5
+        assert data["stats"]["dead_letter"] == 1
+
+        # 2. GET /pipeline/dlq
+        resp = await client.get("/pipeline/dlq")
+        assert resp.status_code == 200
+        dlq_data = resp.json()
+        assert dlq_data["count"] == 1
+        assert dlq_data["records"][0]["source_id"] == "msg-42"
+        assert dlq_data["records"][0]["attempts"] == 3
+
+        # 3. POST /pipeline/dlq/replay (single record)
+        resp = await client.post("/pipeline/dlq/replay", json={"record_id": "test-uuid"})
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "replayed"
+        assert resp.json()["record_id"] == "test-uuid"
+
+        # 4. POST /pipeline/dlq/replay (all)
+        resp = await client.post("/pipeline/dlq/replay", json={})
+        assert resp.status_code == 200
+        assert resp.json()["count"] == 1
+
