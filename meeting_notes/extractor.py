@@ -58,8 +58,17 @@ def build_system_prompt(type_hint: str | None = None) -> str:
 def _extract_raw_urls(text: str) -> list[str]:
     """Harvest real resource and document URLs from source text.
 
-    Filters out XML namespaces, image/logo assets, and webmail anchors so
-    only genuine document, project, and reference links enter the graph.
+    Captures genuine project, documentation, platform, and collaboration links,
+    including:
+    - Issue Trackers: Linear (linear.app), Jira (atlassian.net)
+    - Diagrams & Whiteboards: Lucid (lucid.app, lucidchart.com), Figma
+    - Chat & Collaboration: Slack (slack.com/archives), Google Chat (chat.google.com), Teams
+    - Meeting Links: Google Meet (meet.google.com), Zoom (zoom.us/j), Teams
+    - Learning & Skills: Google Cloud Skills Boost (cloudskillsboost.google, skills.google),
+      Databricks Academy / Workspace (academy.databricks.com, learn.databricks.com, *.databricks.com)
+    - Cloud Docs: Google Docs/Drive, Notion, Confluence
+
+    Filters out XML namespaces, image/logo assets, CDN trackers, and webmail UI anchors.
     """
     import re
 
