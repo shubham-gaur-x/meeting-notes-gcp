@@ -117,6 +117,15 @@ _DOC_PATTERNS: tuple[tuple[str, str], ...] = (
     ("docs.google.com/forms", "Google Form"),
     ("drive.google.com", "Google Drive"),
     ("meet.google.com", "Google Meet"),
+    ("zoom.us", "Zoom Meeting"),
+    ("linear.app", "Linear"),
+    ("lucid.app", "Lucidchart"),
+    ("lucidchart.com", "Lucidchart"),
+    ("databricks.com", "Databricks"),
+    ("slack.com", "Slack"),
+    ("chat.google.com", "Google Chat"),
+    ("cloudskillsboost.google", "Google Skills"),
+    ("skills.google", "Google Skills"),
     ("optum", "Optum Form"),
     ("memberforms", "Optum Form"),
 )
@@ -212,28 +221,41 @@ def _links_suffix(*links: str | None) -> str:
 
 def _format_action_context_line(record: dict[str, Any], settings: Settings) -> str:
     """Format one ActionItem record into a grounded, token-efficient context line."""
+    linear_state = str(record.get("linear_state") or "").strip()
     is_done = bool(record.get("done")) or str(record.get("jira_status", "")).lower() in (
         "done",
         "closed",
         "resolved",
-    )
+    ) or linear_state.lower() in ("done", "closed", "canceled", "completed")
     state_tag = "[DONE]" if is_done else "[OPEN]"
+
     raw_status = record.get("jira_status")
     if raw_status:
         status_label = raw_status.title() if raw_status.islower() else raw_status
+    elif linear_state:
+        status_label = linear_state.title() if linear_state.islower() else linear_state
     else:
         status_label = "Done" if is_done else "In Progress"
 
     jira_key = record.get("jira_key")
-    if jira_key:
-        jira_info = f" | Jira: {jira_key} (Status: {status_label})"
+    linear_id = record.get("linear_identifier")
+    linear_url = record.get("linear_url")
+
+    if linear_id:
+        tracker_info = f" | Linear: {linear_id} (Status: {status_label})"
+    elif jira_key:
+        tracker_info = f" | Jira: {jira_key} (Status: {status_label})"
     else:
-        jira_info = f" | Status: {status_label}"
+        tracker_info = f" | Status: {status_label}"
 
     seen_urls: set[str] = set()
     jira_l = _jira_link(jira_key, settings)
     if jira_key and settings.jira_domain:
         seen_urls.add(f"https://{settings.jira_domain.strip()}/browse/{jira_key}")
+
+    linear_l = f"[Linear {linear_id}]({linear_url})" if linear_id and linear_url else None
+    if linear_url:
+        seen_urls.add(linear_url)
 
     source_id = record.get("source_id")
     gmail_l = _gmail_link(source_id)
@@ -243,20 +265,20 @@ def _format_action_context_line(record: dict[str, Any], settings: Settings) -> s
             seen_urls.add(g_url)
 
     doc_links = _format_doc_links(record.get("meeting_links"), seen_urls)
-    links = _links_suffix(jira_l, gmail_l, *doc_links)
+    links = _links_suffix(jira_l, linear_l, gmail_l, *doc_links)
     due_str = record.get("due") or "None"
 
     return (
         f"ActionItem: {state_tag} Task: {record['task']} | Owner: {record['owner']}"
-        f"{jira_info} | Due: {due_str} | Priority: {record['priority']}"
+        f"{tracker_info} | Due: {due_str} | Priority: {record['priority']}"
         f" | Source: {record['meeting_title']}{links}"
     )
 
 
 async def _query_actions_context(
-    session: Any, mentioned_jira_keys: list[str], settings: Settings
+    session: Any, mentioned_issue_keys: list[str], settings: Settings
 ) -> tuple[list[str], list[str]]:
-    """Query top action items and specifically mentioned Jira keys."""
+    """Query top action items and specifically mentioned Jira or Linear keys."""
     lines: list[str] = []
     node_ids: list[str] = []
     seen_action_ids: set[str] = set()
@@ -266,7 +288,9 @@ async def _query_actions_context(
         MATCH (m:Meeting)-[:FOLLOWS_UP]->(a:ActionItem)
         RETURN DISTINCT a.id AS id, a.task AS task, a.owner AS owner,
                a.due AS due, a.priority AS priority, a.jira_key AS jira_key,
-               a.jira_status AS jira_status, coalesce(a.done, false) AS done,
+               a.jira_status AS jira_status, a.linear_identifier AS linear_identifier,
+               a.linear_url AS linear_url, a.linear_state AS linear_state,
+               coalesce(a.done, false) AS done,
                m.title AS meeting_title, m.source_id AS source_id, m.date AS date,
                m.links AS meeting_links
         ORDER BY CASE WHEN coalesce(a.done, false) = false THEN 0 ELSE 1 END,
@@ -280,19 +304,21 @@ async def _query_actions_context(
         node_ids.append(record["id"])
         lines.append(_format_action_context_line(record, settings))
 
-    if mentioned_jira_keys:
+    if mentioned_issue_keys:
         key_res = await session.run(
             """
             MATCH (m:Meeting)-[:FOLLOWS_UP]->(a:ActionItem)
-            WHERE toUpper(a.jira_key) IN $keys
+            WHERE toUpper(a.jira_key) IN $keys OR toUpper(a.linear_identifier) IN $keys
             RETURN DISTINCT a.id AS id, a.task AS task, a.owner AS owner,
                    a.due AS due, a.priority AS priority, a.jira_key AS jira_key,
-                   a.jira_status AS jira_status, coalesce(a.done, false) AS done,
+                   a.jira_status AS jira_status, a.linear_identifier AS linear_identifier,
+                   a.linear_url AS linear_url, a.linear_state AS linear_state,
+                   coalesce(a.done, false) AS done,
                    m.title AS meeting_title, m.source_id AS source_id, m.date AS date,
                    m.links AS meeting_links
             LIMIT 10
             """,
-            keys=mentioned_jira_keys,
+            keys=mentioned_issue_keys,
         )
         async for record in key_res:
             if record["id"] not in seen_action_ids:
@@ -355,12 +381,12 @@ async def assemble_context(
     people = [p for p in entities.get("people", []) if isinstance(p, str)]
     topics = [t.lower().strip() for t in entities.get("topics", []) if isinstance(t, str)]
 
-    # Check for specific Jira ticket keys mentioned in the question (e.g. MDP-25)
-    mentioned_jira_keys = [k.upper() for k in re.findall(r"\b[A-Za-z][A-Za-z0-9]+-\d+\b", question)]
+    # Check for specific Jira or Linear ticket keys mentioned in the question (e.g. MDP-25, ENG-101)
+    mentioned_issue_keys = [k.upper() for k in re.findall(r"\b[A-Za-z][A-Za-z0-9]+-\d+\b", question)]
 
     async with driver.session() as session:
         # 1. Action Items (surfacing open deliverables, done states, and specific tickets)
-        act_lines, act_ids = await _query_actions_context(session, mentioned_jira_keys, settings)
+        act_lines, act_ids = await _query_actions_context(session, mentioned_issue_keys, settings)
         lines.extend(act_lines)
         node_ids.extend(act_ids)
 
