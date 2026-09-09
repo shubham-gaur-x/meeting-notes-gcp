@@ -420,6 +420,86 @@ async def embed(
     return list(vector)
 
 
+async def embed_batch(
+    texts: list[str],
+    *,
+    settings: Settings | None = None,
+    transport: Transport | None = None,
+) -> list[list[float] | None]:
+    """Embed a list of strings in batches.
+
+    Returns a list of vectors matching input order.
+    """
+    if not texts:
+        return []
+
+    settings = settings or get_settings()
+    backend = select_backend(settings)
+    dimension = settings.embedding_dimension
+
+    if backend == "fake":
+        return [_fake_vector(t, dimension) for t in texts]
+
+    transport = transport or _default_transport
+
+    if backend == "vertex":
+        model = settings.vertex_embedding_model
+        location, project = settings.vertex_location, settings.gcp_project_id
+        url = (
+            f"https://{_vertex_host(location)}/v1/projects/{project}"
+            f"/locations/{location}/publishers/google/models/{model}:predict"
+        )
+        results: list[list[float] | None] = []
+        chunk_size = 50
+        for i in range(0, len(texts), chunk_size):
+            chunk = texts[i : i + chunk_size]
+            payload = {
+                "instances": [{"content": t} for t in chunk],
+                "parameters": {"outputDimensionality": dimension},
+            }
+            headers = _vertex_auth_header() if transport is _default_transport else {}
+            try:
+                body = await _post(url, payload, headers, transport)
+                preds = json.loads(body).get("predictions", [])
+                for pred in preds:
+                    v = pred.get("embeddings", {}).get("values", [])
+                    results.append(list(v[:dimension]) if len(v) >= dimension else None)
+            except Exception as exc:
+                log.error("llm.vertex_batch_embed_failed", error=str(exc))
+                results.extend([None] * len(chunk))
+        return results
+
+    if backend == "gemini":
+        model = settings.gemini_embedding_model
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:batchEmbedContents"
+        results_gemini: list[list[float] | None] = []
+        chunk_size = 50
+        for i in range(0, len(texts), chunk_size):
+            chunk = texts[i : i + chunk_size]
+            payload = {
+                "requests": [
+                    {
+                        "model": f"models/{model}",
+                        "content": {"parts": [{"text": t}]},
+                        "outputDimensionality": dimension,
+                    }
+                    for t in chunk
+                ]
+            }
+            try:
+                body = await _post(url, payload, {"x-goog-api-key": settings.gemini_api_key}, transport)
+                embeddings = json.loads(body).get("embeddings", [])
+                for emb in embeddings:
+                    v = emb.get("values", [])
+                    results_gemini.append(list(v[:dimension]) if len(v) >= dimension else None)
+            except Exception as exc:
+                log.error("llm.gemini_batch_embed_failed", error=str(exc))
+                results_gemini.extend([None] * len(chunk))
+        return results_gemini
+
+    return [await embed(t, settings=settings, transport=transport) for t in texts]
+
+
 async def chat_list(
     system: str,
     user: str,
