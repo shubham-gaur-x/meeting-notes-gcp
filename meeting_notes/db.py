@@ -198,6 +198,45 @@ VALUES ($1, $2)
 ON CONFLICT (source_type) DO UPDATE SET value = $2, updated_at = now()
 """
 
+_LIST_DLQ_SQL = """
+SELECT id, source_id, source_type, payload, fetched_at, processed, attempts, last_error, status
+FROM staged_records
+WHERE status = 'dead_letter'
+ORDER BY fetched_at DESC
+LIMIT $1
+"""
+
+_REPLAY_DLQ_SQL = """
+UPDATE staged_records
+SET attempts = 0,
+    processed = FALSE,
+    processed_at = NULL,
+    status = 'pending',
+    last_error = NULL
+WHERE id = $1::uuid AND status = 'dead_letter'
+RETURNING id
+"""
+
+_REPLAY_ALL_DLQ_SQL = """
+UPDATE staged_records
+SET attempts = 0,
+    processed = FALSE,
+    processed_at = NULL,
+    status = 'pending',
+    last_error = NULL
+WHERE status = 'dead_letter'
+"""
+
+_QUEUE_STATS_SQL = """
+SELECT
+    count(*) AS total,
+    count(*) FILTER (WHERE status = 'pending' AND processed = FALSE) AS pending,
+    count(*) FILTER (WHERE status = 'retry' AND processed = FALSE) AS retry,
+    count(*) FILTER (WHERE status = 'dead_letter') AS dead_letter,
+    count(*) FILTER (WHERE status = 'processed' OR processed = TRUE) AS processed
+FROM staged_records
+"""
+
 
 # ─── connection (ADR-015) ─────────────────────────────────────────────────────
 
@@ -413,6 +452,65 @@ async def record_drain_failure(
     if row:
         return row["attempts"], row["processed"], row["status"]
     return 1, False, "retry"
+
+
+async def list_dead_letter_records(
+    limit: int = 50, pool: asyncpg.Pool | None = None
+) -> list[StagedRecord]:
+    """List quarantined dead-letter records for operator inspection."""
+    pool = pool or await get_pool()
+    rows = await pool.fetch(_LIST_DLQ_SQL, limit)
+    return [
+        StagedRecord(
+            id=str(r["id"]),
+            source_id=r["source_id"],
+            source_type=r["source_type"],
+            payload=json.loads(r["payload"]) if isinstance(r["payload"], str) else r["payload"],
+            fetched_at=r["fetched_at"].isoformat(),
+            processed=r["processed"],
+            attempts=r["attempts"] if "attempts" in r else 0,
+            last_error=r["last_error"] if "last_error" in r else None,
+            status=r["status"] if "status" in r else "dead_letter",
+        )
+        for r in rows
+    ]
+
+
+async def replay_dead_letter_record(
+    record_id: str, pool: asyncpg.Pool | None = None
+) -> bool:
+    """Reset a single quarantined record back to 'pending' with 0 attempts for re-draining."""
+    pool = pool or await get_pool()
+    async with pool.acquire() as conn:
+        val = await conn.fetchval(_REPLAY_DLQ_SQL, record_id)
+    return val is not None
+
+
+async def replay_all_dead_letter_records(pool: asyncpg.Pool | None = None) -> int:
+    """Reset all quarantined dead-letter records back to 'pending' with 0 attempts."""
+    pool = pool or await get_pool()
+    async with pool.acquire() as conn:
+        status_str = await conn.execute(_REPLAY_ALL_DLQ_SQL)
+    # status_str is e.g. 'UPDATE 3'
+    try:
+        return int(status_str.split()[-1])
+    except (ValueError, IndexError):
+        return 0
+
+
+async def get_queue_stats(pool: asyncpg.Pool | None = None) -> dict[str, int]:
+    """Retrieve aggregate staged queue stats (total, pending, retry, dead_letter, processed)."""
+    pool = pool or await get_pool()
+    row = await pool.fetchrow(_QUEUE_STATS_SQL)
+    if not row:
+        return {"total": 0, "pending": 0, "retry": 0, "dead_letter": 0, "processed": 0}
+    return {
+        "total": int(row["total"] or 0),
+        "pending": int(row["pending"] or 0),
+        "retry": int(row["retry"] or 0),
+        "dead_letter": int(row["dead_letter"] or 0),
+        "processed": int(row["processed"] or 0),
+    }
 
 
 async def get_watermark(source_type: str, pool: asyncpg.Pool | None = None) -> str | None:
