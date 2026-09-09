@@ -509,13 +509,14 @@ async def process(
     settings: Settings | None = None,
     upsert: Any = None,
     push_jira: Any = None,
+    push_linear: Any = None,
     mark_processed: Any = None,
     transport: Any = None,
     enrich_fn: Any = None,
 ) -> PipelineResult:
-    """classify -> route -> extract -> graph write -> push to Jira.
+    """classify -> route -> extract -> graph write -> push to Jira / Linear.
 
-    `upsert`, `push_jira`, `mark_processed` and `transport` are injectable so
+    `upsert`, `push_jira`, `push_linear`, `mark_processed` and `transport` are injectable so
     the suite exercises every branch with no LLM, no database, no Memgraph.
     `transport` passes straight through to `extractor.extract_meeting`, which
     already exposes it for exactly this purpose. Defaults wire the real
@@ -530,6 +531,10 @@ async def process(
         from meeting_notes import jira_pusher
 
         push_jira = jira_pusher.push_action_items
+    if push_linear is None:
+        from meeting_notes import linear_pusher
+
+        push_linear = linear_pusher.push_action_items_to_linear
     if mark_processed is None:
         from meeting_notes import db
 
@@ -567,8 +572,14 @@ async def process(
     bound = bound.bind(step="graph_write", meeting_title=meeting.title)
     meeting_id: str = await upsert(meeting, record.source_id)
 
-    bound = bound.bind(step="jira_push")
-    await push_jira(meeting.action_items, meeting, record.source_id)
+    # Push to configured issue trackers (Jira and/or Linear)
+    tracker = (settings.issue_tracker or "jira").lower()
+    if tracker in ("jira", "both"):
+        bound = bound.bind(step="jira_push")
+        await push_jira(meeting.action_items, meeting, record.source_id)
+    if tracker in ("linear", "both"):
+        bound = bound.bind(step="linear_push")
+        await push_linear(meeting.action_items, meeting, record.source_id)
 
     bound = bound.bind(step="enrich")
     try:
