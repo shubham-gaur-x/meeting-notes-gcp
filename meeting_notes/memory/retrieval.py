@@ -20,6 +20,7 @@ Two governance rules are enforced here rather than assumed:
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from typing import Any
 
 import structlog
@@ -533,6 +534,71 @@ async def full_memory_query(
         "node_ids": node_ids,
         "entities": entities,
     }
+
+
+async def stream_memory_query(
+    question: str,
+    *,
+    driver: Any = None,
+    settings: Settings | None = None,
+    chat: Any = None,
+    search_meetings: Any = None,
+    log_session: bool = True,
+) -> AsyncIterator[dict[str, Any]]:
+    """Stream token chunks and context for a natural language memory query."""
+    settings = settings or get_settings()
+    driver = driver or _driver()
+
+    entities = await extract_entities(question, settings=settings, chat=chat)
+    lines, node_ids = await assemble_context(
+        entities, question, driver=driver, settings=settings, search_meetings=search_meetings
+    )
+
+    yield {"event": "context", "node_ids": node_ids, "entities": entities}
+
+    if not lines:
+        yield {"event": "token", "delta": NO_CONTEXT_ANSWER}
+        yield {"event": "done", "suggested_followups": []}
+        return
+
+    context = "\n".join(lines)
+    try:
+        parsed = await _chat(f"{SYNTHESIS_SYSTEM_PREFIX}{context}", question, settings, chat)
+        answer = (
+            parsed.get("answer")
+            if isinstance(parsed, dict) and parsed.get("answer")
+            else str(parsed)
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("retrieval.synthesis_failed", error=str(exc))
+        answer = NO_CONTEXT_ANSWER
+
+    words = str(answer).split(" ")
+    for i, word in enumerate(words):
+        chunk = word + (" " if i < len(words) - 1 else "")
+        yield {"event": "token", "delta": chunk}
+
+    if log_session:
+        try:
+            await episodic.log_session(question, str(answer), node_ids, driver=driver)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("retrieval.session_log_failed", error=str(exc))
+
+    followups: list[str] = []
+    if entities.get("topics"):
+        for top in entities["topics"][:2]:
+            followups.append(f"What key decisions and deliverables relate to {top}?")
+    if entities.get("people"):
+        for person in entities["people"][:1]:
+            followups.append(f"What action items or commitments involve {person}?")
+    if not followups:
+        followups = [
+            "What related decisions were established on this topic?",
+            "Who are the main collaborators and owners involved?",
+            "What upcoming deadlines are associated with this work?",
+        ]
+
+    yield {"event": "done", "suggested_followups": followups[:3]}
 
 
 async def generate_suggested_questions(
