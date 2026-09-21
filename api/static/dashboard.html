@@ -3,28 +3,39 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>meeting-notes-gcp</title>
+<title>Onix Delivery Memory · Meeting Intelligence & Orchestration</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@500;600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
   :root {
-    --bg:#0f1115; --panel:#171a21; --raise:#1e222b; --line:#272b35;
-    --ink:#e6e8ec; --muted:#9aa3b2; --accent:#6ea8fe;
-    --accent-hover:#8cbaff; --accent-glow:rgba(110,168,254,0.15);
-    --warn:#f0b429; --ok:#4ade80; --hot:#f87171;
-    --shadow:0 8px 30px rgba(0,0,0,0.35);
+    --bg:#090d16; --panel:#0f172a; --raise:#162238; --line:#1e2e4a;
+    --ink:#f8fafc; --muted:#94a3b8; --accent:#ff5e00;
+    --accent-hover:#ff781f; --accent-glow:rgba(255,94,0,0.18);
+    --onix-orange:#ff5e00; --onix-orange-dark:#e05300;
+    --google-blue:#4285f4; --google-green:#34a853; --google-yellow:#fbbc04; --google-red:#ea4335;
+    --warn:#f59e0b; --ok:#10b981; --hot:#ef4444;
+    --shadow:0 8px 30px rgba(0,0,0,0.45);
     color-scheme: dark light;
   }
   @media (prefers-color-scheme: light) {
     :root {
-      --bg:#f6f7f9; --panel:#ffffff; --raise:#f0f2f5; --line:#e2e5ea;
-      --ink:#1a1d23; --muted:#5b6472; --accent:#2563eb;
-      --accent-hover:#1d4ed8; --accent-glow:rgba(37,99,235,0.12);
+      --bg:#f8fafc; --panel:#ffffff; --raise:#f1f5f9; --line:#e2e8f0;
+      --ink:#0f172a; --muted:#64748b; --accent:#e65100;
+      --accent-hover:#bf360c; --accent-glow:rgba(230,81,0,0.12);
+      --onix-orange:#e65100; --onix-orange-dark:#bf360c;
+      --google-blue:#1a73e8; --google-green:#1e8e3e; --google-yellow:#f9ab00; --google-red:#d93025;
+      --warn:#d97706; --ok:#059669; --hot:#dc2626;
       --shadow:0 8px 30px rgba(0,0,0,0.08);
     }
   }
   * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:var(--ink);
-         font:14px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+         font:14px/1.55 'Inter', ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
          -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale; }
+  h1, h2, h3, .card .n, .onix-wordmark, .onix-app-name {
+    font-family: 'Outfit', 'Inter', sans-serif;
+  }
   body, header, nav, nav button, .panel, .card, input, select, textarea,
   .chat-chip, .prompt-card, .answer, dialog, .setting-item {
     transition: background-color 0.22s ease, border-color 0.22s ease, color 0.22s ease, box-shadow 0.22s ease;
@@ -32,11 +43,28 @@
   header {
     padding: 0 18px; height: 48px; border-bottom: 1px solid var(--line); background: var(--bg);
     display: flex; align-items: center; justify-content: space-between; gap: 12px;
-    position: sticky; top: 0; z-index: 25;
+    position: sticky; top: 0; z-index: 25; backdrop-filter: blur(12px);
   }
-  .header-brand { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+  .header-brand { display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
+  .onix-brand-lockup { display: flex; align-items: center; gap: 10px; }
+  .onix-flame-icon { flex-shrink: 0; filter: drop-shadow(0 2px 8px rgba(255, 94, 0, 0.35)); }
+  .onix-titles { display: flex; flex-direction: column; gap: 1px; }
+  .onix-title-row { display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; }
+  .onix-wordmark {
+    font-size: 15px; font-weight: 800; letter-spacing: 0.8px; line-height: 1;
+    background: linear-gradient(135deg, #ffffff 0%, #cbd5e1 100%);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  }
+  .onix-app-name { font-size: 13.5px; font-weight: 600; letter-spacing: -0.2px; color: var(--ink); white-space: nowrap; line-height: 1; }
+  .onix-partner-tag {
+    display: inline-flex; align-items: center; gap: 5px; font-size: 10px; font-weight: 600;
+    color: var(--muted); background: rgba(255, 255, 255, 0.04); border: 1px solid var(--line);
+    padding: 2px 7px; border-radius: 12px; white-space: nowrap; letter-spacing: 0.2px;
+  }
+  .gcp-quad-dot { display: grid; grid-template-columns: 3.5px 3.5px; grid-gap: 1.5px; width: 8.5px; height: 8.5px; }
+  .gcp-quad-dot span { width: 3.5px; height: 3.5px; border-radius: 50%; }
   h1 { font-size: 13.5px; margin: 0; font-weight: 700; letter-spacing: -0.2px; color: var(--ink); white-space: nowrap; }
-  .header-brand .sub { color: var(--muted); font-size: 11px; white-space: nowrap; }
+  .sub { color: var(--muted); font-size: 11px; white-space: nowrap; }
   nav.header-nav {
     display: flex; align-items: center; gap: 2px; background: var(--raise);
     border: 1px solid var(--line); padding: 3px; border-radius: 8px; overflow-x: auto;
@@ -45,12 +73,13 @@
   nav.header-nav::-webkit-scrollbar { display: none; }
   nav.header-nav button {
     background: transparent; border: none; color: var(--muted);
-    padding: 5px 11px; border-radius: 6px; cursor: pointer; font-size: 12.5px;
+    padding: 5px 12px; border-radius: 6px; cursor: pointer; font-size: 12.5px;
     font-family: inherit; font-weight: 500; transition: all .14s ease; white-space: nowrap;
   }
   nav.header-nav button:hover { color: var(--ink); background: rgba(255,255,255,0.05); }
   nav.header-nav button.active {
-    color: #fff; background: var(--accent); box-shadow: 0 1px 3px rgba(0,0,0,0.25); font-weight: 600;
+    color: #fff; background: linear-gradient(135deg, #ff6a00 0%, #ff4500 100%);
+    box-shadow: 0 2px 8px rgba(255, 94, 0, 0.35); font-weight: 600;
   }
   .header-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
   .subnav-bar {
@@ -77,10 +106,10 @@
                   padding:9px 11px; border-radius:7px; font-size:13px; font-family:inherit; }
   input:focus, select:focus { outline:none; border-color:var(--accent); }
   input { min-width:min(420px, 100%); }
-  button.action { background:var(--accent); border:none; color:#fff; padding:9px 15px;
+  button.action { background:linear-gradient(135deg, #ff6a00 0%, #ff4500 100%); border:none; color:#fff; padding:9px 16px;
                   border-radius:7px; cursor:pointer; font-size:13px; font-family:inherit;
-                  font-weight:500; transition:all .15s ease; }
-  button.action:hover { filter:brightness(1.08); transform:translateY(-1px); }
+                  font-weight:600; transition:all .15s ease; box-shadow:0 2px 6px rgba(255,94,0,0.25); }
+  button.action:hover { filter:brightness(1.1); box-shadow:0 4px 12px rgba(255,94,0,0.35); transform:translateY(-1px); }
   button.action:active { transform:translateY(0); }
   button.ghost { background:var(--raise); border:1px solid var(--line); color:var(--ink);
                  padding:6px 11px; border-radius:20px; cursor:pointer; font-size:12px;
@@ -89,14 +118,14 @@
   .cards { display:grid; grid-template-columns:repeat(auto-fill,minmax(132px,1fr));
            gap:10px; margin-bottom:6px; }
   .card { background:var(--raise); border:1px solid var(--line); border-radius:9px;
-          padding:12px 14px; }
-  .card .n { font-size:23px; font-weight:650; line-height:1.15; }
+          padding:12px 14px; box-shadow:0 2px 4px rgba(0,0,0,0.12); }
+  .card .n { font-size:24px; font-weight:700; line-height:1.15; }
   .card .l { color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.6px; }
   .card.hot .n { color:var(--hot); }
   table { width:100%; border-collapse:collapse; font-size:13px; table-layout:auto; }
   th, td { text-align:left; padding:9px 10px; border-bottom:1px solid var(--line);
            vertical-align:top; white-space:normal; word-break:break-word; overflow-wrap:anywhere; }
-  th { color:var(--muted); font-weight:500; font-size:11px;
+  th { color:var(--muted); font-weight:600; font-size:11px;
        text-transform:uppercase; letter-spacing:.6px; }
   tr.clickable { cursor:pointer; }
   tr.clickable:hover td { background:var(--raise); }
@@ -116,10 +145,13 @@
                   border-radius:6px; overflow:hidden; }
   .answer table th { background:rgba(255,255,255,0.04); font-weight:600; }
   .answer table tr:nth-child(even) td { background:rgba(255,255,255,0.02); }
-  .btn-xs { padding:3px 8px; font-size:11px; cursor:pointer; color:#fff; border:none;
-            border-radius:4px; background:var(--accent); font-family:inherit;
-            white-space:nowrap; display:inline-block; }
-  .btn-xs.undo { background:#4a5568; }
+  .btn-xs { padding:4px 9px; font-size:11px; cursor:pointer; color:#fff; border:none;
+            border-radius:5px; background:linear-gradient(135deg, #ff6a00 0%, #ff4500 100%);
+            font-family:inherit; font-weight:600; white-space:nowrap; display:inline-block;
+            transition:all .15s ease; box-shadow:0 1px 3px rgba(255,94,0,0.25); }
+  .btn-xs:hover { filter:brightness(1.1); box-shadow:0 2px 6px rgba(255,94,0,0.4); transform:translateY(-1px); }
+  .btn-xs.undo { background:#334155; box-shadow:none; font-weight:500; }
+  .btn-xs.undo:hover { background:#475569; }
   #actions-body td:last-child { white-space:nowrap; text-align:right; }
   .pill.done { background:#134e4a; border-color:#134e4a; color:#fff; font-weight:600; }
   .pill.progress { background:#1e3a8a; border-color:#1e3a8a; color:#fff; font-weight:600; }
@@ -256,11 +288,11 @@
                         box-sizing:border-box; font-family:inherit; font-size:13.5px; line-height:1.5;
                         overflow-y:hidden; outline:none; }
   .chat-input-actions { display:flex; align-items:center; gap:6px; flex-shrink:0; }
-  .chat-btn-send { background:var(--accent); border:none; color:#fff; padding:7px 15px;
+  .chat-btn-send { background:linear-gradient(135deg, #ff6a00 0%, #ff4500 100%); border:none; color:#fff; padding:7px 16px;
                    border-radius:8px; cursor:pointer; font-size:13px; font-weight:600;
                    display:inline-flex; align-items:center; gap:6px; transition:all .15s ease;
-                   height:36px; font-family:inherit; }
-  .chat-btn-send:hover { background:var(--accent-hover); transform:translateY(-1px); }
+                   height:36px; font-family:inherit; box-shadow:0 2px 6px rgba(255,94,0,0.25); }
+  .chat-btn-send:hover { filter:brightness(1.1); box-shadow:0 3px 10px rgba(255,94,0,0.35); transform:translateY(-1px); }
   .chat-btn-send:disabled { opacity:.6; cursor:not-allowed; transform:none; }
   .chat-btn-settings { background:var(--raise); border:1px solid var(--line); color:var(--muted);
                        height:34px; width:34px; border-radius:7px; cursor:pointer;
@@ -409,8 +441,39 @@
 <body>
 <header>
   <div class="header-brand">
-    <h1>meeting-notes-gcp</h1>
-    <span class="sub" id="health">checking…</span>
+    <div class="onix-brand-lockup">
+      <svg class="onix-flame-icon" width="22" height="22" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <path d="M14 2L24 12L14 22L4 12L14 2Z" fill="url(#onix-grad-1)"/>
+        <path d="M14 7L20.5 13.5L14 20L7.5 13.5L14 7Z" fill="#090d16"/>
+        <path d="M14 9.5L18 13.5L14 17.5L10 13.5L14 9.5Z" fill="url(#onix-grad-2)"/>
+        <defs>
+          <linearGradient id="onix-grad-1" x1="4" y1="2" x2="24" y2="22" gradientUnits="userSpaceOnUse">
+            <stop stop-color="#FF7A00"/>
+            <stop offset="1" stop-color="#FF3D00"/>
+          </linearGradient>
+          <linearGradient id="onix-grad-2" x1="10" y1="9.5" x2="18" y2="17.5" gradientUnits="userSpaceOnUse">
+            <stop stop-color="#FF9E40"/>
+            <stop offset="1" stop-color="#FF5E00"/>
+          </linearGradient>
+        </defs>
+      </svg>
+      <div class="onix-titles">
+        <div class="onix-title-row">
+          <span class="onix-wordmark">ONIX</span>
+          <span class="onix-app-name">Delivery Memory</span>
+          <span class="onix-partner-tag" title="Onix is a Premier Google Cloud Partner">
+            <span class="gcp-quad-dot">
+              <span style="background:#4285F4"></span>
+              <span style="background:#EA4335"></span>
+              <span style="background:#FBBC04"></span>
+              <span style="background:#34A853"></span>
+            </span>
+            Google Cloud Partner
+          </span>
+        </div>
+        <span class="sub" id="health">checking…</span>
+      </div>
+    </div>
   </div>
   <nav class="header-nav" aria-label="Main Navigation">
     <button data-panel="overview" class="active">Overview</button>
