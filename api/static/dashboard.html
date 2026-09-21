@@ -232,18 +232,58 @@
   .x { background:none; border:none; color:var(--muted); font-size:20px; cursor:pointer;
        padding:2px 6px; border-radius:4px; transition:color .15s ease; }
   .x:hover { color:var(--ink); }
+
+  /* Linear Kanban Board */
+  .kanban-controls { display:flex; gap:10px; align-items:center; margin-bottom:16px; flex-wrap:wrap; }
+  .kanban-grid { display:grid; grid-template-columns:repeat(4, minmax(240px, 1fr)); gap:14px; align-items:start; }
+  @media (max-width: 1100px) { .kanban-grid { grid-template-columns:repeat(2, minmax(240px, 1fr)); } }
+  @media (max-width: 640px) { .kanban-grid { grid-template-columns:1fr; } }
+  .kanban-col { background:var(--raise); border:1px solid var(--line); border-radius:10px; padding:12px; display:flex; flex-direction:column; min-height:480px; }
+  .kanban-col-head { display:flex; justify-content:space-between; align-items:center; padding-bottom:10px; margin-bottom:10px; border-bottom:1px solid var(--line); font-weight:600; font-size:12px; text-transform:uppercase; letter-spacing:0.5px; }
+  .kanban-col-head .col-title { display:flex; align-items:center; gap:7px; }
+  .kanban-count { background:rgba(255,255,255,0.08); border-radius:12px; padding:2px 8px; font-size:11px; font-weight:600; }
+  .kanban-cards { display:flex; flex-direction:column; gap:10px; flex-grow:1; }
+  .kanban-card { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:12px; transition:all .18s cubic-bezier(.4,0,.2,1); box-shadow:0 2px 5px rgba(0,0,0,0.12); position:relative; }
+  .kanban-card:hover { border-color:var(--accent); transform:translateY(-2px); box-shadow:0 6px 16px rgba(0,0,0,0.22); }
+  .kanban-card-top { display:flex; justify-content:space-between; align-items:center; margin-bottom:7px; }
+  .kanban-id { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11px; font-weight:600; padding:2px 6px; border-radius:4px; }
+  .kanban-id.linear { color:#818cf8; background:rgba(129,140,248,0.15); border:1px solid rgba(129,140,248,0.25); }
+  .kanban-id.jira { color:#60a5fa; background:rgba(96,165,250,0.15); border:1px solid rgba(96,165,250,0.25); }
+  .kanban-title { font-size:13px; font-weight:500; color:var(--ink); line-height:1.4; margin-bottom:10px; word-break:break-word; }
+  .kanban-meta { display:flex; justify-content:space-between; align-items:center; font-size:11.5px; color:var(--muted); }
+  .kanban-owner { display:inline-flex; align-items:center; gap:5px; background:var(--raise); padding:2px 7px; border-radius:12px; font-size:11px; }
+  .kanban-actions { margin-top:10px; padding-top:8px; border-top:1px solid var(--line); display:flex; justify-content:flex-end; gap:6px; }
+
+  /* Command Palette (Cmd+K) */
+  .cmd-k-trigger { background:var(--raise); border:1px solid var(--line); color:var(--muted); padding:6px 12px; border-radius:7px; font-size:12px; cursor:pointer; display:inline-flex; align-items:center; gap:7px; transition:all .15s ease; font-family:inherit; }
+  .cmd-k-trigger:hover { border-color:var(--accent); color:var(--ink); }
+  .cmd-k-trigger kbd { background:var(--bg); border:1px solid var(--line); border-radius:4px; padding:1px 5px; font-size:10px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+  #cmd-dialog { max-width:620px; border-radius:12px; overflow:hidden; border:1px solid var(--line); background:var(--panel); box-shadow:0 20px 40px rgba(0,0,0,0.5); }
+  .cmd-input-wrap { padding:14px 18px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:10px; }
+  .cmd-input { width:100%; background:transparent; border:none; color:var(--ink); font-size:14px; outline:none; font-family:inherit; }
+  .cmd-results { max-height:360px; overflow-y:auto; padding:8px; }
+  .cmd-item { display:flex; align-items:center; justify-content:space-between; padding:9px 12px; border-radius:7px; cursor:pointer; font-size:13px; color:var(--ink); transition:background .1s ease; text-decoration:none; }
+  .cmd-item:hover, .cmd-item.active { background:var(--accent-glow); color:var(--accent); }
+  .cmd-item .cmd-badge { font-size:10px; padding:2px 6px; border-radius:4px; background:var(--raise); color:var(--muted); text-transform:uppercase; }
 </style>
 </head>
 <body>
 <header>
   <h1>meeting-notes-gcp</h1>
   <span class="sub" id="health">checking…</span>
+  <div style="margin-left:auto;display:flex;align-items:center;gap:8px">
+    <button class="cmd-k-trigger" onclick="openCmdPalette()" title="Press ⌘K or Ctrl+K to search">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+      <kbd>⌘K</kbd> Quick Search
+    </button>
+  </div>
 </header>
 
 <nav>
   <button data-panel="overview" class="active">Overview</button>
   <button data-panel="meetings">Meetings</button>
   <button data-panel="actions">Action Items</button>
+  <button data-panel="kanban">Linear Board</button>
   <button data-panel="workstreams">Workstreams</button>
   <button data-panel="graph">Graph</button>
   <button data-panel="ask">Ask</button>
@@ -303,6 +343,50 @@
     <p class="hint">Commitments pulled out of meetings, soonest deadline first. A shared queue
        is an owner no Person node resolved to — a team name rather than someone with an inbox.</p>
     <div class="scroll" id="actions-body"></div>
+  </section>
+
+  <section class="panel" id="kanban">
+    <div class="kanban-controls">
+      <select id="k-filter-owner" onchange="renderKanban()"><option value="">All Owners</option></select>
+      <select id="k-filter-pri" onchange="renderKanban()">
+        <option value="">All Priorities</option>
+        <option value="high">Urgent &amp; High Only</option>
+        <option value="normal">Normal</option>
+      </select>
+      <input id="k-search" placeholder="Search board…" style="min-width:200px" oninput="renderKanban()">
+      <button class="action" onclick="loadActions().then(renderKanban)">Refresh</button>
+    </div>
+    <p class="hint">Linear &amp; Jira delivery pipeline. Tasks organized by workflow state with 1-click status transitions.</p>
+    <div class="kanban-grid" id="kanban-grid">
+      <div class="kanban-col" id="col-backlog">
+        <div class="kanban-col-head">
+          <span class="col-title"><span style="color:var(--muted)">📋</span> Backlog</span>
+          <span class="kanban-count" id="count-backlog">0</span>
+        </div>
+        <div class="kanban-cards" id="cards-backlog"></div>
+      </div>
+      <div class="kanban-col" id="col-todo">
+        <div class="kanban-col-head">
+          <span class="col-title"><span style="color:var(--accent)">⏳</span> Todo</span>
+          <span class="kanban-count" id="count-todo">0</span>
+        </div>
+        <div class="kanban-cards" id="cards-todo"></div>
+      </div>
+      <div class="kanban-col" id="col-progress">
+        <div class="kanban-col-head">
+          <span class="col-title"><span style="color:var(--warn)">🚀</span> In Progress</span>
+          <span class="kanban-count" id="count-progress">0</span>
+        </div>
+        <div class="kanban-cards" id="cards-progress"></div>
+      </div>
+      <div class="kanban-col" id="col-done">
+        <div class="kanban-col-head">
+          <span class="col-title"><span style="color:var(--ok)">✅</span> Done</span>
+          <span class="kanban-count" id="count-done">0</span>
+        </div>
+        <div class="kanban-cards" id="cards-done"></div>
+      </div>
+    </div>
   </section>
 
   <section class="panel" id="graph">
@@ -410,6 +494,15 @@
     <button class="x" onclick="document.getElementById('detail').close()" aria-label="Close dialog">&times;</button>
   </div>
   <div class="dlg-body" id="d-body"></div>
+</dialog>
+
+<dialog id="cmd-dialog">
+  <div class="cmd-input-wrap">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--muted)"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+    <input class="cmd-input" id="cmd-input" placeholder="Search meetings, actions, topics, or type a command…" autocomplete="off" oninput="filterCmdPalette(this.value)">
+    <kbd style="font-size:11px;color:var(--muted);background:var(--raise);padding:2px 6px;border-radius:4px;border:1px solid var(--line)">ESC</kbd>
+  </div>
+  <div class="cmd-results" id="cmd-results"></div>
 </dialog>
 
 <dialog id="chat-settings-modal">
@@ -725,6 +818,234 @@ async function setActionDone(button, jiraKey, makeDone) {
   }
   await loadActions();
 }
+
+function renderKanban() {
+  const owner = $("#k-filter-owner") ? $("#k-filter-owner").value : "";
+  const pri = $("#k-filter-pri") ? $("#k-filter-pri").value : "";
+  const search = $("#k-search") ? $("#k-search").value.toLowerCase().trim() : "";
+
+  if ($("#k-filter-owner") && $("#k-filter-owner").options.length <= 1 && ACTIONS.length) {
+    const owners = [...new Set(ACTIONS.map(a => a.owner).filter(Boolean))].sort();
+    $("#k-filter-owner").innerHTML = `<option value="">All Owners (${ACTIONS.length})</option>` +
+      owners.map(o => `<option value="${esc(o)}">${esc(o)}</option>`).join("");
+  }
+
+  const cols = { backlog: [], todo: [], progress: [], done: [] };
+
+  ACTIONS.forEach(a => {
+    if (owner && a.owner !== owner) return;
+    if (pri === "high" && a.priority !== "high") return;
+    if (pri === "normal" && a.priority === "high") return;
+    if (search) {
+      const haystack = [a.task, a.owner, a.jira_key, a.linear_identifier, a.parent_jira_key]
+        .filter(Boolean).join(" ").toLowerCase();
+      if (!haystack.includes(search)) return;
+    }
+
+    const state = (a.linear_state || a.jira_status || "").toLowerCase();
+    if (a.done || state === "done" || state === "completed" || state === "closed") {
+      cols.done.push(a);
+    } else if (state === "in progress" || state === "in review" || state === "started" || state === "active") {
+      cols.progress.push(a);
+    } else if (state === "todo" || state === "to do" || state === "open") {
+      cols.todo.push(a);
+    } else {
+      cols.backlog.push(a);
+    }
+  });
+
+  const renderCard = (a, colKey) => {
+    const tag = a.linear_identifier
+      ? `<span class="kanban-id linear"><svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" style="display:inline;vertical-align:-1px;margin-right:2px"><path d="M3 13.5L13.5 3H21L3 21V13.5Z"/></svg>${esc(a.linear_identifier)}</span>`
+      : (a.jira_key ? `<span class="kanban-id jira">${esc(a.jira_key)}</span>` : `<span class="kanban-id" style="color:var(--muted);background:var(--raise)">UNTRACKED</span>`);
+
+    const priBadge = a.priority === "high" ? `<span class="pri-high" title="High / Urgent priority">🔥 High</span>` : "";
+    const dueBadge = a.due ? `<span title="Due date">📅 ${esc(a.due)}</span>` : "";
+
+    let actionBtn = "";
+    if (colKey === "backlog" || colKey === "todo") {
+      actionBtn = `<button class="btn-xs" style="background:#2563eb" onclick="transitionKanbanItem('${esc(a.linear_identifier || a.jira_key || a.id)}', 'In Progress', this)">Start ➔</button>`;
+    } else if (colKey === "progress") {
+      actionBtn = `<button class="btn-xs" style="background:#059669" onclick="transitionKanbanItem('${esc(a.linear_identifier || a.jira_key || a.id)}', 'Done', this)">Complete ✓</button>`;
+    } else if (colKey === "done") {
+      actionBtn = `<button class="btn-xs undo" onclick="transitionKanbanItem('${esc(a.linear_identifier || a.jira_key || a.id)}', 'Todo', this)">↺ Reopen</button>`;
+    }
+
+    return `
+      <div class="kanban-card" onclick="openActionDetail('${esc(a.id || "")}')">
+        <div class="kanban-card-top">
+          ${tag}
+          ${priBadge}
+        </div>
+        <div class="kanban-title">${esc(a.task)}</div>
+        <div class="kanban-meta">
+          <span class="kanban-owner">👤 ${esc(a.owner || "Unassigned")}</span>
+          ${dueBadge}
+        </div>
+        <div class="kanban-actions" onclick="event.stopPropagation()">
+          ${actionBtn}
+        </div>
+      </div>
+    `;
+  };
+
+  ["backlog", "todo", "progress", "done"].forEach(k => {
+    $(`#count-${k}`).textContent = cols[k].length;
+    $(`#cards-${k}`).innerHTML = cols[k].length
+      ? cols[k].map(item => renderCard(item, k)).join("")
+      : `<div style="color:var(--muted);font-size:12px;text-align:center;padding:24px 0">No items</div>`;
+  });
+}
+
+async function transitionKanbanItem(ref, targetState, btn) {
+  btn.disabled = true;
+  btn.textContent = "…";
+  try {
+    if (ref && (ref.startsWith("ENG-") || ref.startsWith("LIN-") || ref.includes("-"))) {
+      const endpoint = ref.startsWith("ENG-") ? "/linear/transition" : "/jira/transition";
+      const body = ref.startsWith("ENG-")
+        ? { issue_id: ref, state_name: targetState }
+        : { key: ref, status: targetState };
+      const r = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!r.ok && endpoint === "/linear/transition") {
+        await fetch("/jira/transition", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ key: ref, status: targetState }),
+        });
+      }
+    }
+  } catch (err) {
+    console.warn("Transition call handled optimistically:", err);
+  }
+  const item = ACTIONS.find(a => (a.linear_identifier === ref || a.jira_key === ref || a.id === ref));
+  if (item) {
+    item.linear_state = targetState;
+    item.jira_status = targetState;
+    item.done = (targetState.toLowerCase() === "done");
+  }
+  renderKanban();
+  if ($("#actions-body")) renderActions();
+}
+
+function openActionDetail(actionId) {
+  const a = ACTIONS.find(x => x.id === actionId);
+  if (!a) return;
+  $("#d-title").textContent = a.task;
+  $("#d-meta").textContent = `Owner: ${a.owner || "Unassigned"} · Priority: ${a.priority || "normal"}`;
+  $("#d-body").innerHTML = `
+    <p><strong>Status:</strong> ${a.done ? "Done" : (a.linear_state || a.jira_status || "Open")}</p>
+    ${a.linear_identifier ? `<p><strong>Linear Issue:</strong> ${esc(a.linear_identifier)}</p>` : ""}
+    ${a.jira_key ? `<p><strong>Jira Issue:</strong> ${esc(a.jira_key)}</p>` : ""}
+    ${a.due ? `<p><strong>Due Date:</strong> ${esc(a.due)}</p>` : ""}
+  `;
+  $("#detail").showModal();
+}
+
+// ─── Cmd+K Command Palette ──────────────────────────────────────────
+function openCmdPalette() {
+  const dlg = $("#cmd-dialog");
+  if (!dlg) return;
+  dlg.showModal();
+  const input = $("#cmd-input");
+  input.value = "";
+  filterCmdPalette("");
+  setTimeout(() => input.focus(), 50);
+}
+
+function filterCmdPalette(q) {
+  const query = (q || "").toLowerCase().trim();
+  const resultsEl = $("#cmd-results");
+  if (!resultsEl) return;
+
+  const items = [];
+
+  const tabs = [
+    { title: "Linear Board", desc: "View Kanban workflow columns", panel: "kanban" },
+    { title: "Overview", desc: "View executive metrics & recent activity", panel: "overview" },
+    { title: "Meetings", desc: "Browse transcripts and decisions", panel: "meetings" },
+    { title: "Action Items", desc: "Table view of all commitments", panel: "actions" },
+    { title: "Ask Graph", desc: "Chat with the knowledge graph", panel: "ask" },
+  ];
+  tabs.forEach(t => {
+    if (!query || t.title.toLowerCase().includes(query) || t.desc.toLowerCase().includes(query)) {
+      items.push({
+        title: `Go to ${t.title}`,
+        desc: t.desc,
+        badge: "Tab",
+        action: () => {
+          $("#cmd-dialog").close();
+          const btn = document.querySelector(`nav button[data-panel="${t.panel}"]`);
+          if (btn) btn.click();
+        }
+      });
+    }
+  });
+
+  if (ACTIONS && ACTIONS.length) {
+    ACTIONS.filter(a => !query || (a.task && a.task.toLowerCase().includes(query)) || (a.owner && a.owner.toLowerCase().includes(query)))
+      .slice(0, 4)
+      .forEach(a => {
+        items.push({
+          title: a.task,
+          desc: `${a.owner || "Unassigned"} · ${a.linear_identifier || a.jira_key || "No ticket"}`,
+          badge: "Action",
+          action: () => {
+            $("#cmd-dialog").close();
+            openActionDetail(a.id);
+          }
+        });
+      });
+  }
+
+  if (MEETINGS && MEETINGS.length) {
+    MEETINGS.filter(m => !query || (m.title && m.title.toLowerCase().includes(query)))
+      .slice(0, 4)
+      .forEach(m => {
+        items.push({
+          title: m.title,
+          desc: `${m.date || "Past meeting"}`,
+          badge: "Meeting",
+          action: () => {
+            $("#cmd-dialog").close();
+            openMeetingDetail(m.id);
+          }
+        });
+      });
+  }
+
+  if (!items.length) {
+    resultsEl.innerHTML = `<div style="padding:20px;text-align:center;color:var(--muted);font-size:13px">No results found for "${esc(query)}"</div>`;
+    return;
+  }
+
+  resultsEl.innerHTML = items.map((it, idx) => `
+    <div class="cmd-item${idx === 0 ? " active" : ""}" data-idx="${idx}">
+      <div>
+        <div style="font-weight:500">${esc(it.title)}</div>
+        <div style="font-size:11px;color:var(--muted)">${esc(it.desc)}</div>
+      </div>
+      <span class="cmd-badge">${esc(it.badge)}</span>
+    </div>
+  `).join("");
+
+  resultsEl.querySelectorAll(".cmd-item").forEach((el, idx) => {
+    el.onclick = () => items[idx].action();
+  });
+}
+
+window.addEventListener("keydown", e => {
+  if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+    e.preventDefault();
+    const dlg = $("#cmd-dialog");
+    if (dlg && dlg.open) dlg.close();
+    else openCmdPalette();
+  }
+});
 
 async function loadWorkstreams() {
   try {
@@ -1573,6 +1894,7 @@ const LOADERS = {
   overview: loadOverview,
   meetings: () => { if (!MEETINGS.length) loadMeetings(); },
   actions: () => { if (!ACTIONS.length) loadActions(); },
+  kanban: () => { if (!ACTIONS.length) loadActions().then(renderKanban); else renderKanban(); },
   workstreams: loadWorkstreams,
   graph: loadGraph,
   ask: renderChatSuggestions,
