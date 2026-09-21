@@ -172,3 +172,29 @@ def test_dashboard_html_chat_ui_and_docked_input() -> None:
     assert "copySpecificAnswer(" in html
     assert "copySpecificDeliverables(" in html
     assert "abortChatQuery()" in html
+
+
+def test_dashboard_unified_header_and_url_hash_routing() -> None:
+    html = (Path(api.__file__).parent / "static" / "dashboard.html").read_text(encoding="utf-8")
+
+    # 1. Unified header containing nav tabs directly (eliminates redundant nav bar row)
+    assert '<nav class="header-nav"' in html
+    assert '<div class="header-brand">' in html
+    assert '<div class="header-actions">' in html
+
+    # 2. All 7 primary panel tabs present
+    for panel in ["overview", "meetings", "actions", "workstreams", "graph", "ask", "review"]:
+        assert f'data-panel="{panel}"' in html
+
+    # 3. Hash routing and reload persistence
+    assert "VALID_PANELS" in html
+    assert "function switchTab(" in html
+    assert "function getInitialTab(" in html
+    assert 'window.addEventListener("hashchange"' in html
+    assert "history.replaceState(" in html
+    assert "mn_active_tab" in html
+
+    # 4. Vertical content space optimizations
+    assert "height: calc(100vh - 78px);" in html
+    assert "height: 48px;" in html
+
