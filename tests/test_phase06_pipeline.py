@@ -770,7 +770,87 @@ async def test_no_action_items_is_a_clean_no_op() -> None:
     assert keys == []
 
 
+async def test_administrative_task_is_skipped_and_not_sent_to_review() -> None:
+    from meeting_notes import jira_pusher
+
+    reviewed: list[tuple] = []
+    created_calls: list[dict] = []
+
+    async def mark_needs_review(action_id, reason, **kw):
+        reviewed.append((action_id, reason))
+
+    async def create_issue(**kw):
+        created_calls.append(kw)
+        return "SCRUM-1"
+
+    async def get_active_sprint(*a, **kw):
+        return None
+
+    settings = _jira_settings(
+        JIRA_ENABLED=True,
+        JIRA_CONFIDENCE_THRESHOLD=0.6,
+        JIRA_DEDUP_ENABLED=False,
+        JIRA_SKIP_ADMINISTRATIVE=True,
+    )
+    meeting = _meeting(action_items=[
+        {"owner": "Michael Baylard", "task": "Submit Salesforce timecards by Friday", "confidence": 0.95}
+    ])
+    keys = await jira_pusher.push_action_items(
+        meeting.action_items, meeting, "src-1", settings=settings,
+        mark_needs_review=mark_needs_review, create_issue=create_issue,
+        get_active_sprint=get_active_sprint,
+    )
+
+    assert keys == []
+    assert created_calls == [], "administrative task must not trigger ticket creation"
+    assert reviewed == [], "administrative task must not pollute the needs_review queue"
+
+
+async def test_push_self_only_skips_tasks_owned_by_others() -> None:
+    from meeting_notes import jira_pusher
+
+    reviewed: list[tuple] = []
+    created_calls: list[dict] = []
+
+    async def mark_needs_review(action_id, reason, **kw):
+        reviewed.append((action_id, reason))
+
+    async def create_issue(**kw):
+        created_calls.append(kw)
+        return "SCRUM-1"
+
+    async def get_active_sprint(*a, **kw):
+        return None
+
+    settings = _jira_settings(
+        JIRA_ENABLED=True,
+        JIRA_DEDUP_ENABLED=False,
+        JIRA_PUSH_SELF_ONLY=True,
+        JIRA_USER_IDENTITIES="michael.baylard@onixnet.com,Michael Baylard,Michael",
+    )
+    meeting = _meeting(action_items=[
+        {"owner": "Coley Woyak", "task": "Grant Michael access to BigQuery console", "confidence": 0.95},
+        {"owner": "Michael Baylard", "task": "Implement data pipeline connector", "confidence": 0.95},
+    ])
+    updated_keys: list[tuple] = []
+
+    async def update_jira_key(action_id, jira_key, **kw):
+        updated_keys.append((action_id, jira_key))
+
+    keys = await jira_pusher.push_action_items(
+        meeting.action_items, meeting, "src-1", settings=settings,
+        mark_needs_review=mark_needs_review, create_issue=create_issue,
+        update_jira_key=update_jira_key,
+        get_active_sprint=get_active_sprint,
+    )
+
+    assert len(created_calls) == 1
+    assert keys == ["SCRUM-1"]
+    assert reviewed == [], "non-self task must not pollute review queue"
+
+
 # ─── jira_sync ─────────────────────────────────────────────────────────────────
+
 
 
 async def test_jira_sync_marks_the_record_processed_whether_or_not_it_matched() -> None:
