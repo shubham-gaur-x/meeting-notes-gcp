@@ -215,4 +215,26 @@ def test_ask_landing_page_no_scroll_contract() -> None:
     assert 'feed.classList.add("is-landing")' in html
     assert 'feed.classList.remove("is-landing")' in html
 
+    # 4. Dual-section landing layout showing both Preset Common Queries and AI Queries
+    assert ".chat-landing-dual" in html
+    assert "Common Questions" in html
+    assert "AI-Generated Questions" in html
+    assert ".chat-landing-col-header" in html
+
+
+def test_action_items_button_no_wrap_and_typewriter_reveal() -> None:
+    html = (Path(api.__file__).parent / "static" / "dashboard.html").read_text(encoding="utf-8")
+
+    # 1. Action Items button wrapping prevention
+    assert "white-space:nowrap; display:inline-block;" in html or "white-space: nowrap; display: inline-block;" in html or "white-space:nowrap" in html
+    assert '#actions-body td:last-child { white-space:nowrap; text-align:right; }' in html
+    assert '"90px"' in html
+
+    # 2. Typewriter reveal animation
+    assert "typewriterReveal(" in html
+    assert "activeTypewriterCancel" in html
+    assert "typing-cursor" in html
+    assert "@keyframes typewriterBlink" in html
+
+
 

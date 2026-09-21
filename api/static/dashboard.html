@@ -100,8 +100,10 @@
   .answer table th { background:rgba(255,255,255,0.04); font-weight:600; }
   .answer table tr:nth-child(even) td { background:rgba(255,255,255,0.02); }
   .btn-xs { padding:3px 8px; font-size:11px; cursor:pointer; color:#fff; border:none;
-            border-radius:4px; background:var(--accent); font-family:inherit; }
+            border-radius:4px; background:var(--accent); font-family:inherit;
+            white-space:nowrap; display:inline-block; }
   .btn-xs.undo { background:#4a5568; }
+  #actions-body td:last-child { white-space:nowrap; text-align:right; }
   .pill.done { background:#134e4a; border-color:#134e4a; color:#fff; font-weight:600; }
   .pill.progress { background:#1e3a8a; border-color:#1e3a8a; color:#fff; font-weight:600; }
   .subtask { padding-left:14px; border-left:2px solid var(--accent); margin-bottom:2px; }
@@ -159,33 +161,65 @@
     padding: 1px 4px; font-family: ui-monospace,SFMono-Regular,Menlo,monospace; font-size: 10px;
   }
   .chat-empty-container {
-    max-width: 680px; margin: 0 auto; width: 100%;
+    max-width: 760px; margin: 0 auto; width: 100%;
     display: flex; flex-direction: column; align-items: center;
   }
   .chat-empty-hero {
-    text-align: center; padding: 0 0 12px;
+    text-align: center; padding: 0 0 10px;
   }
   .chat-empty-hero h2 {
-    font-size: 15px; font-weight: 700; color: var(--ink); margin: 0 0 4px;
+    font-size: 15px; font-weight: 700; color: var(--ink); margin: 0 0 3px;
     display: flex; align-items: center; justify-content: center; gap: 6px;
   }
   .chat-empty-hero p {
-    color: var(--muted); font-size: 12px; line-height: 1.4; margin: 0;
+    color: var(--muted); font-size: 12px; line-height: 1.35; margin: 0;
   }
-  .chat-landing-grid {
-    display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; width: 100%;
+  .chat-landing-grid, .chat-landing-dual {
+    display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; width: 100%;
+  }
+  .chat-landing-col {
+    display: flex; flex-direction: column; gap: 6px; min-width: 0;
+  }
+  .chat-landing-col-header {
+    display: flex; align-items: center; gap: 5px; font-size: 10px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: .5px; color: var(--muted); padding: 0 2px;
+  }
+  .chat-landing-col-header svg { color: var(--accent); flex-shrink: 0; }
+  .chat-landing-col-cards {
+    display: flex; flex-direction: column; gap: 5px;
   }
   .prompt-card.compact {
-    padding: 8px 12px; border-radius: 8px; min-height: unset; cursor: pointer;
+    padding: 6px 10px; border-radius: 7px; min-height: unset; cursor: pointer;
+    background: var(--raise); border: 1px solid var(--line); transition: all .15s ease;
+  }
+  .prompt-card.compact:hover {
+    border-color: var(--accent); background: var(--panel); transform: translateY(-1px);
   }
   .prompt-card.compact .prompt-cat {
-    font-size: 10px; margin-bottom: 2px;
+    font-size: 9.5px; font-weight: 600; color: var(--accent); margin-bottom: 2px;
+    text-transform: uppercase; letter-spacing: .3px;
   }
   .prompt-card.compact .prompt-text {
-    font-size: 12px; line-height: 1.35;
+    font-size: 11.5px; line-height: 1.3; color: var(--ink);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .typing-cursor {
+    display: inline-block; color: var(--accent); font-weight: 700;
+    margin-left: 2px; animation: typewriterBlink 0.7s infinite;
+  }
+  @keyframes typewriterBlink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0; }
+  }
+  .answer-extras {
+    animation: fadeInExtras 0.22s ease-out;
+  }
+  @keyframes fadeInExtras {
+    from { opacity: 0; transform: translateY(4px); }
+    to { opacity: 1; transform: translateY(0); }
   }
   @media (max-width: 600px) {
-    .chat-landing-grid { grid-template-columns: 1fr; gap: 6px; }
+    .chat-landing-grid, .chat-landing-dual { grid-template-columns: 1fr; gap: 8px; }
   }
 
   .chat-input-wrapper { margin-bottom:0; width:100%; }
@@ -858,8 +892,8 @@ function renderActions() {
       if (!r.parent_jira_key) return `<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:6px">${task}${copyBtn}</div>`;
       return `<div class="subtask"><span class="pill subtask-of">Sub-task of ` +
              `${esc(r.parent_jira_key)}</span><div style="display:flex;align-items:flex-start;justify-content:space-between;gap:6px">${task}${copyBtn}</div></div>`;
-    }, "34%"],
-    ["Owner", r => esc(r.owner), "15%"],
+    }, "32%"],
+    ["Owner", r => esc(r.owner), "14%"],
     ["Created", r => esc(r.created_at || "—"), "10%"],
     ["Due", r => esc(r.due || "—"), "10%"],
     ["Priority", r => `<span class="${r.priority === "high" ? "pri-high" : ""}">${esc(r.priority || "—")}</span>`, "8%"],
@@ -885,7 +919,7 @@ function renderActions() {
     ["", r => r.jira_key
       ? `<button class="btn-xs${r.done ? " undo" : ""}" data-key="${esc(r.jira_key)}" ` +
         `data-done="${r.done ? "0" : "1"}">${r.done ? "Reopen" : "Mark done"}</button>`
-      : "", "5%"],
+      : "", "90px"],
   ]);
 
   $("#actions-body").querySelectorAll("button.btn-xs").forEach(b =>
@@ -1393,34 +1427,65 @@ async function renderChatSuggestions() {
     }
   }
 
-  // Curate 4 compact prompt cards to guarantee zero vertical scroll on landing
-  const cards = [];
-  commonQueries.slice(0, 2).forEach(q => {
-    cards.push({ category: "Common Query", question: q });
-  });
+  // Curate 3 Preset / Common Questions
+  const presetCards = commonQueries.slice(0, 3).map(q => ({
+    category: "Preset Query",
+    question: q
+  }));
 
+  // Curate 3 AI-Generated Questions from graph
+  let aiCards = [];
   if (aiEnabled && SUGGESTED_QUESTIONS.length) {
-    SUGGESTED_QUESTIONS.slice(0, 4 - cards.length).forEach(q => {
-      cards.push({ category: q.category || "AI Suggestion", question: q.question });
-    });
+    aiCards = SUGGESTED_QUESTIONS.slice(0, 3).map(q => ({
+      category: q.category || "AI Suggestion",
+      question: q.question
+    }));
+  } else if (!aiEnabled) {
+    aiCards = [{
+      category: "AI Graph Queries",
+      question: "AI suggestions paused in settings",
+      disabled: true
+    }];
+  } else {
+    // Fallback if graph suggestions still loading or sparse
+    aiCards = commonQueries.slice(3, 6).map(q => ({
+      category: "Suggested Query",
+      question: q
+    }));
   }
 
-  if (cards.length < 4) {
-    commonQueries.slice(2, 4).forEach(q => {
-      cards.push({ category: "Common Query", question: q });
-    });
-  }
+  const renderCard = c => `
+    <div class="prompt-card compact" tabindex="${c.disabled ? -1 : 0}" role="button"
+         ${c.disabled ? 'style="opacity:0.6;cursor:pointer" onclick="openChatSettingsModal()"' : `
+         onkeydown="if(event.key==='Enter'||event.key===' ')askQuestion('${esc(c.question).replace(/'/g, "\\'")}')"
+         onclick="askQuestion('${esc(c.question).replace(/'/g, "\\'")}')"`}>
+      <div class="prompt-cat">${esc(c.category)}</div>
+      <div class="prompt-text">${esc(c.question)}</div>
+    </div>
+  `;
 
-  let html = `<div class="chat-landing-grid">` +
-    cards.slice(0, 4).map(c => `
-      <div class="prompt-card compact" tabindex="0" role="button"
-           onkeydown="if(event.key==='Enter'||event.key===' ')askQuestion('${esc(c.question).replace(/'/g, "\\'")}')"
-           onclick="askQuestion('${esc(c.question).replace(/'/g, "\\'")}')">
-        <div class="prompt-cat">${esc(c.category)}</div>
-        <div class="prompt-text">${esc(c.question)}</div>
+  let html = `
+    <div class="chat-landing-grid chat-landing-dual">
+      <div class="chat-landing-col">
+        <div class="chat-landing-col-header">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+          <span>Common Questions</span>
+        </div>
+        <div class="chat-landing-col-cards">
+          ${presetCards.map(renderCard).join("")}
+        </div>
       </div>
-    `).join("") +
-    `</div>`;
+      <div class="chat-landing-col">
+        <div class="chat-landing-col-header">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"></path></svg>
+          <span>AI-Generated Questions</span>
+        </div>
+        <div class="chat-landing-col-cards">
+          ${aiCards.map(renderCard).join("")}
+        </div>
+      </div>
+    </div>
+  `;
 
   container.innerHTML = html;
 }
@@ -1581,10 +1646,95 @@ function copyTaskText(btn, taskText) {
   copyTextToClipboard(taskText, btn, "Copied!");
 }
 
+let activeTypewriterCancel = null;
+
+function renderAssistantContentHtml(turn) {
+  let entitiesHtml = "";
+  const topics = (turn.entities?.topics || []).filter(Boolean);
+  const people = (turn.entities?.people || []).filter(Boolean);
+  if (topics.length || people.length) {
+    entitiesHtml += `<div style="margin-top:14px;display:flex;flex-wrap:wrap;align-items:center;gap:6px">` +
+      `<span class="muted" style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px">Related Entities:</span>` +
+      topics.map(t => `<span class="pill" style="cursor:pointer" onclick="askQuestion('What are the key decisions, deliverables, and updates regarding ${esc(t).replace(/'/g, "\\'")}')">📂 ${esc(t)}</span>`).join("") +
+      people.map(p => `<span class="pill" style="cursor:pointer" onclick="askQuestion('What deliverables and action items are assigned to or involve ${esc(p).replace(/'/g, "\\'")}')">👤 ${esc(p)}</span>`).join("") +
+      `</div>`;
+  }
+
+  let followupsHtml = "";
+  if ((turn.suggested_followups || []).length) {
+    followupsHtml += `<div style="margin-top:12px;display:flex;flex-wrap:wrap;align-items:center">` +
+      `<span class="muted" style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-right:6px">Follow-ups:</span>` +
+      turn.suggested_followups.map(f => `<button type="button" class="followup-btn" onclick="askQuestion('${esc(f).replace(/'/g, "\\'")}')">↪ ${esc(f)}</button>`).join("") +
+      `</div>`;
+  }
+
+  const count = (turn.node_ids || []).length;
+  const noun = count === 1 ? "item" : "items";
+  const groundNote = count > 0 ? `<p class="muted" style="font-size:12px;margin-top:12px">Answered from ${count} ${noun} in your meeting memory.</p>` : "";
+
+  return entitiesHtml + followupsHtml + groundNote;
+}
+
+function typewriterReveal(el, fullText, onTick, onDone) {
+  if (activeTypewriterCancel) {
+    activeTypewriterCancel();
+    activeTypewriterCancel = null;
+  }
+
+  const tokens = fullText.match(/\S+\s*/g) || [fullText];
+  if (tokens.length <= 5) {
+    el.innerHTML = renderMarkdown(fullText);
+    if (onDone) onDone();
+    return () => {};
+  }
+
+  let index = 0;
+  let runningText = "";
+  const batchSize = Math.max(3, Math.ceil(tokens.length / 30));
+  let done = false;
+
+  const cancel = () => {
+    if (done) return;
+    done = true;
+    activeTypewriterCancel = null;
+    el.innerHTML = renderMarkdown(fullText);
+    if (onDone) onDone();
+  };
+  activeTypewriterCancel = cancel;
+
+  function step() {
+    if (done) return;
+    const end = Math.min(index + batchSize, tokens.length);
+    for (let i = index; i < end; i++) {
+      runningText += tokens[i];
+    }
+    index = end;
+
+    el.innerHTML = renderMarkdown(runningText) + '<span class="typing-cursor">▌</span>';
+    if (onTick) onTick();
+
+    if (index < tokens.length) {
+      setTimeout(step, 14);
+    } else {
+      done = true;
+      activeTypewriterCancel = null;
+      el.innerHTML = renderMarkdown(fullText);
+      if (onDone) onDone();
+    }
+  }
+
+  step();
+  return cancel;
+}
+
 function abortChatQuery() {
   if (currentQueryAbortController) {
     currentQueryAbortController.abort();
     currentQueryAbortController = null;
+  }
+  if (activeTypewriterCancel) {
+    activeTypewriterCancel();
+    activeTypewriterCancel = null;
   }
   const loadingEl = $("#chat-loading-state");
   if (loadingEl) loadingEl.remove();
@@ -1655,29 +1805,6 @@ async function renderChatFeed() {
         </button>
       ` : "";
 
-      let entitiesHtml = "";
-      const topics = (turn.entities?.topics || []).filter(Boolean);
-      const people = (turn.entities?.people || []).filter(Boolean);
-      if (topics.length || people.length) {
-        entitiesHtml += `<div style="margin-top:14px;display:flex;flex-wrap:wrap;align-items:center;gap:6px">` +
-          `<span class="muted" style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px">Related Entities:</span>` +
-          topics.map(t => `<span class="pill" style="cursor:pointer" onclick="askQuestion('What are the key decisions, deliverables, and updates regarding ${esc(t).replace(/'/g, "\\'")}')">📂 ${esc(t)}</span>`).join("") +
-          people.map(p => `<span class="pill" style="cursor:pointer" onclick="askQuestion('What deliverables and action items are assigned to or involve ${esc(p).replace(/'/g, "\\'")}')">👤 ${esc(p)}</span>`).join("") +
-          `</div>`;
-      }
-
-      let followupsHtml = "";
-      if ((turn.suggested_followups || []).length) {
-        followupsHtml += `<div style="margin-top:12px;display:flex;flex-wrap:wrap;align-items:center">` +
-          `<span class="muted" style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-right:6px">Follow-ups:</span>` +
-          turn.suggested_followups.map(f => `<button type="button" class="followup-btn" onclick="askQuestion('${esc(f).replace(/'/g, "\\'")}')">↪ ${esc(f)}</button>`).join("") +
-          `</div>`;
-      }
-
-      const count = (turn.node_ids || []).length;
-      const noun = count === 1 ? "item" : "items";
-      const groundNote = count > 0 ? `<p class="muted" style="font-size:12px;margin-top:12px">Answered from ${count} ${noun} in your meeting memory.</p>` : "";
-
       html += `
         <div class="answer" data-id="${turn.id}" style="position:relative">
           <div class="answer-toolbar">
@@ -1694,9 +1821,7 @@ async function renderChatFeed() {
             </div>
           </div>
           <div class="answer-markdown">${renderMarkdown(turn.answer)}</div>
-          ${entitiesHtml}
-          ${followupsHtml}
-          ${groundNote}
+          <div class="answer-extras">${renderAssistantContentHtml(turn)}</div>
         </div>
       `;
     }
@@ -1725,6 +1850,10 @@ async function askMemory() {
     currentQueryAbortController.abort();
   }
   currentQueryAbortController = new AbortController();
+  if (activeTypewriterCancel) {
+    activeTypewriterCancel();
+    activeTypewriterCancel = null;
+  }
 
   const askBtn = $("#ask-btn");
   if (askBtn) {
@@ -1784,6 +1913,10 @@ async function askMemory() {
     if (!r.ok) throw new Error("query -> " + r.status);
     const d = await r.json();
 
+    if (loadingEl && loadingEl.parentNode) {
+      loadingEl.remove();
+    }
+
     const assistantTurn = {
       id: "turn-" + Date.now() + "-a",
       role: "assistant",
@@ -1797,11 +1930,57 @@ async function askMemory() {
     LAST_RAW_ANSWER = assistantTurn.answer;
     saveChatHistory();
 
-    if (loadingEl && loadingEl.parentNode) {
-      loadingEl.remove();
+    const deliverablesText = extractDeliverables(assistantTurn.answer);
+    const copyDeliverablesBtn = deliverablesText ? `
+      <button type="button" class="copy-btn copy-deliverables-btn" onclick="copySpecificDeliverables('${assistantTurn.id}')" title="Copy action items & deliverables only" aria-label="Copy deliverables">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 11 12 14 22 4"></polyline><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg>
+        <span>Copy Deliverables</span>
+      </button>
+    ` : "";
+
+    const cardEl = document.createElement("div");
+    cardEl.className = "answer";
+    cardEl.setAttribute("data-id", assistantTurn.id);
+    cardEl.style.position = "relative";
+    cardEl.innerHTML = `
+      <div class="answer-toolbar">
+        <div class="answer-badge">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
+          <span>Meeting Memory Analysis</span>
+        </div>
+        <div style="display:flex;gap:6px;align-items:center">
+          ${copyDeliverablesBtn}
+          <button type="button" class="copy-btn copy-answer-btn" onclick="copySpecificAnswer('${assistantTurn.id}')" title="Copy full markdown answer to clipboard" aria-label="Copy Answer">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+            <span>Copy Answer</span>
+          </button>
+        </div>
+      </div>
+      <div class="answer-markdown"></div>
+      <div class="answer-extras" style="display:none">
+        ${renderAssistantContentHtml(assistantTurn)}
+      </div>
+    `;
+
+    const feedBody = $("#ask-body");
+    if (feedBody) {
+      feedBody.appendChild(cardEl);
+      scrollChatToBottom(true);
+      const mdDiv = cardEl.querySelector(".answer-markdown");
+      const extrasDiv = cardEl.querySelector(".answer-extras");
+      typewriterReveal(
+        mdDiv,
+        assistantTurn.answer,
+        () => scrollChatToBottom(true),
+        () => {
+          if (extrasDiv) extrasDiv.style.display = "";
+          scrollChatToBottom(true);
+        }
+      );
+    } else {
+      await renderChatFeed();
+      scrollChatToBottom(true);
     }
-    await renderChatFeed();
-    scrollChatToBottom(true);
   } catch (e) {
     if (e.name === "AbortError") return;
     if (loadingEl && loadingEl.parentNode) loadingEl.remove();
