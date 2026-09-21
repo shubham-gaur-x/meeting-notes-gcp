@@ -237,4 +237,26 @@ def test_action_items_button_no_wrap_and_typewriter_reveal() -> None:
     assert "@keyframes typewriterBlink" in html
 
 
+def test_ask_reset_without_popup_and_normalized_message_spacing() -> None:
+    html = (Path(api.__file__).parent / "static" / "dashboard.html").read_text(encoding="utf-8")
 
+    # 1. Reset conversation without a popup
+    # Ensure confirm() popup is removed from clearChatHistory
+    clear_fn_idx = html.find("function clearChatHistory()")
+    assert clear_fn_idx != -1
+    clear_fn_snippet = html[clear_fn_idx:clear_fn_idx + 400]
+    assert "confirm(" not in clear_fn_snippet
+    assert "abortChatQuery();" in clear_fn_snippet
+    assert "CHAT_TURNS = [];" in clear_fn_snippet
+    assert "renderChatFeed();" in clear_fn_snippet
+
+    # 2. Normalized spacing between AI response and new user query
+    assert "#ask-body" in html
+    assert "gap: 14px;" in html
+    assert ".chat-user-msg" in html
+    assert "margin:0;" in html
+    assert ".chat-loading" in html
+    assert ".answer {" in html
+    assert "margin:0;" in html
+    assert ".answer > *:last-child" in html
+    assert "margin-bottom: 0 !important;" in html

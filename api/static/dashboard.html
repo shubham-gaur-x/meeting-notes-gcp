@@ -94,7 +94,13 @@
   .empty { color:var(--muted); padding:20px; text-align:center; }
   .err { color:var(--warn); padding:12px; border:1px solid var(--warn); border-radius:8px; }
   .answer { background:var(--raise); border:1px solid var(--line); border-radius:10px;
-            padding:18px; word-break:break-word; overflow-wrap:break-word; line-height:1.6; }
+            padding:14px 16px; margin:0; word-break:break-word; overflow-wrap:break-word; line-height:1.6; }
+  .answer > *:last-child,
+  .answer-markdown > *:last-child,
+  .answer-extras > *:last-child,
+  .answer p:last-child {
+    margin-bottom: 0 !important;
+  }
   .answer table { margin:14px 0; width:100%; border:1px solid var(--line);
                   border-radius:6px; overflow:hidden; }
   .answer table th { background:rgba(255,255,255,0.04); font-weight:600; }
@@ -140,6 +146,9 @@
   .chat-feed {
     flex: 1; overflow-y: auto; padding: 14px 18px; display: flex; flex-direction: column;
     gap: 14px; scroll-behavior: smooth;
+  }
+  #ask-body {
+    display: flex; flex-direction: column; gap: 14px; width: 100%;
   }
   .chat-feed.is-landing {
     overflow: hidden !important;
@@ -287,7 +296,7 @@
 
   /* Message Stream & Answer Display */
   .chat-user-msg { background:var(--raise); border:1px solid var(--line); border-radius:10px;
-                   padding:12px 16px; margin-bottom:14px; display:flex; flex-direction:column; gap:4px;
+                   padding:12px 16px; margin:0; display:flex; flex-direction:column; gap:4px;
                    animation:fadeIn .2s ease; }
   .chat-user-meta { display:flex; align-items:center; gap:8px; font-size:11px; color:var(--muted);
                     text-transform:uppercase; letter-spacing:.5px; font-weight:600; }
@@ -295,7 +304,7 @@
 
   .chat-loading { background:var(--raise); border:1px solid var(--line); border-radius:10px;
                   padding:14px 18px; display:flex; align-items:center; gap:12px; color:var(--muted);
-                  font-size:13px; margin-bottom:14px; animation:fadeIn .2s ease; }
+                  font-size:13px; margin:0; animation:fadeIn .2s ease; }
   .pulse-dot { width:8px; height:8px; background:var(--accent); border-radius:50%;
                animation:pulse 1.4s ease-in-out infinite; flex-shrink:0; }
   @keyframes pulse { 0%, 100% { opacity:.3; transform:scale(.85); } 50% { opacity:1; transform:scale(1.2); } }
@@ -1517,9 +1526,7 @@ function saveChatHistory() {
 }
 
 function clearChatHistory() {
-  if (CHAT_TURNS.length && !confirm("Start a new conversation thread? This will clear current chat turns.")) {
-    return;
-  }
+  abortChatQuery();
   CHAT_TURNS = [];
   try { localStorage.removeItem(STORAGE_KEY_CHAT_HISTORY); } catch {}
   renderChatFeed();
@@ -1891,6 +1898,7 @@ async function askMemory() {
 
   // 2. Append in-flight loading card to chat feed and auto-scroll
   const feed = $("#chat-feed");
+  const feedBody = $("#ask-body");
   const loadingEl = document.createElement("div");
   loadingEl.id = "chat-loading-state";
   loadingEl.className = "chat-loading";
@@ -1899,7 +1907,7 @@ async function askMemory() {
     <span>Consulting knowledge graph, episodic memory &amp; decisions…</span>
     <button type="button" class="ghost btn-xs" style="margin-left:auto" onclick="abortChatQuery()">Cancel</button>
   `;
-  feed.appendChild(loadingEl);
+  (feedBody || feed).appendChild(loadingEl);
   scrollChatToBottom(true);
 
   // 3. Prepare historical turns payload (excluding the current user turn)
@@ -1994,9 +2002,9 @@ async function askMemory() {
     if (loadingEl && loadingEl.parentNode) loadingEl.remove();
     const errEl = document.createElement("div");
     errEl.className = "err";
-    errEl.style.margin = "12px 0";
+    errEl.style.margin = "0";
     errEl.innerHTML = `<strong>Query Error:</strong> ${esc(e.message)}`;
-    feed.appendChild(errEl);
+    (feedBody || feed).appendChild(errEl);
     scrollChatToBottom(true);
   } finally {
     currentQueryAbortController = null;
