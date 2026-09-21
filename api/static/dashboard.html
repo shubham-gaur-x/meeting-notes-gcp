@@ -119,51 +119,73 @@
     overflow: hidden;
   }
   .chat-header {
-    padding: 12px 20px; border-bottom: 1px solid var(--line); background: var(--panel);
-    display: flex; justify-content: space-between; align-items: center; gap: 12px;
-    flex-wrap: wrap; flex-shrink: 0;
+    padding: 8px 18px; border-bottom: 1px solid var(--line); background: var(--panel);
+    display: flex; justify-content: space-between; align-items: center; gap: 10px;
+    flex-wrap: wrap; flex-shrink: 0; min-height: 40px;
   }
-  .chat-header-title { display: flex; flex-direction: column; gap: 2px; }
-  .chat-header-title strong { font-size: 13.5px; color: var(--ink); display: flex; align-items: center; gap: 7px; }
+  .chat-header-title { display: flex; align-items: baseline; gap: 8px; }
+  .chat-header-title strong { font-size: 13px; color: var(--ink); display: flex; align-items: center; gap: 6px; }
   .chat-header-title .sub { font-size: 11px; color: var(--muted); }
-  .chat-header-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .chat-header-controls { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
   .chat-btn-new-thread {
     background: var(--raise); border: 1px solid var(--line); color: var(--ink);
-    padding: 6px 12px; border-radius: 7px; cursor: pointer; font-size: 12px; font-weight: 500;
-    display: inline-flex; align-items: center; gap: 6px; transition: all .15s ease; font-family: inherit;
-    height: 34px;
+    padding: 4px 10px; border-radius: 6px; cursor: pointer; font-size: 11.5px; font-weight: 500;
+    display: inline-flex; align-items: center; gap: 5px; transition: all .15s ease; font-family: inherit;
+    height: 30px;
   }
   .chat-btn-new-thread:hover { border-color: var(--accent); color: var(--accent); }
 
   .chat-feed {
-    flex: 1; overflow-y: auto; padding: 20px 22px; display: flex; flex-direction: column;
-    gap: 16px; scroll-behavior: smooth;
+    flex: 1; overflow-y: auto; padding: 14px 18px; display: flex; flex-direction: column;
+    gap: 14px; scroll-behavior: smooth;
+  }
+  .chat-feed.is-landing {
+    overflow: hidden !important;
+    padding: 10px 18px;
+    justify-content: center;
   }
   .chat-bottom-dock {
-    border-top: 1px solid var(--line); background: var(--panel); padding: 12px 20px 14px;
-    flex-shrink: 0; display: flex; flex-direction: column; gap: 8px;
+    border-top: 1px solid var(--line); background: var(--panel); padding: 10px 18px 12px;
+    flex-shrink: 0; display: flex; flex-direction: column; gap: 6px;
   }
   .chat-bottom-dock .chat-input-box {
     background: var(--bg);
   }
   .chat-bottom-hint {
-    display: flex; justify-content: space-between; align-items: center; font-size: 11px; color: var(--muted);
+    display: flex; justify-content: space-between; align-items: center; font-size: 10.5px; color: var(--muted);
   }
   .chat-bottom-hint kbd {
     background: var(--raise); border: 1px solid var(--line); border-radius: 3px;
     padding: 1px 4px; font-family: ui-monospace,SFMono-Regular,Menlo,monospace; font-size: 10px;
   }
   .chat-empty-container {
-    max-width: 720px; margin: 20px auto; width: 100%;
+    max-width: 680px; margin: 0 auto; width: 100%;
+    display: flex; flex-direction: column; align-items: center;
   }
   .chat-empty-hero {
-    text-align: center; padding: 16px 0 24px;
+    text-align: center; padding: 0 0 12px;
   }
   .chat-empty-hero h2 {
-    font-size: 17px; font-weight: 700; color: var(--ink); margin: 0 0 6px;
+    font-size: 15px; font-weight: 700; color: var(--ink); margin: 0 0 4px;
+    display: flex; align-items: center; justify-content: center; gap: 6px;
   }
   .chat-empty-hero p {
-    color: var(--muted); font-size: 13px; line-height: 1.5; margin: 0;
+    color: var(--muted); font-size: 12px; line-height: 1.4; margin: 0;
+  }
+  .chat-landing-grid {
+    display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; width: 100%;
+  }
+  .prompt-card.compact {
+    padding: 8px 12px; border-radius: 8px; min-height: unset; cursor: pointer;
+  }
+  .prompt-card.compact .prompt-cat {
+    font-size: 10px; margin-bottom: 2px;
+  }
+  .prompt-card.compact .prompt-text {
+    font-size: 12px; line-height: 1.35;
+  }
+  @media (max-width: 600px) {
+    .chat-landing-grid { grid-template-columns: 1fr; gap: 6px; }
   }
 
   .chat-input-wrapper { margin-bottom:0; width:100%; }
@@ -1362,50 +1384,43 @@ async function renderChatSuggestions() {
   const commonQueries = getCustomCommonQueries();
   const aiEnabled = isAiQuestionsEnabled();
 
-  let html = "";
-
-  // 1. Common Questions Section (clickable chips)
-  if (commonQueries.length > 0) {
-    html += `<div style="margin-bottom:12px">` +
-      `<div class="sub" style="margin-bottom:6px;font-weight:600;letter-spacing:.5px;text-transform:uppercase;display:flex;align-items:center;gap:6px">` +
-      `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--accent)" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>` +
-      `<span>Common Questions</span></div>` +
-      `<div class="chat-chips-wrap">` +
-      commonQueries.map(q =>
-        `<button type="button" class="chat-chip" onclick="askQuestion('${esc(q).replace(/'/g, "\\'")}')">` +
-        `<svg class="chip-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"></polyline></svg>` +
-        `<span>${esc(q)}</span>` +
-        `</button>`
-      ).join("") +
-      `</div></div>`;
-  }
-
-  // 2. AI-Seeded Suggested Questions Section
-  if (aiEnabled) {
-    if (!SUGGESTED_QUESTIONS.length) {
-      try {
-        const data = await get("/graph/memory/suggested-questions");
-        SUGGESTED_QUESTIONS = data.questions || [];
-      } catch {
-        SUGGESTED_QUESTIONS = [];
-      }
-    }
-
-    if (SUGGESTED_QUESTIONS.length > 0) {
-      html += `<div style="margin-top:8px">` +
-        `<div class="sub" style="margin-bottom:6px;font-weight:600;letter-spacing:.5px;text-transform:uppercase;display:flex;align-items:center;gap:6px">` +
-        `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--accent)" aria-hidden="true"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>` +
-        `<span>AI Suggested from Active Action Items &amp; Workstreams</span></div>` +
-        `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px">` +
-        SUGGESTED_QUESTIONS.map(q =>
-          `<div class="prompt-card" tabindex="0" role="button" onkeydown="if(event.key==='Enter'||event.key===' ')askQuestion('${esc(q.question).replace(/'/g, "\\'")}')" onclick="askQuestion('${esc(q.question).replace(/'/g, "\\'")}')">` +
-          `<div class="prompt-cat">${esc(q.category)}</div>` +
-          `<div class="prompt-text">${esc(q.question)}</div>` +
-          `</div>`
-        ).join("") +
-        `</div></div>`;
+  if (aiEnabled && !SUGGESTED_QUESTIONS.length) {
+    try {
+      const data = await get("/graph/memory/suggested-questions");
+      SUGGESTED_QUESTIONS = data.questions || [];
+    } catch {
+      SUGGESTED_QUESTIONS = [];
     }
   }
+
+  // Curate 4 compact prompt cards to guarantee zero vertical scroll on landing
+  const cards = [];
+  commonQueries.slice(0, 2).forEach(q => {
+    cards.push({ category: "Common Query", question: q });
+  });
+
+  if (aiEnabled && SUGGESTED_QUESTIONS.length) {
+    SUGGESTED_QUESTIONS.slice(0, 4 - cards.length).forEach(q => {
+      cards.push({ category: q.category || "AI Suggestion", question: q.question });
+    });
+  }
+
+  if (cards.length < 4) {
+    commonQueries.slice(2, 4).forEach(q => {
+      cards.push({ category: "Common Query", question: q });
+    });
+  }
+
+  let html = `<div class="chat-landing-grid">` +
+    cards.slice(0, 4).map(c => `
+      <div class="prompt-card compact" tabindex="0" role="button"
+           onkeydown="if(event.key==='Enter'||event.key===' ')askQuestion('${esc(c.question).replace(/'/g, "\\'")}')"
+           onclick="askQuestion('${esc(c.question).replace(/'/g, "\\'")}')">
+        <div class="prompt-cat">${esc(c.category)}</div>
+        <div class="prompt-text">${esc(c.question)}</div>
+      </div>
+    `).join("") +
+    `</div>`;
 
   container.innerHTML = html;
 }
@@ -1590,19 +1605,26 @@ async function renderChatFeed() {
     counter.textContent = turnsCount ? `${turnsCount} question${turnsCount === 1 ? '' : 's'} · History preserved` : "History preserved across turns";
   }
 
+  const feed = $("#chat-feed");
   if (!CHAT_TURNS.length) {
+    if (feed) feed.classList.add("is-landing");
     body.innerHTML = `
       <div class="chat-empty-container">
         <div class="chat-empty-hero">
-          <h2>Ask Graph &amp; Episodic Memory</h2>
-          <p>Multi-turn conversational queries across all meetings, decisions, and deliverables.<br>Ask historical questions and follow-ups on previous answers.</p>
+          <h2>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--accent)" aria-hidden="true"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
+            <span>Ask Graph &amp; Episodic Memory</span>
+          </h2>
+          <p>Instant answers and deliverables grounded across all past syncs and decisions.</p>
         </div>
-        <div id="chat-suggestions"></div>
+        <div id="chat-suggestions" style="width:100%"></div>
       </div>
     `;
     await renderChatSuggestions();
     return;
   }
+
+  if (feed) feed.classList.remove("is-landing");
 
   let html = "";
   for (let idx = 0; idx < CHAT_TURNS.length; idx++) {

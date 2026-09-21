@@ -198,3 +198,21 @@ def test_dashboard_unified_header_and_url_hash_routing() -> None:
     assert "height: calc(100vh - 78px);" in html
     assert "height: 48px;" in html
 
+
+def test_ask_landing_page_no_scroll_contract() -> None:
+    html = (Path(api.__file__).parent / "static" / "dashboard.html").read_text(encoding="utf-8")
+
+    # 1. No scroll on landing feed
+    assert ".chat-feed.is-landing" in html
+    assert "overflow: hidden !important;" in html
+
+    # 2. Compact landing grid layout and classes
+    assert ".chat-landing-grid" in html
+    assert "prompt-card compact" in html
+    assert ".chat-empty-container" in html
+
+    # 3. Dynamic class toggling based on chat turns
+    assert 'feed.classList.add("is-landing")' in html
+    assert 'feed.classList.remove("is-landing")' in html
+
+
