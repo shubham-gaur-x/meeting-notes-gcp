@@ -476,7 +476,7 @@ def test_every_tab_has_a_panel_and_a_loader() -> None:
     html = (Path(api.__file__).parent / "static" / "dashboard.html").read_text(encoding="utf-8")
     tabs = set(re.findall(r'data-panel="([a-z]+)"', html))
 
-    assert tabs == {"overview", "meetings", "actions", "kanban", "workstreams", "graph", "ask", "review"}
+    assert tabs == {"overview", "meetings", "actions", "workstreams", "graph", "ask", "review"}
     for panel in tabs:
         assert f'id="{panel}"' in html, f"tab {panel} has no panel"
         assert f"{panel}:" in html, f"tab {panel} has no entry in LOADERS"

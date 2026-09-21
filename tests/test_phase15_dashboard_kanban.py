@@ -1,37 +1,10 @@
-"""Tests for Linear Kanban board and Cmd+K command palette in dashboard.html."""
+"""Tests for Cmd+K command palette and Linear deep linking in dashboard.html."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
 import api
-
-
-def test_kanban_board_structure_and_columns() -> None:
-    html = (Path(api.__file__).parent / "static" / "dashboard.html").read_text(encoding="utf-8")
-
-    # Verify navigation button and panel
-    assert 'data-panel="kanban"' in html
-    assert 'id="kanban"' in html
-    assert "kanban: " in html or "kanban:" in html
-
-    # Verify 4 Kanban columns
-    assert 'id="col-backlog"' in html
-    assert 'id="col-todo"' in html
-    assert 'id="col-progress"' in html
-    assert 'id="col-done"' in html
-
-    # Verify counter badges
-    assert 'id="count-backlog"' in html
-    assert 'id="count-todo"' in html
-    assert 'id="count-progress"' in html
-    assert 'id="count-done"' in html
-
-    # Verify card containers
-    assert 'id="cards-backlog"' in html
-    assert 'id="cards-todo"' in html
-    assert 'id="cards-progress"' in html
-    assert 'id="cards-done"' in html
 
 
 def test_cmd_k_palette_markup_and_shortcuts() -> None:
@@ -50,16 +23,18 @@ def test_cmd_k_palette_markup_and_shortcuts() -> None:
     # Verify keyboard event listener
     assert '(e.metaKey || e.ctrlKey) && e.key === "k"' in html
 
-
-def test_kanban_javascript_routines() -> None:
-    html = (Path(api.__file__).parent / "static" / "dashboard.html").read_text(encoding="utf-8")
-
-    # Core functional definitions
-    assert "function renderKanban()" in html
-    assert "async function transitionKanbanItem(" in html
-    assert "function openActionDetail(" in html
+    # Verify JavaScript search filtering
     assert "function filterCmdPalette(" in html
 
-    # Optimistic local state update before re-render
-    assert "renderKanban();" in html
-    assert "renderActions();" in html
+
+def test_linear_ticket_badges_and_deep_links() -> None:
+    html = (Path(api.__file__).parent / "static" / "dashboard.html").read_text(encoding="utf-8")
+
+    # Verify CSS styling for Linear ticket badge
+    assert ".ticket-badge.linear" in html
+    assert ".ticket-badge.jira" in html
+
+    # Verify linear identifier and direct link generation in Action Items table
+    assert "r.linear_identifier" in html
+    assert "https://linear.app/issue/" in html or "r.linear_url" in html
+    assert 'title="Open in Linear"' in html
