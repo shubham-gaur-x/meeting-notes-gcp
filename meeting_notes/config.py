@@ -149,6 +149,7 @@ class Settings(BaseSettings):
     linear_confidence_threshold: float = 0.6
     linear_dedup_enabled: bool = True
     linear_dedup_threshold: float = 0.9
+    linear_webhook_secret: str = ""
 
     # ─── Governance ───────────────────────────────────────────────────────
     fact_min_confidence: float = 0.5
