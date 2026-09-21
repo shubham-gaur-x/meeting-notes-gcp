@@ -23,6 +23,7 @@ _MEETING_KEYWORDS = {
     "touchpoint", "touchpoints", "update", "updates", "pilot", "kickoff",
     "onboarding", "training", "debrief", "retrospective", "retro", "planning",
     "sprint", "checkin", "handoff", "walkthrough", "briefing", "alignment",
+    "1:1", "1-1", "one-on-one", "one on one", "catch up", "catchup",
 }
 
 _ACTION_PATTERNS = [
