@@ -53,6 +53,17 @@
     color: #fff; background: var(--accent); box-shadow: 0 1px 3px rgba(0,0,0,0.25); font-weight: 600;
   }
   .header-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+  .subnav-bar {
+    display: inline-flex; align-items: center; background: var(--raise);
+    border: 1px solid var(--line); border-radius: 8px; padding: 3px; gap: 3px; margin-bottom: 14px;
+  }
+  .subnav-btn {
+    background: transparent; border: none; color: var(--muted); padding: 5px 12px;
+    border-radius: 6px; font-size: 12px; font-weight: 500; cursor: pointer;
+    display: inline-flex; align-items: center; gap: 6px; transition: all .15s ease; font-family: inherit;
+  }
+  .subnav-btn:hover { color: var(--ink); background: rgba(255,255,255,0.04); }
+  .subnav-btn.active { background: var(--panel); color: var(--accent); font-weight: 600; box-shadow: 0 1px 3px rgba(0,0,0,0.2); }
   main { padding: 14px 18px 28px; }
   .panel { display: none; background: var(--panel); border: 1px solid var(--line);
            border-radius: 10px; padding: 18px; }
@@ -403,12 +414,10 @@
   </div>
   <nav class="header-nav" aria-label="Main Navigation">
     <button data-panel="overview" class="active">Overview</button>
-    <button data-panel="meetings">Meetings</button>
-    <button data-panel="actions">Action Items</button>
-    <button data-panel="workstreams">Workstreams</button>
-    <button data-panel="graph">Graph</button>
     <button data-panel="ask">Ask</button>
-    <button data-panel="review">Needs You</button>
+    <button data-panel="actions">Action Items</button>
+    <button data-panel="meetings">Meetings</button>
+    <button data-panel="graph">Knowledge Graph</button>
   </nav>
   <div class="header-actions">
     <button class="cmd-k-trigger" onclick="openCmdPalette()" title="Press ⌘K or Ctrl+K to search">
@@ -441,71 +450,7 @@
     <div id="overview-body"></div>
   </section>
 
-  <section class="panel" id="meetings">
-    <div class="row">
-      <input id="mfilter" placeholder="Filter by title…" oninput="renderMeetings()">
-      <button class="action" onclick="loadMeetings()">Refresh</button>
-    </div>
-    <p class="hint">Click any meeting to see what was decided, who was there, and what came out of it.</p>
-    <div class="scroll" id="meetings-body"></div>
-  </section>
-
-  <section class="panel" id="actions">
-    <div class="row" style="flex-wrap:wrap;gap:10px">
-      <select id="astatus" onchange="renderActions()">
-        <option value="open" selected>Open</option>
-        <option value="done">Done</option>
-        <option value="subtasks">Sub-tasks only</option>
-        <option value="all">Everything</option>
-      </select>
-      <select id="aowned" onchange="renderActions()">
-        <option value="all" selected>All owners</option>
-        <option value="named">Named people</option>
-        <option value="queue">Shared queues</option>
-      </select>
-      <select id="afilter" onchange="renderActions()"><option value="">Everyone</option></select>
-      <input id="asearch" placeholder="Filter tasks, owners, tickets…" style="min-width:220px"
-             oninput="renderActions()">
-      <button class="action" onclick="loadActions()">Refresh</button>
-    </div>
-    <p class="hint">Commitments pulled out of meetings, soonest deadline first. A shared queue
-       is an owner no Person node resolved to — a team name rather than someone with an inbox.</p>
-    <div class="scroll" id="actions-body"></div>
-  </section>
-
-  <section class="panel" id="graph">
-    <div class="row">
-      <button class="action" onclick="loadGraph()">Refresh</button>
-      <select id="graph-labels" onchange="loadGraph()">
-        <option value="">Everything</option>
-        <option value="Meeting,Topic">Meetings and topics</option>
-        <option value="Meeting,Decision,ActionItem">Meetings and what came out of them</option>
-        <option value="Topic">Topics only</option>
-        <option value="Fact">Facts only</option>
-      </select>
-      <select id="graph-limit" onchange="loadGraph()">
-        <option value="80">80 nodes</option>
-        <option value="150" selected>150 nodes</option>
-        <option value="250">250 nodes</option>
-        <option value="400">400 nodes</option>
-      </select>
-      <span class="muted" id="graph-note"></span>
-    </div>
-    <p class="hint">The most connected part of the graph, and the links among it.
-       Drag to pan, scroll to zoom, hover a node for its name.</p>
-    <div id="graph-legend" class="row" style="gap:14px;flex-wrap:wrap;margin-bottom:6px"></div>
-    <canvas id="graph-canvas" style="width:100%;height:560px;border:1px solid var(--line);
-       border-radius:8px;cursor:grab;display:block"></canvas>
-    <div id="graph-body"></div>
-  </section>
-
-  <section class="panel" id="workstreams">
-    <div class="row"><button class="action" onclick="loadWorkstreams()">Refresh</button></div>
-    <p class="hint">Clusters the graph found on its own, named by the topics inside them.
-       Click one to see what it contains.</p>
-    <div id="workstreams-body"></div>
-  </section>
-
+  <!-- 2. Ask Graph & Episodic Memory (Flagship Copilot) -->
   <section class="panel" id="ask">
     <div class="chat-header">
       <div class="chat-header-title">
@@ -592,12 +537,115 @@
     </div>
   </section>
 
-  <section class="panel" id="review">
-    <div class="row"><button class="action" onclick="loadReview()">Refresh</button></div>
-    <p class="hint">Nothing here was dropped. These are things the system chose to ask about
-       rather than guess.</p>
-    <div id="review-body"></div>
+  <!-- 3. Action Items & Needs You Triage (Consolidated) -->
+  <section class="panel" id="actions">
+    <div class="subnav-bar">
+      <button type="button" id="subnav-actions-tasks" class="subnav-btn active" onclick="switchActionsSubView('tasks')">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 11 12 14 22 4"></polyline><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg>
+        <span>All Commitments</span>
+      </button>
+      <button type="button" data-panel="review" id="subnav-actions-review" class="subnav-btn" onclick="switchActionsSubView('review')">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+        <span>Needs You / Triage</span>
+        <span id="actions-review-badge" class="pill" style="display:none;margin:0 0 0 4px;padding:1px 6px;font-size:10px">0</span>
+      </button>
+    </div>
+
+    <!-- Sub-view 1: Action items table / filters -->
+    <div id="actions-view-tasks">
+      <div class="row" style="flex-wrap:wrap;gap:10px">
+        <select id="astatus" onchange="renderActions()">
+          <option value="open" selected>Open</option>
+          <option value="done">Done</option>
+          <option value="subtasks">Sub-tasks only</option>
+          <option value="all">Everything</option>
+        </select>
+        <select id="aowned" onchange="renderActions()">
+          <option value="all" selected>All owners</option>
+          <option value="named">Named people</option>
+          <option value="queue">Shared queues</option>
+        </select>
+        <select id="afilter" onchange="renderActions()"><option value="">Everyone</option></select>
+        <input id="asearch" placeholder="Filter tasks, owners, tickets…" style="min-width:220px"
+               oninput="renderActions()">
+        <button class="action" onclick="loadActions()">Refresh</button>
+      </div>
+      <p class="hint">Commitments pulled out of meetings, soonest deadline first. A shared queue
+         is an owner no Person node resolved to — a team name rather than someone with an inbox.</p>
+      <div class="scroll" id="actions-body"></div>
+    </div>
+
+    <!-- Sub-view 2: Consolidated Needs You (Review) triage -->
+    <div id="actions-view-review" style="display:none">
+      <div class="row"><button class="action" onclick="loadReview()">Refresh</button></div>
+      <p class="hint">Nothing here was dropped. These are things the system chose to ask about
+         rather than guess.</p>
+      <div id="review-body"></div>
+    </div>
   </section>
+
+  <!-- 4. Meetings -->
+  <section class="panel" id="meetings">
+    <div class="row">
+      <input id="mfilter" placeholder="Filter by title…" oninput="renderMeetings()">
+      <button class="action" onclick="loadMeetings()">Refresh</button>
+    </div>
+    <p class="hint">Click any meeting to see what was decided, who was there, and what came out of it.</p>
+    <div class="scroll" id="meetings-body"></div>
+  </section>
+
+  <!-- 5. Knowledge Graph & Workstream Clusters (Consolidated) -->
+  <section class="panel" id="graph">
+    <div class="subnav-bar">
+      <button type="button" id="subnav-graph-canvas" class="subnav-btn active" onclick="switchGraphSubView('canvas')">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="3"></circle><circle cx="18" cy="18" r="3"></circle><line x1="8.59" y1="8.59" x2="15.42" y2="15.42"></line></svg>
+        <span>Network Canvas</span>
+      </button>
+      <button type="button" data-panel="workstreams" id="subnav-graph-workstreams" class="subnav-btn" onclick="switchGraphSubView('workstreams')">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
+        <span>Workstream Clusters</span>
+      </button>
+    </div>
+
+    <!-- Sub-view 1: Interactive Canvas -->
+    <div id="graph-view-canvas">
+      <div class="row">
+        <button class="action" onclick="loadGraph()">Refresh</button>
+        <select id="graph-labels" onchange="loadGraph()">
+          <option value="">Everything</option>
+          <option value="Meeting,Topic">Meetings and topics</option>
+          <option value="Meeting,Decision,ActionItem">Meetings and what came out of them</option>
+          <option value="Topic">Topics only</option>
+          <option value="Fact">Facts only</option>
+        </select>
+        <select id="graph-limit" onchange="loadGraph()">
+          <option value="80">80 nodes</option>
+          <option value="150" selected>150 nodes</option>
+          <option value="250">250 nodes</option>
+          <option value="400">400 nodes</option>
+        </select>
+        <span class="muted" id="graph-note"></span>
+      </div>
+      <p class="hint">The most connected part of the graph, and the links among it.
+         Drag to pan, scroll to zoom, hover a node for its name.</p>
+      <div id="graph-legend" class="row" style="gap:14px;flex-wrap:wrap;margin-bottom:6px"></div>
+      <canvas id="graph-canvas" style="width:100%;height:560px;border:1px solid var(--line);
+         border-radius:8px;cursor:grab;display:block"></canvas>
+      <div id="graph-body"></div>
+    </div>
+
+    <!-- Sub-view 2: Consolidated Workstreams -->
+    <div id="graph-view-workstreams" style="display:none">
+      <div class="row"><button class="action" onclick="loadWorkstreams()">Refresh</button></div>
+      <p class="hint">Clusters the graph found on its own, named by the topics inside them.
+         Click one to see what it contains.</p>
+      <div id="workstreams-body"></div>
+    </div>
+  </section>
+
+  <!-- Hidden backward-compatibility anchors for tests and direct hash links -->
+  <section class="panel" id="workstreams" style="display:none !important"></section>
+  <section class="panel" id="review" style="display:none !important"></section>
 </main>
 
 <dialog id="detail">
@@ -663,14 +711,54 @@ let MEETINGS = [], ACTIONS = [];
 
 const VALID_PANELS = ["overview", "meetings", "actions", "workstreams", "graph", "ask", "review"];
 
+function switchActionsSubView(view) {
+  const isTasks = view === "tasks";
+  $("#subnav-actions-tasks")?.classList.toggle("active", isTasks);
+  $("#subnav-actions-review")?.classList.toggle("active", !isTasks);
+  const tasksView = $("#actions-view-tasks");
+  const reviewView = $("#actions-view-review");
+  if (tasksView) tasksView.style.display = isTasks ? "" : "none";
+  if (reviewView) reviewView.style.display = isTasks ? "none" : "";
+  if (isTasks) {
+    if (!ACTIONS.length) loadActions();
+  } else {
+    loadReview();
+  }
+}
+
+function switchGraphSubView(view) {
+  const isCanvas = view === "canvas";
+  $("#subnav-graph-canvas")?.classList.toggle("active", isCanvas);
+  $("#subnav-graph-workstreams")?.classList.toggle("active", !isCanvas);
+  const canvasView = $("#graph-view-canvas");
+  const wsView = $("#graph-view-workstreams");
+  if (canvasView) canvasView.style.display = isCanvas ? "" : "none";
+  if (wsView) wsView.style.display = isCanvas ? "none" : "";
+  if (isCanvas) {
+    loadGraph();
+  } else {
+    loadWorkstreams();
+  }
+}
+
 function switchTab(panelId, updateHistory = true) {
-  if (!VALID_PANELS.includes(panelId)) panelId = "overview";
+  let targetTab = panelId;
+  let subView = null;
+  if (panelId === "workstreams") {
+    targetTab = "graph";
+    subView = "workstreams";
+  } else if (panelId === "review") {
+    targetTab = "actions";
+    subView = "review";
+  }
+
+  if (!VALID_PANELS.includes(targetTab)) targetTab = "overview";
 
   document.querySelectorAll("nav button").forEach(b => {
-    b.classList.toggle("active", b.dataset.panel === panelId);
+    b.classList.toggle("active", b.dataset.panel === targetTab);
   });
   document.querySelectorAll(".panel").forEach(p => {
-    p.classList.toggle("active", p.id === panelId);
+    p.classList.toggle("active", p.id === targetTab);
   });
 
   if (updateHistory) {
@@ -680,7 +768,13 @@ function switchTab(panelId, updateHistory = true) {
     try { localStorage.setItem("mn_active_tab", panelId); } catch {}
   }
 
-  LOADERS[panelId]?.();
+  if (subView === "workstreams") {
+    switchGraphSubView("workstreams");
+  } else if (subView === "review") {
+    switchActionsSubView("review");
+  } else {
+    LOADERS[targetTab]?.();
+  }
 }
 
 document.querySelectorAll("nav button").forEach(b => {
@@ -838,13 +932,15 @@ async function openMeeting(m) {
         ["Owner", r => esc(r.owner)],
         ["Due", r => esc(r.due || "—")],
       ]) + `</div>` +
-      `<h3>Who was there (${(d.attendees || []).length})</h3>` +
-      ((d.attendees && d.attendees.length)
-        ? d.attendees.map(a => `<span class="pill">${esc(a.name || a.email)}</span>`).join("")
-        : empty("No attendees resolved.")) +
-      ((d.unresolved_attendees && d.unresolved_attendees.length)
-        ? `<p class="muted" style="font-size:12px;margin-top:10px">Also mentioned, not yet ` +
-          `identified: ${d.unresolved_attendees.map(esc).join(", ")}</p>` : "") +
+      (() => {
+        const resolved = d.attendees || [];
+        const unres = (d.unresolved_attendees || []).filter(u => u && !/unknown\s*speaker/i.test(u));
+        const total = resolved.length + unres.length;
+        if (!total) return `<h3>Who was there (0)</h3>` + empty("No attendees recorded.");
+        let pills = resolved.map(a => `<span class="pill">👤 ${esc(a.name || a.email)}</span>`).join("");
+        pills += unres.map(u => `<span class="pill" style="opacity:0.9" title="Identified from meeting transcript">👤 ${esc(u)}</span>`).join("");
+        return `<h3>Who was there (${total})</h3><div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px">${pills}</div>`;
+      })() +
       ((d.facts && d.facts.length) ? `<h3>What this told us</h3>` +
         d.facts.map(f => `<div class="quote">${esc(f.text)}</div>`).join("") : "");
   } catch (e) { $("#d-body").innerHTML = `<div class="err">${esc(e.message)}</div>`; }
@@ -2025,10 +2121,28 @@ function initAskTab() {
   }, 50);
 }
 
-async function loadReview() {
+async function refreshReviewBadge() {
   try {
     const [a, p, b] = await Promise.all([
       get("/review/actions"), get("/review/people"), get("/review/blockers")]);
+    const totalReview = (a.count || 0) + (p.count || 0) + (b.count || 0);
+    const badge = $("#actions-review-badge");
+    if (badge) {
+      badge.textContent = totalReview;
+      badge.style.display = totalReview > 0 ? "inline-block" : "none";
+    }
+    return { a, p, b, totalReview };
+  } catch {
+    return null;
+  }
+}
+
+async function loadReview() {
+  try {
+    const res = await refreshReviewBadge();
+    const a = res?.a || await get("/review/actions");
+    const p = res?.p || await get("/review/people");
+    const b = res?.b || await get("/review/blockers");
     $("#review-body").innerHTML =
       `<h3>Low-confidence actions (${a.count})</h3>` +
       `<p class="hint">Extracted, but not confident enough to file automatically.</p>` +
@@ -2243,6 +2357,7 @@ function getInitialTab() {
 
 CHAT_TURNS = loadChatHistory();
 loadHealth();
+refreshReviewBadge();
 const initialTab = getInitialTab();
 switchTab(initialTab, true);
 </script>
