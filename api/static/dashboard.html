@@ -955,7 +955,16 @@ async function loadActions() {
   const owner = $("#afilter") ? $("#afilter").value : "";
   try {
     const d = await get("/graph/actions?status=all&limit=500");
-    ACTIONS = d.actions || [];
+    const rawActions = d.actions || [];
+    const seenActionKeys = new Set();
+    ACTIONS = [];
+    for (const a of rawActions) {
+      const k = a.id ? a.id : `${a.owner}:${a.task}:${a.jira_key || ''}`;
+      if (!seenActionKeys.has(k)) {
+        seenActionKeys.add(k);
+        ACTIONS.push(a);
+      }
+    }
     // Never a literal Atlassian domain: a hardcoded tenant is what stops this
     // repo moving to the Onix project, and it would point one person's
     // dashboard at another's Jira. Blank means render the key as plain text.
