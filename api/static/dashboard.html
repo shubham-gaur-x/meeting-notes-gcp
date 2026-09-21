@@ -161,7 +161,7 @@
     padding: 1px 4px; font-family: ui-monospace,SFMono-Regular,Menlo,monospace; font-size: 10px;
   }
   .chat-empty-container {
-    max-width: 760px; margin: 0 auto; width: 100%;
+    max-width: 920px; margin: 0 auto; width: 100%;
     display: flex; flex-direction: column; align-items: center;
   }
   .chat-empty-hero {
@@ -175,7 +175,7 @@
     color: var(--muted); font-size: 12px; line-height: 1.35; margin: 0;
   }
   .chat-landing-grid, .chat-landing-dual {
-    display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; width: 100%;
+    display: grid; grid-template-columns: 1.15fr 1fr; gap: 12px; width: 100%;
   }
   .chat-landing-col {
     display: flex; flex-direction: column; gap: 6px; min-width: 0;
@@ -188,19 +188,22 @@
   .chat-landing-col-cards {
     display: flex; flex-direction: column; gap: 5px;
   }
+  .chat-landing-col-cards.grid-2 {
+    display: grid; grid-template-columns: repeat(2, 1fr); gap: 5px;
+  }
   .prompt-card.compact {
-    padding: 6px 10px; border-radius: 7px; min-height: unset; cursor: pointer;
+    padding: 6px 9px; border-radius: 6px; min-height: unset; cursor: pointer;
     background: var(--raise); border: 1px solid var(--line); transition: all .15s ease;
   }
   .prompt-card.compact:hover {
     border-color: var(--accent); background: var(--panel); transform: translateY(-1px);
   }
   .prompt-card.compact .prompt-cat {
-    font-size: 9.5px; font-weight: 600; color: var(--accent); margin-bottom: 2px;
+    font-size: 9px; font-weight: 600; color: var(--accent); margin-bottom: 1px;
     text-transform: uppercase; letter-spacing: .3px;
   }
   .prompt-card.compact .prompt-text {
-    font-size: 11.5px; line-height: 1.3; color: var(--ink);
+    font-size: 11px; line-height: 1.25; color: var(--ink);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   .typing-cursor {
@@ -218,8 +221,9 @@
     from { opacity: 0; transform: translateY(4px); }
     to { opacity: 1; transform: translateY(0); }
   }
-  @media (max-width: 600px) {
+  @media (max-width: 680px) {
     .chat-landing-grid, .chat-landing-dual { grid-template-columns: 1fr; gap: 8px; }
+    .chat-landing-col-cards.grid-2 { grid-template-columns: 1fr; }
   }
 
   .chat-input-wrapper { margin-bottom:0; width:100%; }
@@ -625,7 +629,7 @@
     </div>
 
     <h3 style="margin:20px 0 6px">Custom Common Questions</h3>
-    <p class="hint" style="margin-bottom:12px">Quick questions pinned right beneath your chat input. Click to ask immediately.</p>
+    <p class="hint" style="margin-bottom:12px">Configure up to 8–10 questions to display on the Ask landing screen. Click to ask immediately.</p>
     
     <div id="custom-queries-list" style="margin-bottom:14px"></div>
 
@@ -1427,16 +1431,16 @@ async function renderChatSuggestions() {
     }
   }
 
-  // Curate 3 Preset / Common Questions
-  const presetCards = commonQueries.slice(0, 3).map(q => ({
+  // Up to 8-10 User Preset / Configured Questions
+  const presetCards = commonQueries.slice(0, 10).map(q => ({
     category: "Preset Query",
     question: q
   }));
 
-  // Curate 3 AI-Generated Questions from graph
+  // Up to 5 AI-Generated Questions from graph
   let aiCards = [];
   if (aiEnabled && SUGGESTED_QUESTIONS.length) {
-    aiCards = SUGGESTED_QUESTIONS.slice(0, 3).map(q => ({
+    aiCards = SUGGESTED_QUESTIONS.slice(0, 5).map(q => ({
       category: q.category || "AI Suggestion",
       question: q.question
     }));
@@ -1447,16 +1451,20 @@ async function renderChatSuggestions() {
       disabled: true
     }];
   } else {
-    // Fallback if graph suggestions still loading or sparse
-    aiCards = commonQueries.slice(3, 6).map(q => ({
-      category: "Suggested Query",
-      question: q
-    }));
+    // Fallback default suggestions if graph suggestions still loading or sparse
+    aiCards = [
+      { category: "Suggested Query", question: "What were the key decisions made last week?" },
+      { category: "Suggested Query", question: "List all open action items and their owners" },
+      { category: "Suggested Query", question: "Summarize blockers discussed recently" },
+      { category: "Suggested Query", question: "Who owns the most open action items?" },
+      { category: "Suggested Query", question: "Show recent decisions regarding deployment architecture" },
+    ];
   }
 
   const renderCard = c => `
     <div class="prompt-card compact" tabindex="${c.disabled ? -1 : 0}" role="button"
-         ${c.disabled ? 'style="opacity:0.6;cursor:pointer" onclick="openChatSettingsModal()"' : `
+         title="${esc(c.question)}"
+         ${c.disabled ? 'style="opacity:0.6;cursor:pointer" onclick="openChatSettings()"' : `
          onkeydown="if(event.key==='Enter'||event.key===' ')askQuestion('${esc(c.question).replace(/'/g, "\\'")}')"
          onclick="askQuestion('${esc(c.question).replace(/'/g, "\\'")}')"`}>
       <div class="prompt-cat">${esc(c.category)}</div>
@@ -1469,16 +1477,16 @@ async function renderChatSuggestions() {
       <div class="chat-landing-col">
         <div class="chat-landing-col-header">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
-          <span>Common Questions</span>
+          <span>Common Questions (${presetCards.length})</span>
         </div>
-        <div class="chat-landing-col-cards">
+        <div class="chat-landing-col-cards ${presetCards.length > 4 ? 'grid-2' : ''}">
           ${presetCards.map(renderCard).join("")}
         </div>
       </div>
       <div class="chat-landing-col">
         <div class="chat-landing-col-header">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"></path></svg>
-          <span>AI-Generated Questions</span>
+          <span>AI-Generated Questions (${aiCards.length})</span>
         </div>
         <div class="chat-landing-col-cards">
           ${aiCards.map(renderCard).join("")}
