@@ -405,8 +405,14 @@
 
   /* General Components */
   .scroll { overflow-x:auto; }
-  .pill { display:inline-block; background:var(--raise); border:1px solid var(--line);
-          border-radius:20px; padding:2px 10px; font-size:11px; margin:0 5px 5px 0; }
+  .pill { display:inline-flex; align-items:center; background:var(--raise); border:1px solid var(--line);
+          border-radius:20px; padding:2px 10px; font-size:11px; margin:0 5px 5px 0;
+          white-space:nowrap; }
+  th.sortable { cursor:pointer; user-select:none; transition:all .15s ease; white-space:nowrap; }
+  th.sortable:hover { color:var(--ink); background:rgba(255,255,255,0.02); }
+  th.sortable:hover .sort-icon { opacity:0.85 !important; }
+  th.sortable.sorted-asc .sort-icon,
+  th.sortable.sorted-desc .sort-icon { opacity:1 !important; color:var(--accent, #ff5e00) !important; }
   .pri-high { color:var(--hot); font-weight:600; }
   .quote { border-left:2px solid var(--accent); padding:2px 0 2px 12px; margin:0 0 10px; }
   code { font:12px ui-monospace,SFMono-Regular,Menlo,monospace; color:var(--accent); }
@@ -903,18 +909,143 @@ async function get(path) {
 function fail(sel, err) { $(sel).innerHTML = `<div class="err">${esc(err.message)}</div>`; }
 function empty(msg) { return `<div class="empty">${esc(msg)}</div>`; }
 
+function formatMeetingType(kind) {
+  if (!kind || kind === '—' || kind === 'null') return '—';
+  const s = String(kind).trim();
+  if (/^1[-_]?on[-_]?1$/i.test(s) || /^1[-_]1$/i.test(s)) return '1-on-1';
+  return s.replace(/[_-]+/g, ' ')
+    .split(' ')
+    .filter(Boolean)
+    .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+    .join(' ');
+}
+
+function formatPlatform(p) {
+  if (!p || p === '—' || p === 'null') return '—';
+  const s = String(p).trim().toLowerCase();
+  if (s === 'google_meet' || s === 'google meet' || s === 'meet') return 'Google Meet';
+  if (s === 'email' || s === 'gmail' || s === 'email_thread') return 'Email';
+  if (s === 'google_calendar' || s === 'google calendar' || s === 'calendar') return 'Google Calendar';
+  if (s === 'slack') return 'Slack';
+  if (s === 'zoom') return 'Zoom';
+  if (s === 'teams' || s === 'ms_teams' || s === 'microsoft teams') return 'Microsoft Teams';
+  return p.replace(/[_-]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
 // A column is [label, render] or [label, render, width]. The width is set on
-// the header only; the cells inherit it, and repeating it per row is what made
-// a long task column collapse to its content width on some rows and not others.
+// the header only; the cells inherit it. Clicking non-empty headers sorts asc/desc.
 function table(rows, cols, clickable) {
   if (!rows || !rows.length) return empty("Nothing here yet.");
-  const head = "<tr>" + cols.map(c =>
-    `<th${c[2] ? ` style="width:${c[2]}"` : ""}>${esc(c[0])}</th>`).join("") + "</tr>";
-  const body = rows.map((r, i) =>
+  const head = "<thead><tr>" + cols.map((c, i) => {
+    const w = c[2] ? `width:${c[2]};` : "";
+    if (!c[0]) return `<th style="${w}"></th>`;
+    return `<th class="sortable" onclick="sortTable(this, ${i})" title="Click to sort by ${esc(c[0])} (asc/desc)" style="${w}">` +
+      `<div style="display:inline-flex;align-items:center;justify-content:space-between;gap:6px;width:100%">` +
+        `<span>${esc(c[0])}</span>` +
+        `<span class="sort-icon" style="font-size:10px;opacity:0.35;transition:all .15s ease">↕</span>` +
+      `</div></th>`;
+  }).join("") + "</tr></thead>";
+  const body = "<tbody>" + rows.map((r, i) =>
     `<tr class="${clickable ? "clickable" : ""}" data-i="${i}">` +
-    cols.map(c => `<td>${c[1](r)}</td>`).join("") + "</tr>").join("");
+    cols.map(c => `<td>${c[1](r)}</td>`).join("") + "</tr>").join("") + "</tbody>";
   return `<table>${head}${body}</table>`;
 }
+
+function sortTable(th, colIdx) {
+  const table = th.closest('table');
+  if (!table) return;
+  const tbody = table.querySelector('tbody') || table;
+  const thead = table.querySelector('thead') || table;
+  const allThs = Array.from(thead.querySelectorAll('th'));
+
+  const currentDir = th.getAttribute('data-sort-dir') || 'none';
+  const newDir = currentDir === 'asc' ? 'desc' : 'asc';
+
+  allThs.forEach(h => {
+    h.removeAttribute('data-sort-dir');
+    h.classList.remove('sorted-asc', 'sorted-desc');
+    const icon = h.querySelector('.sort-icon');
+    if (icon) {
+      icon.textContent = '↕';
+      icon.style.opacity = '0.35';
+      icon.style.color = '';
+    }
+  });
+
+  th.setAttribute('data-sort-dir', newDir);
+  th.classList.add(newDir === 'asc' ? 'sorted-asc' : 'sorted-desc');
+  const icon = th.querySelector('.sort-icon');
+  if (icon) {
+    icon.textContent = newDir === 'asc' ? '▲' : '▼';
+    icon.style.opacity = '1';
+    icon.style.color = 'var(--accent, #ff5e00)';
+  }
+
+  const container = table.closest('[id]');
+  if (container && container.id) {
+    container.dataset.sortCol = colIdx;
+    container.dataset.sortDir = newDir;
+  }
+
+  const rows = Array.from(tbody.querySelectorAll('tr')).filter(tr => !tr.querySelector('th'));
+  if (rows.length <= 1) return;
+
+  const priorityOrder = { 'high': 3, 'medium': 2, 'low': 1, '—': 0, '': 0 };
+
+  rows.sort((a, b) => {
+    const cellA = a.children[colIdx];
+    const cellB = b.children[colIdx];
+    if (!cellA || !cellB) return 0;
+
+    let textA = cellA.innerText.trim();
+    let textB = cellB.innerText.trim();
+
+    if (textA === '—' || !textA) return 1;
+    if (textB === '—' || !textB) return -1;
+
+    const lowerA = textA.toLowerCase();
+    const lowerB = textB.toLowerCase();
+    if (lowerA in priorityOrder && lowerB in priorityOrder) {
+      const pDiff = priorityOrder[lowerA] - priorityOrder[lowerB];
+      return newDir === 'asc' ? pDiff : -pDiff;
+    }
+
+    const isDateA = /^\d{4}-\d{2}-\d{2}/.test(textA);
+    const isDateB = /^\d{4}-\d{2}-\d{2}/.test(textB);
+    if (isDateA && isDateB) {
+      const cmp = textA.localeCompare(textB);
+      return newDir === 'asc' ? cmp : -cmp;
+    }
+
+    const cleanA = textA.replace(/[^0-9.-]/g, '');
+    const cleanB = textB.replace(/[^0-9.-]/g, '');
+    const numA = parseFloat(cleanA);
+    const numB = parseFloat(cleanB);
+    if (!isNaN(numA) && !isNaN(numB) && cleanA !== '' && cleanB !== '' && !textA.includes(' ') && !textB.includes(' ')) {
+      return newDir === 'asc' ? numA - numB : numB - numA;
+    }
+
+    const cmp = textA.localeCompare(textB, undefined, { numeric: true, sensitivity: 'base' });
+    return newDir === 'asc' ? cmp : -cmp;
+  });
+
+  rows.forEach(r => tbody.appendChild(r));
+}
+
+function restoreTableSort(containerSelector) {
+  const container = $(containerSelector);
+  if (!container || container.dataset.sortCol === undefined) return;
+  const colIdx = parseInt(container.dataset.sortCol, 10);
+  const dir = container.dataset.sortDir;
+  const table = container.querySelector('table');
+  if (!table) return;
+  const th = table.querySelectorAll('thead th')[colIdx] || table.querySelectorAll('th')[colIdx];
+  if (th && th.classList.contains('sortable')) {
+    th.setAttribute('data-sort-dir', dir === 'desc' ? 'asc' : 'desc');
+    sortTable(th, colIdx);
+  }
+}
+
 function wire(sel, rows, onClick) {
   $(sel).querySelectorAll("tr.clickable").forEach(tr =>
     tr.onclick = () => onClick(rows[+tr.dataset.i]));
@@ -1014,30 +1145,32 @@ function renderMeetings() {
   const rows = MEETINGS.filter(m => !q ||
     (m.title || "").toLowerCase().includes(q) ||
     (m.original_title || "").toLowerCase().includes(q) ||
-    (m.platform || "").toLowerCase().includes(q)
+    (m.platform || "").toLowerCase().includes(q) ||
+    (m.kind || "").toLowerCase().includes(q)
   );
   $("#meetings-body").innerHTML = table(rows, [
-    ["Date", r => esc(r.date)],
+    ["Date", r => `<span style="white-space:nowrap;font-variant-numeric:tabular-nums;">${esc(r.date)}</span>`, "105px"],
     ["Meeting", r => {
       const orig = (r.original_title && r.original_title !== r.title)
         ? `<div style="font-size:11px;color:var(--muted);margin-top:3px;display:flex;align-items:center;gap:4px">
-             <span class="pill" style="font-size:10px;padding:1px 5px;background:rgba(255, 94, 0, 0.12);color:var(--accent,#ff5e00);border-color:rgba(255,94,0,0.25)">Source</span>
+             <span class="pill" style="font-size:10px;padding:1px 5px;background:rgba(255, 94, 0, 0.12);color:var(--accent,#ff5e00);border-color:rgba(255,94,0,0.25);margin:0">Source</span>
              <span>${esc(r.original_title)}</span>
            </div>`
         : "";
       return `<div><strong>${esc(r.title)}</strong>${orig}</div>`;
-    }, "38%"],
-    ["Type", r => esc(r.kind)],
-    ["Platform", r => `<span class="pill">${esc(r.platform || '—')}</span>`],
+    }, "35%"],
+    ["Type", r => `<span style="white-space:nowrap;font-weight:500;">${esc(formatMeetingType(r.kind))}</span>`, "115px"],
+    ["Platform", r => `<span class="pill" style="white-space:nowrap;margin:0">${esc(formatPlatform(r.platform))}</span>`, "130px"],
     ["Summary", r => esc((r.summary || "").slice(0, 90))],
   ], true);
   wire("#meetings-body", rows, openMeeting);
+  restoreTableSort("#meetings-body");
 }
 
 async function openMeeting(m) {
   const dlg = $("#detail");
   $("#d-title").textContent = m.title || "Meeting";
-  $("#d-meta").textContent = `${m.date || ""} · ${m.kind || ""}`;
+  $("#d-meta").textContent = `${m.date || ""} · ${formatMeetingType(m.kind)}`;
   $("#d-body").innerHTML = empty("Loading…");
   dlg.showModal();
   try {
@@ -1046,7 +1179,7 @@ async function openMeeting(m) {
     const origBanner = (orig && orig !== d.title)
       ? `<div style="background:rgba(255, 94, 0, 0.08);border:1px solid rgba(255, 94, 0, 0.25);border-radius:6px;padding:8px 12px;margin:2px 0 14px;display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px;">
            <div><span style="color:var(--muted);margin-right:6px">📁 Original / Source:</span><strong style="color:var(--text)">${esc(orig)}</strong></div>
-           <span class="pill" style="font-size:11px;margin:0">${esc(d.platform || m.platform || 'source')}</span>
+           <span class="pill" style="font-size:11px;margin:0;white-space:nowrap">${esc(formatPlatform(d.platform || m.platform || 'source'))}</span>
          </div>`
       : "";
     $("#d-body").innerHTML =
@@ -1175,6 +1308,7 @@ function renderActions() {
 
   $("#actions-body").querySelectorAll("button.btn-xs").forEach(b =>
     b.onclick = () => setActionDone(b, b.dataset.key, b.dataset.done === "1"));
+  restoreTableSort("#actions-body");
 }
 
 async function setActionDone(button, jiraKey, makeDone) {
