@@ -7,8 +7,8 @@ and merge them into Memgraph.
 
 Usage examples:
   uv run python scripts/ingest_transcript.py --title "Architecture Review" --file /path/to/transcript.txt
-  uv run python scripts/ingest_transcript.py --title "Client Sprint Planning" --date "2026-09-18" --file notes.md
-  uv run python scripts/ingest_transcript.py --title "Quick 1:1 Sync" --text "Michael: Let's ship the PR.\nAlex: Agreed."
+  uv run python scripts/ingest_transcript.py --title "Sprint Plan" --date "2026-09-18" --file notes.md
+  uv run python scripts/ingest_transcript.py --title "1:1 Sync" --text "Michael: Ship it.\nAlex: Agreed."
 """
 
 from __future__ import annotations
@@ -79,7 +79,7 @@ async def main() -> int:
             processed=False,
         )
 
-        print(f"Processing transcript through entity & action item extraction...")
+        print("Processing transcript through entity & action item extraction...")
         drain_result = await drain_batch([staged_record])
         await db.mark_processed(record_id)
 

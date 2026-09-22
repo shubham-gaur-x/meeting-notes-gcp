@@ -55,9 +55,9 @@ async def sync_actions() -> None:
 
             await update_action_linear_info(
                 action_id=a["id"],
-                linear_id=lid,
-                linear_identifier=ident,
-                linear_url=url,
+                linear_id=str(lid or ""),
+                linear_identifier=str(ident or ""),
+                linear_url=str(url or ""),
                 linear_state="Todo",
             )
             created_count += 1

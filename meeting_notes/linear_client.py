@@ -187,7 +187,7 @@ async def resolve_team_id(
         data = await execute_graphql(query, {"key": val.upper()}, settings=settings, transport=transport)
         nodes = data.get("teams", {}).get("nodes", [])
         if nodes and nodes[0].get("id"):
-            uuid_id = nodes[0]["id"]
+            uuid_id = str(nodes[0]["id"])
             _teams_cache[val] = uuid_id
             return uuid_id
     except Exception as exc:

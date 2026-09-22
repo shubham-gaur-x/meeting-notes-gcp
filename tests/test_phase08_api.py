@@ -1316,7 +1316,9 @@ async def test_get_open_actions_is_the_undone_slice_of_get_all_actions(
 async def test_resolve_person_review_endpoint(app: Any, monkeypatch: Any) -> None:
     captured: dict[str, Any] = {}
 
-    async def mock_resolve(review_id: str, name: str, email: str | None = None, driver: Any = None) -> dict[str, Any]:
+    async def mock_resolve(
+        review_id: str, name: str, email: str | None = None, driver: Any = None
+    ) -> dict[str, Any]:
         captured.update({"review_id": review_id, "name": name, "email": email})
         return {"name": name, "email": email or "", "meeting_id": "m1"}
 

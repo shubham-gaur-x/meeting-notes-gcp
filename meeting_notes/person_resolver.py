@@ -71,7 +71,7 @@ def is_junk_name(n: str | None) -> bool:
 
 @dataclass
 class ContactProfile:
-    """Canonical contact profile linking full names, corporate emails, nicknames, first names, and initials."""
+    """Canonical contact profile linking full names, emails, nicknames, first names, and initials."""
     full_name: str
     email: str
     first_names: list[str] = field(default_factory=list)
@@ -432,6 +432,78 @@ def load_roster(path: str | None) -> Roster:
     ])
 
 
+def _resolve_with_email(
+    name: str,
+    role: str,
+    email: str,
+    roster: Roster,
+    known_people: list[dict[str, Any]],
+) -> Resolution:
+    """Tier 1: deterministic resolution when email is present."""
+    ne = normalize_email(email)
+    ne = EMAIL_ALIASES.get(ne, ne)
+    entry = roster.match_email(ne)
+    if entry:
+        return Resolution(
+            entry.name or name, role, entry.email, "resolved", entry.tracked, "roster-email"
+        )
+    for kp in known_people:
+        if normalize_email(kp.get("email")) == ne and kp.get("name"):
+            return Resolution(
+                kp["name"],
+                role,
+                ne,
+                "resolved",
+                bool(kp.get("tracked", False)),
+                "known-email",
+            )
+    return Resolution(name, role, ne, "resolved", False, "email-normalized")
+
+
+def _resolve_tier2_probabilistic(
+    name: str,
+    role: str,
+    roster: Roster,
+    known_people: list[dict[str, Any]],
+    threshold: float,
+    email: str | None,
+) -> Resolution:
+    entry, score = roster.match_name(name, threshold)
+    if entry:
+        return Resolution(
+            entry.name, role, entry.email, "resolved", entry.tracked, f"roster-name:{score:.2f}"
+        )
+
+    best: tuple[str | None, str | None, float, bool] = (None, None, 0.0, False)
+    for p in known_people:
+        s = _name_sim(name, p.get("name", ""))
+        if s > best[2]:
+            best = (p.get("email"), p.get("name"), s, bool(p.get("tracked", False)))
+    if best[0] and best[2] >= threshold:
+        return Resolution(
+            best[1] or name, role, best[0], "resolved", best[3], f"person-name:{best[2]:.2f}"
+        )
+
+    # Initials match (e.g. "LP" matching "LeePatrick McIntire")
+    initials_candidates = _initials_matches(name, known_people)
+    if len(initials_candidates) == 1:
+        c_email, full, tracked = initials_candidates[0]
+        return Resolution(full or name, role, c_email, "resolved", tracked, "person-initials")
+
+    # Unambiguous first-name match.
+    given = _given_name_matches(name, known_people)
+    if len(given) == 1:
+        c_email, full, tracked = given[0]
+        return Resolution(full or name, role, c_email, "resolved", tracked, "person-given-name")
+    if len(given) > 1:
+        return Resolution(name, role, None, "review", False, "ambiguous-given-name")
+
+    # Give up → review. Never silently drop real human names.
+    return Resolution(
+        name, role, None, "review", False, "no-email-no-match" if not email else "unresolved"
+    )
+
+
 def resolve(
     attendee: Any,
     roster: Roster,
@@ -470,53 +542,10 @@ def resolve(
 
     # Tier 1 — deterministic (email present)
     if email and "@" in email:
-        ne = normalize_email(email)
-        ne = EMAIL_ALIASES.get(ne, ne)
-        entry = roster.match_email(ne)
-        if entry:
-            return Resolution(
-                entry.name or name, role, entry.email, "resolved", entry.tracked, "roster-email"
-            )
-        # Check if known_people has this email to retain full canonical display name
-        for kp in known_people:
-            if normalize_email(kp.get("email")) == ne and kp.get("name"):
-                return Resolution(kp["name"], role, ne, "resolved", bool(kp.get("tracked", False)), "known-email")
-        # Real email, not in roster → canonical is the normalized email (a new person).
-        return Resolution(name, role, ne, "resolved", False, "email-normalized")
+        return _resolve_with_email(name, role, email, roster, known_people)
 
     # Tier 2 — probabilistic (no email): fuzzy name against roster, then known Person nodes.
-    entry, score = roster.match_name(name, threshold)
-    if entry:
-        return Resolution(
-            entry.name, role, entry.email, "resolved", entry.tracked, f"roster-name:{score:.2f}"
-        )
-
-    best: tuple[str | None, str | None, float, bool] = (None, None, 0.0, False)
-    for p in known_people:
-        s = _name_sim(name, p.get("name", ""))
-        if s > best[2]:
-            best = (p.get("email"), p.get("name"), s, bool(p.get("tracked", False)))
-    if best[0] and best[2] >= threshold:
-        return Resolution(
-            best[1] or name, role, best[0], "resolved", best[3], f"person-name:{best[2]:.2f}"
-        )
-
-    # Initials match (e.g. "LP" matching "LeePatrick McIntire")
-    initials_candidates = _initials_matches(name, known_people)
-    if len(initials_candidates) == 1:
-        email, full, tracked = initials_candidates[0]
-        return Resolution(full or name, role, email, "resolved", tracked, "person-initials")
-
-    # Unambiguous first-name match.
-    given = _given_name_matches(name, known_people)
-    if len(given) == 1:
-        email, full, tracked = given[0]
-        return Resolution(full or name, role, email, "resolved", tracked, "person-given-name")
-    if len(given) > 1:
-        return Resolution(name, role, None, "review", False, "ambiguous-given-name")
-
-    # Give up → review. Never silently drop real human names.
-    return Resolution(name, role, None, "review", False, "no-email-no-match" if not email else "unresolved")
+    return _resolve_tier2_probabilistic(name, role, roster, known_people, threshold, email)
 
 
 def resolve_attendees(

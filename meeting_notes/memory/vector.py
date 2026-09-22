@@ -37,6 +37,32 @@ def _driver() -> Any:
     return get_driver()
 
 
+def _format_entity_sections(
+    attendees: list[str] | None,
+    topics: list[str] | None,
+    decisions: list[str] | None,
+    actions: list[str] | None,
+) -> list[str]:
+    parts: list[str] = []
+    if attendees:
+        clean_names = [n.strip() for n in attendees if n and n.strip()]
+        if clean_names:
+            parts.append(f"Attendees: {', '.join(clean_names)}")
+    if topics:
+        clean_topics = [t.strip() for t in topics if t and t.strip()]
+        if clean_topics:
+            parts.append(f"Topics: {', '.join(clean_topics)}")
+    if decisions:
+        clean_decisions = [d.strip() for d in decisions if d and d.strip()]
+        if clean_decisions:
+            parts.append(f"Decisions: {'; '.join(clean_decisions)}")
+    if actions:
+        clean_actions = [a.strip() for a in actions if a and a.strip()]
+        if clean_actions:
+            parts.append(f"Action Items: {'; '.join(clean_actions)}")
+    return parts
+
+
 def format_meeting_chunk(
     *,
     title: str = "",
@@ -67,26 +93,65 @@ def format_meeting_chunk(
         meta.append(f"Platform: {platform}")
     if meta:
         parts.append(" | ".join(meta))
-    if attendees:
-        clean_names = [n.strip() for n in attendees if n and n.strip()]
-        if clean_names:
-            parts.append(f"Attendees: {', '.join(clean_names)}")
-    if topics:
-        clean_topics = [t.strip() for t in topics if t and t.strip()]
-        if clean_topics:
-            parts.append(f"Topics: {', '.join(clean_topics)}")
-    if decisions:
-        clean_decisions = [d.strip() for d in decisions if d and d.strip()]
-        if clean_decisions:
-            parts.append(f"Decisions: {'; '.join(clean_decisions)}")
-    if actions:
-        clean_actions = [a.strip() for a in actions if a and a.strip()]
-        if clean_actions:
-            parts.append(f"Action Items: {'; '.join(clean_actions)}")
+
+    parts.extend(_format_entity_sections(attendees, topics, decisions, actions))
+
     if summary:
         parts.append(f"Summary: {summary.strip()}")
 
     return "\n".join(parts)
+
+
+def _slice_body_text(
+    body_text: str, step: int, overlap_chars: int, context_header: str
+) -> list[str]:
+    chunks: list[str] = []
+    start = 0
+    while start < len(body_text):
+        end = min(start + step, len(body_text))
+        if end < len(body_text):
+            break_pt = body_text.rfind("\n", start, end)
+            if break_pt > start + 100:
+                end = break_pt
+            else:
+                space_pt = body_text.rfind(" ", start, end)
+                if space_pt > start + 100:
+                    end = space_pt
+        segment = body_text[start:end].strip()
+        if segment:
+            prefix = f"[{context_header}]\n\n" if context_header else ""
+            chunks.append(f"{prefix}{segment}")
+        if end >= len(body_text):
+            break
+        start = end - overlap_chars
+        if start < 0 or start >= end:
+            start = end
+    return chunks
+
+
+def _build_chunk_header(
+    title: str,
+    original_title: str | None,
+    date: str | None,
+    attendees: list[str] | None,
+    topics: list[str] | None,
+) -> str:
+    header_parts: list[str] = []
+    if title:
+        header_parts.append(f"Meeting: {title}")
+    if original_title and original_title != title:
+        header_parts.append(f"Original: {original_title}")
+    if date:
+        header_parts.append(f"Date: {date}")
+    if attendees:
+        clean_names = [n.strip() for n in attendees if n and n.strip()]
+        if clean_names:
+            header_parts.append(f"Attendees: {', '.join(clean_names)}")
+    if topics:
+        clean_topics = [t.strip() for t in topics if t and t.strip()]
+        if clean_topics:
+            header_parts.append(f"Topics: {', '.join(clean_topics)}")
+    return " | ".join(header_parts)
 
 
 def chunk_meeting_content(
@@ -108,23 +173,7 @@ def chunk_meeting_content(
     Every chunk is guaranteed to retain the entity context header:
     meeting title, original source title, attendee names, and topics.
     """
-    header_parts: list[str] = []
-    if title:
-        header_parts.append(f"Meeting: {title}")
-    if original_title and original_title != title:
-        header_parts.append(f"Original: {original_title}")
-    if date:
-        header_parts.append(f"Date: {date}")
-    if attendees:
-        clean_names = [n.strip() for n in attendees if n and n.strip()]
-        if clean_names:
-            header_parts.append(f"Attendees: {', '.join(clean_names)}")
-    if topics:
-        clean_topics = [t.strip() for t in topics if t and t.strip()]
-        if clean_topics:
-            header_parts.append(f"Topics: {', '.join(clean_topics)}")
-
-    context_header = " | ".join(header_parts)
+    context_header = _build_chunk_header(title, original_title, date, attendees, topics)
 
     full_chunk = format_meeting_chunk(
         title=title,
@@ -153,33 +202,10 @@ def chunk_meeting_content(
         body_parts.append(f"Summary:\n{summary}")
 
     body_text = "\n\n".join(body_parts)
-    step = max_chunk_chars - len(context_header) - 50
-    if step < 200:
-        step = 200
+    step = max(200, max_chunk_chars - len(context_header) - 50)
 
-    chunks: list[str] = []
-    start = 0
-    while start < len(body_text):
-        end = min(start + step, len(body_text))
-        if end < len(body_text):
-            break_pt = body_text.rfind("\n", start, end)
-            if break_pt > start + 100:
-                end = break_pt
-            else:
-                space_pt = body_text.rfind(" ", start, end)
-                if space_pt > start + 100:
-                    end = space_pt
-        segment = body_text[start:end].strip()
-        if segment:
-            prefix = f"[{context_header}]\n\n" if context_header else ""
-            chunks.append(f"{prefix}{segment}")
-        if end >= len(body_text):
-            break
-        start = end - overlap_chars
-        if start < 0 or start >= end:
-            start = end
-
-    return chunks if chunks else [full_chunk]
+    sliced = _slice_body_text(body_text, step, overlap_chars, context_header)
+    return sliced if sliced else [full_chunk]
 
 
 def format_action_item_chunk(
@@ -239,6 +265,116 @@ async def embed_text(
         return None
 
 
+def _extract_meeting_fields(
+    meeting: Any,
+    title: str | None,
+    original_title: str | None,
+    attendees: list[str] | None,
+    topics: list[str] | None,
+    decisions: list[str] | None,
+    actions: list[str] | None,
+    summary: str | None,
+) -> tuple[
+    str | None,
+    str | None,
+    list[str] | None,
+    list[str] | None,
+    list[str] | None,
+    list[str] | None,
+    str,
+]:
+    t = title or getattr(meeting, "title", None)
+    ot = original_title or getattr(meeting, "original_title", None)
+    if attendees is None:
+        att_list = getattr(meeting, "attendees", []) or []
+        attendees = [a.name for a in att_list if getattr(a, "name", None)]
+    if topics is None:
+        topics = getattr(meeting, "topics", None)
+    if decisions is None:
+        dec_list = getattr(meeting, "decisions", []) or []
+        decisions = [d.text for d in dec_list if getattr(d, "text", None)]
+    if actions is None:
+        act_list = getattr(meeting, "action_items", []) or []
+        actions = [
+            f"{a.owner}: {a.task}" if getattr(a, "owner", None) else a.task
+            for a in act_list
+            if getattr(a, "task", None)
+        ]
+    s = summary or getattr(meeting, "summary", "") or ""
+    return t, ot, attendees, topics, decisions, actions, s
+
+
+async def _hydrate_from_graph(
+    driver: Any, meeting_id: str
+) -> dict[str, Any]:
+    try:
+        async with driver.session() as session:
+            res = await session.run(
+                """
+                MATCH (m:Meeting {id: $meeting_id})
+                OPTIONAL MATCH (p:Person)-[:ATTENDED]->(m)
+                OPTIONAL MATCH (m)-[:DISCUSSED]->(t:Topic)
+                OPTIONAL MATCH (m)-[:PRODUCED]->(d:Decision)
+                OPTIONAL MATCH (m)-[:FOLLOWS_UP]->(a:ActionItem)
+                RETURN m.title AS title, m.original_title AS original_title,
+                       m.summary AS summary, m.date AS date, m.platform AS platform,
+                       collect(DISTINCT p.name) AS attendees,
+                       collect(DISTINCT t.name) AS topics,
+                       collect(DISTINCT d.text) AS decisions,
+                       collect(
+                           DISTINCT CASE WHEN a.owner IS NOT NULL
+                           THEN a.owner + ': ' + a.task ELSE a.task END
+                       ) AS actions
+                """,
+                meeting_id=meeting_id,
+            )
+            row = await res.single()
+            return dict(row) if row else {}
+    except Exception as exc:  # noqa: BLE001
+        log.debug("vector.hydrate_meeting_failed", error=str(exc))
+        return {}
+
+
+async def _persist_meeting_chunks(
+    driver: Any,
+    meeting_id: str,
+    chunks: list[str],
+    vector: list[float],
+    settings: Settings | None,
+    embed: Any,
+    now: str,
+) -> None:
+    for idx, chunk_text in enumerate(chunks):
+        chunk_id = f"{meeting_id}_chunk_{idx}"
+        c_vector: list[float] | None = (
+            vector if idx == 0 else await embed_text(chunk_text, settings=settings, embed=embed)
+        )
+        if c_vector is not None:
+            try:
+                async with driver.session() as session:
+                    await session.run(
+                        """
+                        MERGE (c:Chunk {id: $chunk_id})
+                        SET c.meeting_id = $meeting_id,
+                            c.chunk_index = $idx,
+                            c.text = $text,
+                            c.embedding = $embedding,
+                            c.updated_at = $now
+                        WITH c
+                        MATCH (m:Meeting {id: $meeting_id})
+                        MERGE (m)-[:HAS_CHUNK]->(c)
+                        """,
+                        chunk_id=chunk_id,
+                        meeting_id=meeting_id,
+                        idx=idx,
+                        text=chunk_text,
+                        embedding=c_vector,
+                        now=now,
+                    )
+            except Exception as exc:  # noqa: BLE001
+                log.debug("vector.chunk_write_failed", error=str(exc))
+
+
 async def embed_meeting(
     meeting_id: str,
     summary: str | Any = None,
@@ -256,12 +392,7 @@ async def embed_meeting(
     settings: Settings | None = None,
     embed: Any = None,
 ) -> bool:
-    """Embed a meeting and its structured chunks onto Meeting and Chunk nodes.
-
-    Includes meeting title, original source title, attendee names, topics,
-    decisions, action items, and summary in each chunk so vector retrieval
-    matches on all participant names and titles.
-    """
+    """Embed a meeting and its structured chunks onto Meeting and Chunk nodes."""
     # 1. Resolve meeting object if passed as first argument
     if summary is not None and not isinstance(summary, str) and meeting is None:
         meeting = summary
@@ -269,64 +400,22 @@ async def embed_meeting(
 
     # 2. Extract fields from meeting object if present
     if meeting is not None:
-        title = title or getattr(meeting, "title", None)
-        original_title = original_title or getattr(meeting, "original_title", None)
-        if attendees is None:
-            att_list = getattr(meeting, "attendees", []) or []
-            attendees = [a.name for a in att_list if getattr(a, "name", None)]
-        if topics is None:
-            topics = getattr(meeting, "topics", None)
-        if decisions is None:
-            dec_list = getattr(meeting, "decisions", []) or []
-            decisions = [d.text for d in dec_list if getattr(d, "text", None)]
-        if actions is None:
-            act_list = getattr(meeting, "action_items", []) or []
-            actions = [
-                f"{a.owner}: {a.task}" if getattr(a, "owner", None) else a.task
-                for a in act_list if getattr(a, "task", None)
-            ]
-        if summary is None:
-            summary = getattr(meeting, "summary", "") or ""
+        title, original_title, attendees, topics, decisions, actions, summary = _extract_meeting_fields(
+            meeting, title, original_title, attendees, topics, decisions, actions, summary
+        )
 
-    # 3. If caller gave no metadata and no meeting object, but passed summary as string
-    # (such as in simple unit tests), we preserve summary as-is.
-    # If caller gave no summary at all, we can hydrate from Memgraph.
+    # 3. If caller gave no metadata and no meeting object, hydrate from Memgraph.
     driver_to_use = driver or _driver()
     if title is None and meeting is None and (summary is None or summary == ""):
-        try:
-            async with driver_to_use.session() as session:
-                res = await session.run(
-                    """
-                    MATCH (m:Meeting {id: $meeting_id})
-                    OPTIONAL MATCH (p:Person)-[:ATTENDED]->(m)
-                    OPTIONAL MATCH (m)-[:DISCUSSED]->(t:Topic)
-                    OPTIONAL MATCH (m)-[:PRODUCED]->(d:Decision)
-                    OPTIONAL MATCH (m)-[:FOLLOWS_UP]->(a:ActionItem)
-                    RETURN m.title AS title, m.original_title AS original_title,
-                           m.summary AS summary, m.date AS date, m.platform AS platform,
-                           collect(DISTINCT p.name) AS attendees,
-                           collect(DISTINCT t.name) AS topics,
-                           collect(DISTINCT d.text) AS decisions,
-                           collect(DISTINCT CASE WHEN a.owner IS NOT NULL THEN a.owner + ': ' + a.task ELSE a.task END) AS actions
-                    """,
-                    meeting_id=meeting_id,
-                )
-                row = await res.single()
-                if row and row.get("title"):
-                    title = title or row.get("title")
-                    original_title = original_title or row.get("original_title")
-                    if attendees is None and row.get("attendees"):
-                        attendees = [n for n in row.get("attendees") if n]
-                    if topics is None and row.get("topics"):
-                        topics = [t for t in row.get("topics") if t]
-                    if decisions is None and row.get("decisions"):
-                        decisions = [d for d in row.get("decisions") if d]
-                    if actions is None and row.get("actions"):
-                        actions = [a for a in row.get("actions") if a]
-                    if not summary and row.get("summary"):
-                        summary = row.get("summary")
-        except Exception as exc:  # noqa: BLE001
-            log.debug("vector.hydrate_meeting_failed", error=str(exc))
+        row = await _hydrate_from_graph(driver_to_use, meeting_id)
+        if row.get("title"):
+            title = title or row.get("title")
+            original_title = original_title or row.get("original_title")
+            attendees = attendees or [n for n in row.get("attendees", []) if n]
+            topics = topics or [t for t in row.get("topics", []) if t]
+            decisions = decisions or [d for d in row.get("decisions", []) if d]
+            actions = actions or [a for a in row.get("actions", []) if a]
+            summary = summary or row.get("summary")
 
     # 4. Generate structured chunk(s)
     if any([title, original_title, attendees, topics, decisions, actions]):
@@ -353,8 +442,7 @@ async def embed_meeting(
         return False
 
     now = datetime.now(UTC).isoformat()
-    driver = driver or _driver()
-    async with driver.session() as session:
+    async with driver_to_use.session() as session:
         await session.run(
             """
             MATCH (m:Meeting {id: $meeting_id})
@@ -371,36 +459,7 @@ async def embed_meeting(
         )
 
     # 5. Embed and persist individual Chunk nodes
-    for idx, chunk_text in enumerate(chunks):
-        chunk_id = f"{meeting_id}_chunk_{idx}"
-        if idx == 0:
-            c_vector = vector
-        else:
-            c_vector = await embed_text(chunk_text, settings=settings, embed=embed)
-        if c_vector is not None:
-            try:
-                async with driver.session() as session:
-                    await session.run(
-                        """
-                        MERGE (c:Chunk {id: $chunk_id})
-                        SET c.meeting_id = $meeting_id,
-                            c.chunk_index = $idx,
-                            c.text = $text,
-                            c.embedding = $embedding,
-                            c.updated_at = $now
-                        WITH c
-                        MATCH (m:Meeting {id: $meeting_id})
-                        MERGE (m)-[:HAS_CHUNK]->(c)
-                        """,
-                        chunk_id=chunk_id,
-                        meeting_id=meeting_id,
-                        idx=idx,
-                        text=chunk_text,
-                        embedding=c_vector,
-                        now=now,
-                    )
-            except Exception as exc:  # noqa: BLE001
-                log.debug("vector.chunk_write_failed", error=str(exc))
+    await _persist_meeting_chunks(driver_to_use, meeting_id, chunks, vector, settings, embed, now)
 
     log.info("vector.meeting_embedded", meeting_id=meeting_id, chunks=len(chunks))
     return True

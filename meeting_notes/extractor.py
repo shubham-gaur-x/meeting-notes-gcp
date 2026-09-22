@@ -56,14 +56,7 @@ def build_system_prompt(type_hint: str | None = None) -> str:
     return f"{_SYSTEM_PROMPT}\n\nMeeting-type guidance:\n{type_hint}"
 
 
-def repair(data: dict[str, Any], context: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Fill required fields the model left null-like, in place.
-
-    Carried from v5 unchanged. Every check goes through `_is_null_like` rather
-    than a truthiness test, because the literal string "null" is truthy.
-    """
-    ctx = context or {}
-
+def _repair_metadata(data: dict[str, Any], ctx: dict[str, Any]) -> None:
     if _is_null_like(data.get("platform")):
         data["platform"] = ctx.get("platform", "unknown")
     if _is_null_like(data.get("date")):
@@ -71,9 +64,11 @@ def repair(data: dict[str, Any], context: dict[str, Any] | None = None) -> dict[
     if _is_null_like(data.get("summary")):
         data["summary"] = data.get("title") or "No summary available"
 
-    # action_items: owner and task must be non-null strings, and an item is
-    # repaired rather than dropped -- a nameless task is still a real task.
-    for item in data.get("action_items") or []:
+
+def _repair_action_items(items: list[Any]) -> None:
+    from meeting_notes.person_resolver import is_junk_name
+
+    for item in items:
         if not isinstance(item, dict):
             continue
         if _is_null_like(item.get("owner")):
@@ -85,40 +80,54 @@ def repair(data: dict[str, Any], context: dict[str, Any] | None = None) -> dict[
         if _is_null_like(item.get("confidence")):
             item["confidence"] = 1.0
 
-    # decisions: the model's own validator coerces a plain string entry, so
-    # only a null-like confidence on the dict form needs handling here.
-    for decision in data.get("decisions") or []:
-        if isinstance(decision, dict) and _is_null_like(decision.get("confidence")):
-            decision["confidence"] = 1.0
-
-    # Normalize speech-to-text phonetic mistranscriptions and aliases
-    from meeting_notes.person_resolver import is_junk_name
-
-    # Filter out junk speakers (e.g. "Unknown speaker", "Speaker 1") from extracted attendees
-    if "attendees" in data and isinstance(data["attendees"], list):
-        data["attendees"] = [
-            att for att in data["attendees"]
-            if isinstance(att, dict) and not is_junk_name(att.get("name"))
-        ]
-
-    for att in data.get("attendees") or []:
-        if isinstance(att, dict) and att.get("name"):
-            n = str(att["name"]).strip()
-            if n.lower() in ("colin", "coalie", "colie", "coaly"):
-                att["name"] = "Coley"
-            elif n.lower() in ("lp", "l.p.", "l p"):
-                att["name"] = "LeePatrick McIntire"
-                att["email"] = "leepatrick.mcintire@onixnet.com"
-
-    for item in data.get("action_items") or []:
-        if isinstance(item, dict) and item.get("owner"):
-            o = str(item["owner"]).strip()
+        o = str(item.get("owner", "")).strip()
+        if o:
             if o != "Unknown" and is_junk_name(o):
                 item["owner"] = "Unassigned"
             elif o.lower() in ("colin", "coalie", "colie", "coaly"):
                 item["owner"] = "Coley"
             elif o.lower() in ("lp", "l.p.", "l p"):
                 item["owner"] = "LeePatrick McIntire"
+
+
+def _repair_attendees(attendees: list[Any]) -> list[dict[str, Any]]:
+    from meeting_notes.person_resolver import is_junk_name
+
+    cleaned: list[dict[str, Any]] = []
+    for att in attendees:
+        if not isinstance(att, dict) or is_junk_name(att.get("name")):
+            continue
+        n = str(att.get("name", "")).strip()
+        if n.lower() in ("colin", "coalie", "colie", "coaly"):
+            att["name"] = "Coley"
+        elif n.lower() in ("lp", "l.p.", "l p"):
+            att["name"] = "LeePatrick McIntire"
+            att["email"] = "leepatrick.mcintire@onixnet.com"
+        cleaned.append(att)
+    return cleaned
+
+
+def repair(data: dict[str, Any], context: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Fill required fields the model left null-like, in place.
+
+    Carried from v5 unchanged. Every check goes through `_is_null_like` rather
+    than a truthiness test, because the literal string "null" is truthy.
+    """
+    ctx = context or {}
+    _repair_metadata(data, ctx)
+
+    # action_items: owner and task must be non-null strings, and an item is
+    # repaired rather than dropped -- a nameless task is still a real task.
+    _repair_action_items(data.get("action_items") or [])
+
+    # decisions: the model's own validator coerces a plain string entry, so
+    # only a null-like confidence on the dict form needs handling here.
+    for decision in data.get("decisions") or []:
+        if isinstance(decision, dict) and _is_null_like(decision.get("confidence")):
+            decision["confidence"] = 1.0
+
+    if "attendees" in data and isinstance(data["attendees"], list):
+        data["attendees"] = _repair_attendees(data["attendees"])
 
     if isinstance(data.get("summary"), str):
         data["summary"] = re.sub(r"\bColin\b", "Coley", data["summary"])

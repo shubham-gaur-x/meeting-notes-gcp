@@ -153,6 +153,8 @@ class Settings(BaseSettings):
     linear_dedup_enabled: bool = True
     linear_dedup_threshold: float = 0.9
     linear_webhook_secret: str = ""
+    linear_push_self_only: bool = False
+    linear_skip_administrative: bool = True
 
     # ─── Governance ───────────────────────────────────────────────────────
     fact_min_confidence: float = 0.5

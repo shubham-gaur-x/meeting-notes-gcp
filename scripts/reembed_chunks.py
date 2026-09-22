@@ -41,7 +41,9 @@ async def reembed_all() -> dict[str, int]:
                    collect(DISTINCT p.name) AS attendees,
                    collect(DISTINCT t.name) AS topics,
                    collect(DISTINCT d.text) AS decisions,
-                   collect(DISTINCT CASE WHEN a.owner IS NOT NULL THEN a.owner + ': ' + a.task ELSE a.task END) AS actions
+                   collect(
+                       DISTINCT CASE WHEN a.owner IS NOT NULL THEN a.owner + ': ' + a.task ELSE a.task END
+                   ) AS actions
             """
         )
         meetings = [dict(r) async for r in result]
@@ -73,7 +75,9 @@ async def reembed_all() -> dict[str, int]:
                 r = await c_res.single()
                 if r:
                     stats["chunks"] += r["cnt"]
-            print(f"  ✓ Embedded meeting: {m.get('title')} (original: {m.get('original_title')}) with attendees {m.get('attendees')}")
+            print(
+                f"  ✓ Embedded meeting: {m.get('title')} (original: {m.get('original_title')})"
+            )
 
     # 2. Re-embed Action Items with rich context
     async with driver.session() as session:
@@ -102,7 +106,9 @@ async def reembed_all() -> dict[str, int]:
                 await session.run(
                     """
                     MATCH (a:ActionItem {id: $id})
-                    SET a.embedding = $embedding, a.embedding_chunk = $chunk_text, a.embedding_updated_at = $now
+                    SET a.embedding = $embedding,
+                        a.embedding_chunk = $chunk_text,
+                        a.embedding_updated_at = $now
                     """,
                     id=act["id"],
                     embedding=vec,
@@ -136,7 +142,9 @@ async def reembed_all() -> dict[str, int]:
                 await session.run(
                     """
                     MATCH (f:Fact {id: $id})
-                    SET f.embedding = $embedding, f.embedding_chunk = $chunk_text, f.embedding_updated_at = $now
+                    SET f.embedding = $embedding,
+                        f.embedding_chunk = $chunk_text,
+                        f.embedding_updated_at = $now
                     """,
                     id=f["id"],
                     embedding=vec,

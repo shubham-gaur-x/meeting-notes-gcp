@@ -406,17 +406,13 @@ def apply_source_overrides(
     return ExtractedMeeting.model_validate({**data, **overrides_copy})
 
 
-def _attach_header_emails(
-    attendees: list[dict[str, Any]], header_recipients: list[dict[str, str]]
-) -> None:
-    """Fill in missing attendee emails from verified message headers, in place.
-
-    A given name only identifies someone while it is unique among the handful
-    of addresses on the message. Matching the first Katrisa in the headers
-    attaches one person's address to another person's name, and nothing
-    downstream can tell that it guessed -- the same failure `graph_client`'s
-    owner resolution was fixed for, so it is refused the same way here.
-    """
+def _build_header_indices(
+    header_recipients: list[dict[str, str]],
+) -> tuple[
+    dict[str, list[dict[str, str]]],
+    dict[str, list[dict[str, str]]],
+    dict[str, list[dict[str, str]]],
+]:
     by_full: dict[str, list[dict[str, str]]] = {}
     by_given: dict[str, list[dict[str, str]]] = {}
     by_initials: dict[str, list[dict[str, str]]] = {}
@@ -433,6 +429,30 @@ def _attach_header_emails(
                 by_initials.setdefault(initials, []).append(hr)
             if parts[0].startswith("lee") and "patrick" in parts[0]:
                 by_initials.setdefault("lp", []).append(hr)
+    return by_full, by_given, by_initials
+
+
+def _match_header_recipient(
+    att_name: str,
+    by_full: dict[str, list[dict[str, str]]],
+    by_given: dict[str, list[dict[str, str]]],
+    by_initials: dict[str, list[dict[str, str]]],
+) -> dict[str, str] | None:
+    matches = by_full.get(att_name) or []
+    if not matches and len(att_name) >= 3 and " " not in att_name:
+        matches = by_given.get(att_name) or []
+    if not matches and len(att_name) <= 3:
+        matches = by_initials.get(att_name) or []
+    if len(matches) == 1:
+        return matches[0]
+    return None
+
+
+def _attach_header_emails(
+    attendees: list[dict[str, Any]], header_recipients: list[dict[str, str]]
+) -> None:
+    """Fill in missing attendee emails from verified message headers, in place."""
+    by_full, by_given, by_initials = _build_header_indices(header_recipients)
 
     # Prune junk speakers from the attendee list in place
     attendees[:] = [
@@ -447,18 +467,10 @@ def _attach_header_emails(
         if not att_name:
             continue
 
-        matches = by_full.get(att_name) or []
-        if not matches and len(att_name) >= 3 and " " not in att_name:
-            matches = by_given.get(att_name) or []
-        if not matches and len(att_name) <= 3:
-            matches = by_initials.get(att_name) or []
-
-        # More than one candidate is not a match, it is a coin toss.
-        if len(matches) > 1:
-            continue
-        if len(matches) == 1:
-            att["email"] = matches[0].get("email")
-            att["name"] = matches[0].get("name") or att.get("name")
+        matched = _match_header_recipient(att_name, by_full, by_given, by_initials)
+        if matched:
+            att["email"] = matched.get("email")
+            att["name"] = matched.get("name") or att.get("name")
             continue
 
         # Check known person alias dictionary as fallback
@@ -523,6 +535,35 @@ async def enrich(
 
     log.info("pipeline.enriched", meeting_id=meeting_id, steps=list(outcome))
     return outcome
+
+
+def _infer_original_title(payload: dict[str, Any], source_type: str) -> str | None:
+    orig = payload.get("original_title")
+    if orig:
+        return str(orig)
+    if source_type == "email":
+        return payload.get("subject")
+    if source_type == "calendar":
+        return payload.get("summary")
+    if source_type == "meet":
+        t = payload.get("title")
+        if t and not str(t).startswith("spaces/"):
+            return str(t)
+    return None
+
+
+async def _push_issue_trackers(
+    settings: Settings,
+    meeting: ExtractedMeeting,
+    source_id: str,
+    push_jira: Any,
+    push_linear: Any,
+) -> None:
+    tracker = (settings.issue_tracker or "jira").lower()
+    if tracker in ("jira", "both"):
+        await push_jira(meeting.action_items, meeting, source_id)
+    if tracker in ("linear", "both"):
+        await push_linear(meeting.action_items, meeting, source_id)
 
 
 async def process(
@@ -592,30 +633,15 @@ async def process(
     # Source-authoritative fields win over whatever the model inferred.
     meeting = apply_source_overrides(meeting, adapter.extract_overrides(payload))
     if not meeting.original_title:
-        orig = payload.get("original_title")
-        if not orig:
-            if adapter.source_type == "email":
-                orig = payload.get("subject")
-            elif adapter.source_type == "calendar":
-                orig = payload.get("summary")
-            elif adapter.source_type == "meet":
-                t = payload.get("title")
-                if t and not str(t).startswith("spaces/"):
-                    orig = t
+        orig = _infer_original_title(payload, adapter.source_type)
         if orig:
-            meeting = meeting.model_copy(update={"original_title": str(orig)})
+            meeting = meeting.model_copy(update={"original_title": orig})
 
     bound = bound.bind(step="graph_write", meeting_title=meeting.title)
     meeting_id: str = await upsert(meeting, record.source_id)
 
     # Push to configured issue trackers (Jira and/or Linear)
-    tracker = (settings.issue_tracker or "jira").lower()
-    if tracker in ("jira", "both"):
-        bound = bound.bind(step="jira_push")
-        await push_jira(meeting.action_items, meeting, record.source_id)
-    if tracker in ("linear", "both"):
-        bound = bound.bind(step="linear_push")
-        await push_linear(meeting.action_items, meeting, record.source_id)
+    await _push_issue_trackers(settings, meeting, record.source_id, push_jira, push_linear)
 
     bound = bound.bind(step="enrich")
     try:

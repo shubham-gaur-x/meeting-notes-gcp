@@ -1207,7 +1207,12 @@ async def resolve_person_review(
         async for r in res:
             resolved_rec = dict(r)
             break
-        return resolved_rec or {"review_id": review_id, "status": "resolved", "name": norm_name, "email": norm_email}
+        return resolved_rec or {
+            "review_id": review_id,
+            "status": "resolved",
+            "name": norm_name,
+            "email": norm_email,
+        }
 
 
 async def delete_person_review(

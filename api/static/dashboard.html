@@ -433,17 +433,7 @@
   .ticket-badge.jira { color:#60a5fa; background:rgba(96,165,250,0.15); border:1px solid rgba(96,165,250,0.3); }
   .ticket-badge.jira:hover { background:rgba(96,165,250,0.25); }
 
-  /* Command Palette (Cmd+K) */
-  .cmd-k-trigger { background:var(--raise); border:1px solid var(--line); color:var(--muted); padding:6px 12px; border-radius:7px; font-size:12px; cursor:pointer; display:inline-flex; align-items:center; gap:7px; transition:all .15s ease; font-family:inherit; }
-  .cmd-k-trigger:hover { border-color:var(--accent); color:var(--ink); }
-  .cmd-k-trigger kbd { background:var(--bg); border:1px solid var(--line); border-radius:4px; padding:1px 5px; font-size:10px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
-  #cmd-dialog { max-width:620px; border-radius:12px; overflow:hidden; border:1px solid var(--line); background:var(--panel); box-shadow:0 20px 40px rgba(0,0,0,0.5); }
-  .cmd-input-wrap { padding:14px 18px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:10px; }
-  .cmd-input { width:100%; background:transparent; border:none; color:var(--ink); font-size:14px; outline:none; font-family:inherit; }
-  .cmd-results { max-height:360px; overflow-y:auto; padding:8px; }
-  .cmd-item { display:flex; align-items:center; justify-content:space-between; padding:9px 12px; border-radius:7px; cursor:pointer; font-size:13px; color:var(--ink); transition:background .1s ease; text-decoration:none; }
-  .cmd-item:hover, .cmd-item.active { background:var(--accent-glow); color:var(--accent); }
-  .cmd-item .cmd-badge { font-size:10px; padding:2px 6px; border-radius:4px; background:var(--raise); color:var(--muted); text-transform:uppercase; }
+
 </style>
 </head>
 <body>
@@ -482,12 +472,7 @@
     <button data-panel="meetings">Communications</button>
     <button data-panel="graph">Knowledge Graph</button>
   </nav>
-  <div class="header-actions">
-    <button class="cmd-k-trigger" onclick="openCmdPalette()" title="Press ⌘K or Ctrl+K to search">
-      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
-      <kbd>⌘K</kbd> Quick Search
-    </button>
-  </div>
+  <div class="header-actions"></div>
 </header>
 
 <main>
@@ -815,15 +800,6 @@
       <button type="button" class="action" onclick="submitAddAttendee()" style="padding:7px 16px;font-size:12px">Add Attendee</button>
     </div>
   </div>
-</dialog>
-
-<dialog id="cmd-dialog">
-  <div class="cmd-input-wrap">
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--muted)"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
-    <input class="cmd-input" id="cmd-input" placeholder="Search meetings, actions, topics, or type a command…" autocomplete="off" oninput="filterCmdPalette(this.value)">
-    <kbd style="font-size:11px;color:var(--muted);background:var(--raise);padding:2px 6px;border-radius:4px;border:1px solid var(--line)">ESC</kbd>
-  </div>
-  <div class="cmd-results" id="cmd-results"></div>
 </dialog>
 
 <dialog id="chat-settings-modal">
@@ -1701,107 +1677,7 @@ async function setActionDone(button, jiraKey, makeDone) {
   await loadActions();
 }
 
-// ─── Cmd+K Command Palette ──────────────────────────────────────────
-function openCmdPalette() {
-  const dlg = $("#cmd-dialog");
-  if (!dlg) return;
-  dlg.showModal();
-  const input = $("#cmd-input");
-  input.value = "";
-  filterCmdPalette("");
-  setTimeout(() => input.focus(), 50);
-}
 
-function filterCmdPalette(q) {
-  const query = (q || "").toLowerCase().trim();
-  const resultsEl = $("#cmd-results");
-  if (!resultsEl) return;
-
-  const items = [];
-
-  const tabs = [
-    { title: "Overview", desc: "View executive metrics & recent activity", panel: "overview" },
-    { title: "Communications", desc: "Browse calls, transcripts, and email threads", panel: "meetings" },
-    { title: "Action Items", desc: "Table view of all commitments", panel: "actions" },
-    { title: "Workstreams", desc: "Community clusters and influential nodes", panel: "workstreams" },
-    { title: "Graph", desc: "Interactive force-directed graph view", panel: "graph" },
-    { title: "Ask Graph", desc: "Historical multi-turn conversational queries", panel: "ask" },
-    { title: "Needs You", desc: "Review queue and blocker triage", panel: "review" },
-  ];
-  tabs.forEach(t => {
-    if (!query || t.title.toLowerCase().includes(query) || t.desc.toLowerCase().includes(query)) {
-      items.push({
-        title: `Go to ${t.title}`,
-        desc: t.desc,
-        badge: "Tab",
-        action: () => {
-          $("#cmd-dialog").close();
-          switchTab(t.panel, true);
-        }
-      });
-    }
-  });
-
-  if (ACTIONS && ACTIONS.length) {
-    ACTIONS.filter(a => !query || (a.task && a.task.toLowerCase().includes(query)) || (a.owner && a.owner.toLowerCase().includes(query)))
-      .slice(0, 4)
-      .forEach(a => {
-        items.push({
-          title: a.task,
-          desc: `${a.owner || "Unassigned"} · ${a.linear_identifier || a.jira_key || "No ticket"}`,
-          badge: "Action",
-          action: () => {
-            $("#cmd-dialog").close();
-            openActionDetail(a.id);
-          }
-        });
-      });
-  }
-
-  if (MEETINGS && MEETINGS.length) {
-    MEETINGS.filter(m => !query || (m.title && m.title.toLowerCase().includes(query)))
-      .slice(0, 4)
-      .forEach(m => {
-        items.push({
-          title: m.title,
-          desc: `${m.date || "Past meeting"}`,
-          badge: "Meeting",
-          action: () => {
-            $("#cmd-dialog").close();
-            openMeetingDetail(m.id);
-          }
-        });
-      });
-  }
-
-  if (!items.length) {
-    resultsEl.innerHTML = `<div style="padding:20px;text-align:center;color:var(--muted);font-size:13px">No results found for "${esc(query)}"</div>`;
-    return;
-  }
-
-  resultsEl.innerHTML = items.map((it, idx) => `
-    <div class="cmd-item${idx === 0 ? " active" : ""}" data-idx="${idx}">
-      <div>
-        <div style="font-weight:500">${esc(it.title)}</div>
-        <div style="font-size:11px;color:var(--muted)">${esc(it.desc)}</div>
-      </div>
-      <span class="cmd-badge">${esc(it.badge)}</span>
-    </div>
-  `).join("");
-
-  resultsEl.querySelectorAll(".cmd-item").forEach((el, idx) => {
-    el.onclick = () => items[idx].action();
-  });
-}
-
-window.addEventListener("keydown", e => {
-  if ((e.metaKey || e.ctrlKey) && e.key === "k") {
-    e.preventDefault();
-    const dlg = $("#cmd-dialog");
-    if (dlg && dlg.open) dlg.close();
-    else openCmdPalette();
-  }
-});
 
 async function loadWorkstreams() {
   try {

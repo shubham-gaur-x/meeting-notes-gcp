@@ -60,6 +60,7 @@ async def test_linear_pusher_creates_issues_and_gates_low_confidence() -> None:
         updated_graph_info.append((action_id, linear_id, linear_identifier, linear_url, linear_state))
 
     settings = Settings(
+        _env_file=None,
         linear_api_key="test_api_key",
         linear_team_id="team_1",
         linear_confidence_threshold=0.6,
@@ -127,6 +128,7 @@ async def test_linear_pusher_dedup_comments_on_existing_issue() -> None:
         updated_linear_info.append(args)
 
     settings = Settings(
+        _env_file=None,
         linear_api_key="test_api_key",
         linear_team_id="team_1",
         linear_confidence_threshold=0.6,
@@ -166,6 +168,7 @@ async def test_linear_pusher_idempotent_skip() -> None:
         return {"id": "iss_new", "identifier": "ENG-102"}
 
     settings = Settings(
+        _env_file=None,
         linear_api_key="test_api_key",
         linear_team_id="team_1",
     )

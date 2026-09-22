@@ -66,7 +66,8 @@ SYNTHESIS_SYSTEM_PREFIX = (
     "plainly -- do not guess.\n"
     "- Contacts & Nicknames: The team uses nicknames and first names (e.g. 'LP' = LeePatrick McIntire, "
     "'Coley' = Coley Woyak, 'Matteo' = Matteo Vaiente, 'Michael' = Michael Baylard). "
-    "Always refer to colleagues by their canonical full names in your final answer while understanding their nicknames.\n\n"
+    "Always refer to colleagues by their canonical full names in your final answer "
+    "while understanding their nicknames.\n\n"
     'Respond ONLY with JSON of exactly this shape: {"answer": "your markdown answer here"}.\n'
     "The answer value must be formatted markdown text, not nested objects or lists.\n\n"
     "Context:\n"
@@ -136,6 +137,92 @@ def _links_suffix(*links: str | None) -> str:
     return f" | Links: {' '.join(present)}" if present else ""
 
 
+async def _query_people_context(
+    session: Any,
+    people: list[str],
+    settings: Settings,
+    lines: list[str],
+    node_ids: list[str],
+) -> None:
+    from meeting_notes import person_resolver
+
+    expanded_people = person_resolver.expand_contact_mentions(people)
+    result = await session.run(
+        """
+        UNWIND $names AS name
+        MATCH (p:Person)
+        WHERE toLower(p.name) CONTAINS toLower(name)
+           OR toLower(p.email) CONTAINS toLower(name)
+           OR ANY(alias IN coalesce(p.aliases, []) WHERE toLower(alias) = toLower(name))
+        RETURN DISTINCT p.id AS id, p.name AS name, p.email AS email, p.aliases AS aliases
+        LIMIT 10
+        """,
+        names=expanded_people,
+    )
+    async for record in result:
+        node_ids.append(record["id"])
+        aliases = record.get("aliases") or []
+        alias_str = f" (aka {', '.join(aliases)})" if aliases else ""
+        lines.append(f"Person: {record['name']} <{record['email']}>{alias_str}")
+
+    actions_by_person = await session.run(
+        """
+        UNWIND $names AS name
+        MATCH (a:ActionItem)
+        WHERE (toLower(a.owner) CONTAINS toLower(name)
+           OR EXISTS {
+               MATCH (a)-[:ASSIGNED_TO]->(p:Person)
+               WHERE toLower(p.name) CONTAINS toLower(name)
+                  OR toLower(p.email) CONTAINS toLower(name)
+                  OR ANY(alias IN coalesce(p.aliases, []) WHERE toLower(alias) = toLower(name))
+           })
+        OPTIONAL MATCH (m:Meeting)-[:FOLLOWS_UP]->(a)
+        RETURN DISTINCT a.id AS id, a.task AS task, a.owner AS owner,
+               a.due AS due, a.priority AS priority, a.jira_key AS jira_key,
+               m.title AS meeting_title, m.source_id AS source_id, m.date AS date
+        LIMIT 10
+        """,
+        names=expanded_people,
+    )
+    async for record in actions_by_person:
+        node_ids.append(record["id"])
+        links = _links_suffix(
+            _jira_link(record.get("jira_key"), settings),
+            _gmail_link(record.get("source_id")),
+        )
+        owner_full = person_resolver.resolve_to_full_name(record["owner"])
+        lines.append(
+            f"ActionItem: Task: {record['task']} | Owner: {owner_full}"
+            f" | Due: {record['due'] or 'None'} | Priority: {record['priority']}"
+            f" | Source: {record['meeting_title']}{links}"
+        )
+
+
+async def _query_semantic_chunks(
+    question: str,
+    driver: Any,
+    settings: Settings,
+    lines: list[str],
+    node_ids: list[str],
+) -> None:
+    try:
+        from meeting_notes.llm_client import embed
+        from meeting_notes.memory import vector
+
+        chunk_hits = await vector.search_similar_chunks(
+            question, limit=4, driver=driver, settings=settings, embed=embed
+        )
+        for hit in chunk_hits:
+            if hit.get("id"):
+                node_ids.append(hit["id"])
+            title = hit.get("meeting_title") or "Meeting"
+            orig_t = hit.get("original_title")
+            orig = f" (Source: {orig_t})" if orig_t and orig_t != title else ""
+            lines.append(f"Transcript & Discussion Chunk [{title}{orig}]:\n{hit.get('text', '')}")
+    except Exception as exc:
+        log.warning("retrieval.chunk_search_failed", error=str(exc))
+
+
 async def assemble_context(
     entities: dict[str, Any],
     question: str,
@@ -180,58 +267,7 @@ async def assemble_context(
 
         # 2. People & Contact Profiles
         if people:
-            from meeting_notes import person_resolver
-            expanded_people = person_resolver.expand_contact_mentions(people)
-            result = await session.run(
-                """
-                UNWIND $names AS name
-                MATCH (p:Person)
-                WHERE toLower(p.name) CONTAINS toLower(name)
-                   OR toLower(p.email) CONTAINS toLower(name)
-                   OR ANY(alias IN coalesce(p.aliases, []) WHERE toLower(alias) = toLower(name))
-                RETURN DISTINCT p.id AS id, p.name AS name, p.email AS email, p.aliases AS aliases
-                LIMIT 10
-                """,
-                names=expanded_people,
-            )
-            async for record in result:
-                node_ids.append(record["id"])
-                aliases = record.get("aliases") or []
-                alias_str = f" (aka {', '.join(aliases)})" if aliases else ""
-                lines.append(f"Person: {record['name']} <{record['email']}>{alias_str}")
-
-            # Also query ActionItems owned by or assigned to these people
-            actions_by_person = await session.run(
-                """
-                UNWIND $names AS name
-                MATCH (a:ActionItem)
-                WHERE (toLower(a.owner) CONTAINS toLower(name)
-                   OR EXISTS {
-                       MATCH (a)-[:ASSIGNED_TO]->(p:Person)
-                       WHERE toLower(p.name) CONTAINS toLower(name)
-                          OR toLower(p.email) CONTAINS toLower(name)
-                          OR ANY(alias IN coalesce(p.aliases, []) WHERE toLower(alias) = toLower(name))
-                   })
-                OPTIONAL MATCH (m:Meeting)-[:FOLLOWS_UP]->(a)
-                RETURN DISTINCT a.id AS id, a.task AS task, a.owner AS owner,
-                       a.due AS due, a.priority AS priority, a.jira_key AS jira_key,
-                       m.title AS meeting_title, m.source_id AS source_id, m.date AS date
-                LIMIT 10
-                """,
-                names=expanded_people,
-            )
-            async for record in actions_by_person:
-                node_ids.append(record["id"])
-                links = _links_suffix(
-                    _jira_link(record.get("jira_key"), settings),
-                    _gmail_link(record.get("source_id")),
-                )
-                owner_full = person_resolver.resolve_to_full_name(record['owner'])
-                lines.append(
-                    f"ActionItem: Task: {record['task']} | Owner: {owner_full}"
-                    f" | Due: {record['due'] or 'None'} | Priority: {record['priority']}"
-                    f" | Source: {record['meeting_title']}{links}"
-                )
+            await _query_people_context(session, people, settings, lines, node_ids)
 
         # 3. Topics & Meetings
         if topics:
@@ -292,21 +328,7 @@ async def assemble_context(
     # 6. Semantic search over structured chunks (hybrid vector retrieval)
     # Pulls relevant spoken discussion chunks and attendee details into the synthesis context
     if search_meetings is None:
-        try:
-            from meeting_notes.memory import vector
-            from meeting_notes.llm_client import embed
-
-            chunk_hits = await vector.search_similar_chunks(
-                question, limit=4, driver=driver, settings=settings, embed=embed
-            )
-            for hit in chunk_hits:
-                if hit.get("id"):
-                    node_ids.append(hit["id"])
-                title = hit.get("meeting_title") or "Meeting"
-                orig = f" (Source: {hit['original_title']})" if hit.get("original_title") and hit["original_title"] != title else ""
-                lines.append(f"Transcript & Discussion Chunk [{title}{orig}]:\n{hit.get('text', '')}")
-        except Exception as exc:
-            log.warning("retrieval.chunk_search_failed", error=str(exc))
+        await _query_semantic_chunks(question, driver, settings, lines, node_ids)
 
     # Semantic search as a fallback: a question sharing no keywords with any
     # meeting still finds the right one by meaning. This is the mechanism

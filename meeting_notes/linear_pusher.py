@@ -12,6 +12,7 @@ import structlog
 
 from meeting_notes import dedup
 from meeting_notes.config import Settings, get_settings
+from meeting_notes.jira_pusher import is_administrative_task, is_self_owned
 from meeting_notes.models import ActionItem, ExtractedMeeting
 from meeting_notes.utils import gmail_thread_url, uuid5_id
 
@@ -171,8 +172,25 @@ async def _is_gated(
     add_comment: Any,
     update_linear_info: Any,
 ) -> bool:
-    """Check confidence threshold and semantic deduplication."""
+    """Check administrative tasks, self-ownership, confidence threshold, and semantic deduplication."""
     settings = settings or get_settings()
+
+    if getattr(settings, "linear_skip_administrative", True) and is_administrative_task(action.task):
+        log.info(
+            "linear_pusher.skipped_administrative",
+            task=action.task[:60],
+            owner=action.owner,
+        )
+        return True
+
+    if getattr(settings, "linear_push_self_only", False) and not is_self_owned(action.owner, settings):
+        log.info(
+            "linear_pusher.skipped_not_self",
+            task=action.task[:60],
+            owner=action.owner,
+        )
+        return True
+
     if action.confidence < settings.linear_confidence_threshold:
         await mark_needs_review(action_id, f"confidence {action.confidence:.2f} below threshold")
         log.info(
