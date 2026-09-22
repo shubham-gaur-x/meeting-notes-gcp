@@ -479,7 +479,7 @@
     <button data-panel="overview" class="active">Overview</button>
     <button data-panel="ask">Ask</button>
     <button data-panel="actions">Action Items</button>
-    <button data-panel="meetings">Meetings</button>
+    <button data-panel="meetings">Communications</button>
     <button data-panel="graph">Knowledge Graph</button>
   </nav>
   <div class="header-actions">
@@ -647,13 +647,31 @@
     </div>
   </section>
 
-  <!-- 4. Meetings -->
+  <!-- 4. Communications (Meetings, Calls, Emails & Chats) -->
   <section class="panel" id="meetings">
-    <div class="row">
-      <input id="mfilter" placeholder="Filter by title…" oninput="renderMeetings()">
+    <div class="row" style="flex-wrap:wrap;gap:10px;align-items:center">
+      <div class="subnav-bar" style="margin:0;padding:2px;display:inline-flex">
+        <button type="button" id="mfilter-all" class="subnav-btn active" onclick="setMeetingSourceFilter('all')">
+          <span>All</span>
+          <span id="mcount-all" class="pill" style="margin-left:4px;padding:0 5px;font-size:10px">0</span>
+        </button>
+        <button type="button" id="mfilter-calls" class="subnav-btn" onclick="setMeetingSourceFilter('calls')">
+          <span>🎥 Calls & Meetings</span>
+          <span id="mcount-calls" class="pill" style="margin-left:4px;padding:0 5px;font-size:10px">0</span>
+        </button>
+        <button type="button" id="mfilter-emails" class="subnav-btn" onclick="setMeetingSourceFilter('emails')">
+          <span>✉️ Email Threads</span>
+          <span id="mcount-emails" class="pill" style="margin-left:4px;padding:0 5px;font-size:10px">0</span>
+        </button>
+        <button type="button" id="mfilter-chats" class="subnav-btn" onclick="setMeetingSourceFilter('chats')">
+          <span>💬 Chats</span>
+          <span id="mcount-chats" class="pill" style="margin-left:4px;padding:0 5px;font-size:10px">0</span>
+        </button>
+      </div>
+      <input id="mfilter" placeholder="Filter communications by title, source, or topic…" style="min-width:240px;flex:1" oninput="renderMeetings()">
       <button class="action" onclick="loadMeetings()">Refresh</button>
     </div>
-    <p class="hint">Click any meeting to see what was decided, who was there, and what came out of it.</p>
+    <p class="hint">Click any communication session to inspect what was decided, who was there, and what came out of it.</p>
     <div class="scroll" id="meetings-body"></div>
   </section>
 
@@ -1156,7 +1174,7 @@ async function loadOverview() {
       get(`/graph/digest/weekly?${range.qs}`), get("/graph/decisions?limit=6")]);
     const s = d.summary || {};
     $("#cards").innerHTML = [
-      ["Meetings", s.total_meetings, ""],
+      ["Communications", s.total_meetings, ""],
       ["Decisions", s.total_decisions, ""],
       ["Open actions", s.open_action_items, ""],
       ["High priority", s.high_priority_open, s.high_priority_open > 0 ? "hot" : ""],
@@ -1192,16 +1210,64 @@ async function loadOverview() {
   } catch (e) { fail("#overview-body", e); }
 }
 
+let MEETING_SOURCE_FILTER = "all";
+
+function isCallSession(m) {
+  const k = (m.kind || "").toLowerCase();
+  const p = (m.platform || "").toLowerCase();
+  return k === "meeting" || k === "1_on_1" || k === "1-1" || k === "standup" || p.includes("meet") || p.includes("zoom");
+}
+
+function isEmailSession(m) {
+  const k = (m.kind || "").toLowerCase();
+  const p = (m.platform || "").toLowerCase();
+  return k.includes("email") || p.includes("email") || p.includes("gmail") || p.includes("mail");
+}
+
+function isChatSession(m) {
+  const k = (m.kind || "").toLowerCase();
+  const p = (m.platform || "").toLowerCase();
+  return k.includes("chat") || (k.includes("thread") && !isEmailSession(m)) || p.includes("slack") || p.includes("teams");
+}
+
+function setMeetingSourceFilter(source) {
+  MEETING_SOURCE_FILTER = source;
+  document.querySelectorAll('#meetings .subnav-btn').forEach(b => b.classList.remove('active'));
+  const activeBtn = $(`#mfilter-${source}`);
+  if (activeBtn) activeBtn.classList.add('active');
+  renderMeetings();
+}
+
+function updateMeetingFilterCounts() {
+  const allCount = MEETINGS.length;
+  const callsCount = MEETINGS.filter(isCallSession).length;
+  const emailsCount = MEETINGS.filter(isEmailSession).length;
+  const chatsCount = MEETINGS.filter(isChatSession).length;
+
+  if ($("#mcount-all")) $("#mcount-all").textContent = allCount;
+  if ($("#mcount-calls")) $("#mcount-calls").textContent = callsCount;
+  if ($("#mcount-emails")) $("#mcount-emails").textContent = emailsCount;
+  if ($("#mcount-chats")) $("#mcount-chats").textContent = chatsCount;
+}
+
 async function loadMeetings() {
   try {
     const d = await get("/graph/meetings/recent?limit=100");
     MEETINGS = d.meetings || [];
+    updateMeetingFilterCounts();
     renderMeetings();
   } catch (e) { fail("#meetings-body", e); }
 }
+
 function renderMeetings() {
   const q = ($("#mfilter").value || "").toLowerCase();
-  const rows = MEETINGS.filter(m => !q ||
+  const sourceFiltered = MEETINGS.filter(m => {
+    if (MEETING_SOURCE_FILTER === "calls") return isCallSession(m);
+    if (MEETING_SOURCE_FILTER === "emails") return isEmailSession(m);
+    if (MEETING_SOURCE_FILTER === "chats") return isChatSession(m);
+    return true;
+  });
+  const rows = sourceFiltered.filter(m => !q ||
     (m.title || "").toLowerCase().includes(q) ||
     (m.original_title || "").toLowerCase().includes(q) ||
     (m.platform || "").toLowerCase().includes(q) ||
@@ -1209,7 +1275,7 @@ function renderMeetings() {
   );
   $("#meetings-body").innerHTML = table(rows, [
     ["Date", r => `<span style="white-space:nowrap;font-variant-numeric:tabular-nums;">${esc(r.date)}</span>`, "105px"],
-    ["Meeting", r => {
+    ["Topic / Title", r => {
       const orig = (r.original_title && r.original_title !== r.title)
         ? `<div style="font-size:11px;color:var(--muted);margin-top:3px;display:flex;align-items:center;gap:4px">
              <span class="pill" style="font-size:10px;padding:1px 5px;background:rgba(255, 94, 0, 0.12);color:var(--accent,#ff5e00);border-color:rgba(255,94,0,0.25);margin:0">Source</span>
@@ -1415,7 +1481,7 @@ function filterCmdPalette(q) {
 
   const tabs = [
     { title: "Overview", desc: "View executive metrics & recent activity", panel: "overview" },
-    { title: "Meetings", desc: "Browse transcripts and decisions", panel: "meetings" },
+    { title: "Communications", desc: "Browse calls, transcripts, and email threads", panel: "meetings" },
     { title: "Action Items", desc: "Table view of all commitments", panel: "actions" },
     { title: "Workstreams", desc: "Community clusters and influential nodes", panel: "workstreams" },
     { title: "Graph", desc: "Interactive force-directed graph view", panel: "graph" },
