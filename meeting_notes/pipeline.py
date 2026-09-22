@@ -563,6 +563,19 @@ async def process(
 
     # Source-authoritative fields win over whatever the model inferred.
     meeting = apply_source_overrides(meeting, adapter.extract_overrides(payload))
+    if not meeting.original_title:
+        orig = payload.get("original_title")
+        if not orig:
+            if adapter.source_type == "email":
+                orig = payload.get("subject")
+            elif adapter.source_type == "calendar":
+                orig = payload.get("summary")
+            elif adapter.source_type == "meet":
+                t = payload.get("title")
+                if t and not str(t).startswith("spaces/"):
+                    orig = t
+        if orig:
+            meeting = meeting.model_copy(update={"original_title": str(orig)})
 
     bound = bound.bind(step="graph_write", meeting_title=meeting.title)
     meeting_id: str = await upsert(meeting, record.source_id)

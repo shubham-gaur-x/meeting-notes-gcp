@@ -161,6 +161,7 @@ async def _write_meeting(
         ON CREATE SET m.created_at = $now, m.relevance_weight = 1.0
         SET m.title = $title,
             m.title_norm = $title_norm,
+            m.original_title = $original_title,
             m.is_recap = $is_recap,
             m.kind = $kind,
             m.platform = $platform,
@@ -176,6 +177,7 @@ async def _write_meeting(
         id=meeting_id,
         title=meeting.title,
         title_norm=normalize_meeting_title(meeting.title),
+        original_title=meeting.original_title or meeting.title,
         is_recap=is_recap_title(meeting.title),
         kind=meeting.kind,
         platform=meeting.platform,
@@ -811,7 +813,8 @@ async def get_recent_meetings(limit: int = 10, driver: Any = None) -> list[dict[
         result = await session.run(
             """
             MATCH (m:Meeting)
-            RETURN m.id AS id, m.title AS title, m.date AS date, m.kind AS kind,
+            RETURN m.id AS id, m.title AS title, coalesce(m.original_title, m.title) AS original_title,
+                   m.date AS date, m.kind AS kind,
                    m.summary AS summary, m.platform AS platform,
                    coalesce(m.relevance_weight, 1.0) AS relevance_weight
             ORDER BY m.date DESC
@@ -830,8 +833,11 @@ async def get_timeline(limit: int = 30, driver: Any = None) -> list[dict[str, An
             """
             MATCH (m:Meeting)
             OPTIONAL MATCH (m)-[p:PRECEDED_BY]->(prior:Meeting)
-            RETURN m.id AS id, m.title AS title, m.date AS date, m.kind AS kind,
-                   prior.id AS prior_id, prior.title AS prior_title, p.gap_days AS gap_days
+            RETURN m.id AS id, m.title AS title, coalesce(m.original_title, m.title) AS original_title,
+                   m.date AS date, m.kind AS kind,
+                   prior.id AS prior_id, prior.title AS prior_title,
+                   coalesce(prior.original_title, prior.title) AS prior_original_title,
+                   p.gap_days AS gap_days
             ORDER BY m.date DESC
             LIMIT $limit
             """,
@@ -1002,7 +1008,8 @@ async def get_person_reviews(limit: int = 50, driver: Any = None) -> list[dict[s
             MATCH (m:Meeting)-[:NEEDS_REVIEW]->(r:PersonReview)
             WHERE coalesce(r.status, 'pending') = 'pending'
             RETURN r.id AS id, r.name AS name, r.role AS role, r.reason AS reason,
-                   m.id AS meeting_id, m.title AS meeting_title
+                   m.id AS meeting_id, m.title AS meeting_title,
+                   coalesce(m.original_title, m.title) AS meeting_original_title
             LIMIT $limit
             """,
             limit=limit,
@@ -1170,7 +1177,8 @@ async def get_open_blockers(limit: int = 50, driver: Any = None) -> list[dict[st
             MATCH (m:Meeting)-[:RAISES_BLOCKER]->(b:Blocker)
             WHERE coalesce(b.status, 'open') = 'open'
             RETURN b.id AS id, b.text AS text, b.raised_by AS raised_by,
-                   m.id AS meeting_id, m.title AS meeting_title
+                   m.id AS meeting_id, m.title AS meeting_title,
+                   coalesce(m.original_title, m.title) AS meeting_original_title
             LIMIT $limit
             """,
             limit=limit,
@@ -1570,7 +1578,8 @@ async def get_meeting_detail(meeting_id: str, driver: Any = None) -> dict[str, A
             session,
             """
             MATCH (m:Meeting {id: $meeting_id})
-            RETURN m.id AS id, m.title AS title, m.date AS date, m.kind AS kind,
+            RETURN m.id AS id, m.title AS title, coalesce(m.original_title, m.title) AS original_title,
+                   m.date AS date, m.kind AS kind,
                    m.platform AS platform, m.summary AS summary,
                    m.duration_minutes AS duration_minutes
             """,
@@ -1643,7 +1652,9 @@ async def get_recent_decisions(limit: int = 25, driver: Any = None) -> list[dict
             """
             MATCH (m:Meeting)-[:PRODUCED]->(d:Decision)
             RETURN d.id AS id, d.text AS text, d.confidence AS confidence,
-                   m.id AS meeting_id, m.title AS meeting_title, m.date AS date
+                   m.id AS meeting_id, m.title AS meeting_title,
+                   coalesce(m.original_title, m.title) AS meeting_original_title,
+                   m.date AS date
             ORDER BY m.date DESC
             LIMIT $limit
             """,

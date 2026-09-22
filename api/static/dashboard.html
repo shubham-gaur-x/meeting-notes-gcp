@@ -983,9 +983,13 @@ async function loadOverview() {
       `<h3>Latest decisions</h3>` +
       `<div class="muted" style="font-size:12px;margin:-6px 0 8px">The most recent decisions, regardless of the range above.</div>` +
       ((dec.decisions && dec.decisions.length)
-        ? dec.decisions.map(x =>
-            `<div class="quote">${esc(x.text)}<div class="muted" style="font-size:12px">` +
-            `${esc(x.date)} · ${esc(x.meeting_title)}</div></div>`).join("")
+        ? dec.decisions.map(x => {
+            const orig = (x.meeting_original_title && x.meeting_original_title !== x.meeting_title)
+              ? ` · <span class="muted" style="font-size:11px" title="Original meeting name">Source: ${esc(x.meeting_original_title)}</span>`
+              : "";
+            return `<div class="quote">${esc(x.text)}<div class="muted" style="font-size:12px">` +
+              `${esc(x.date)} · ${esc(x.meeting_title)}${orig}</div></div>`;
+          }).join("")
         : empty("No decisions captured yet.")) +
       `<h3>${hi.length ? "Needs attention" : "Open commitments"}</h3>` +
       `<div class="scroll">` +
@@ -1007,11 +1011,24 @@ async function loadMeetings() {
 }
 function renderMeetings() {
   const q = ($("#mfilter").value || "").toLowerCase();
-  const rows = MEETINGS.filter(m => !q || (m.title || "").toLowerCase().includes(q));
+  const rows = MEETINGS.filter(m => !q ||
+    (m.title || "").toLowerCase().includes(q) ||
+    (m.original_title || "").toLowerCase().includes(q) ||
+    (m.platform || "").toLowerCase().includes(q)
+  );
   $("#meetings-body").innerHTML = table(rows, [
     ["Date", r => esc(r.date)],
-    ["Meeting", r => esc(r.title)],
+    ["Meeting", r => {
+      const orig = (r.original_title && r.original_title !== r.title)
+        ? `<div style="font-size:11px;color:var(--muted);margin-top:3px;display:flex;align-items:center;gap:4px">
+             <span class="pill" style="font-size:10px;padding:1px 5px;background:rgba(255, 94, 0, 0.12);color:var(--accent,#ff5e00);border-color:rgba(255,94,0,0.25)">Source</span>
+             <span>${esc(r.original_title)}</span>
+           </div>`
+        : "";
+      return `<div><strong>${esc(r.title)}</strong>${orig}</div>`;
+    }, "38%"],
     ["Type", r => esc(r.kind)],
+    ["Platform", r => `<span class="pill">${esc(r.platform || '—')}</span>`],
     ["Summary", r => esc((r.summary || "").slice(0, 90))],
   ], true);
   wire("#meetings-body", rows, openMeeting);
@@ -1025,7 +1042,15 @@ async function openMeeting(m) {
   dlg.showModal();
   try {
     const d = await get("/graph/meeting/" + encodeURIComponent(m.id));
+    const orig = d.original_title || m.original_title || "";
+    const origBanner = (orig && orig !== d.title)
+      ? `<div style="background:rgba(255, 94, 0, 0.08);border:1px solid rgba(255, 94, 0, 0.25);border-radius:6px;padding:8px 12px;margin:2px 0 14px;display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px;">
+           <div><span style="color:var(--muted);margin-right:6px">📁 Original / Source:</span><strong style="color:var(--text)">${esc(orig)}</strong></div>
+           <span class="pill" style="font-size:11px;margin:0">${esc(d.platform || m.platform || 'source')}</span>
+         </div>`
+      : "";
     $("#d-body").innerHTML =
+      origBanner +
       (d.summary ? `<p>${esc(d.summary)}</p>` : "") +
       ((d.topics && d.topics.length) ? `<h3>Topics</h3>` +
         d.topics.map(t => `<span class="pill">${esc(t)}</span>`).join("") : "") +
@@ -2349,7 +2374,10 @@ async function loadReview() {
         ["Meeting (Click to view)", r => {
           if (!r.meeting_id) return esc(r.meeting_title || "—");
           const title = r.meeting_title || "Meeting Detail";
-          return `<a href="#" class="review-meeting-link" onclick="event.preventDefault(); openMeeting({id: '${esc(r.meeting_id)}', title: '${esc(title).replace(/'/g, "\\'")}'})" title="Click to view meeting information, when it was held, and who was there">📅 ${esc(title)}</a>`;
+          const orig = (r.meeting_original_title && r.meeting_original_title !== title)
+            ? `<div style="font-size:11px;color:var(--muted);margin-top:2px">Source: ${esc(r.meeting_original_title)}</div>`
+            : "";
+          return `<div><a href="#" class="review-meeting-link" onclick="event.preventDefault(); openMeeting({id: '${esc(r.meeting_id)}', title: '${esc(title).replace(/'/g, "\\'")}', original_title: '${esc(r.meeting_original_title || '').replace(/'/g, "\\'")}'})" title="Click to view meeting information, when it was held, and who was there">📅 ${esc(title)}</a>${orig}</div>`;
         }],
         ["Actions", r =>
           `<div style="display:flex;gap:6px;justify-content:flex-end">` +
@@ -2373,7 +2401,10 @@ async function loadReview() {
         ["Meeting", r => {
           if (!r.meeting_id) return esc(r.meeting_title || "—");
           const title = r.meeting_title || "Meeting Detail";
-          return `<a href="#" class="review-meeting-link" onclick="event.preventDefault(); openMeeting({id: '${esc(r.meeting_id)}', title: '${esc(title).replace(/'/g, "\\'")}'})">📅 ${esc(title)}</a>`;
+          const orig = (r.meeting_original_title && r.meeting_original_title !== title)
+            ? `<div style="font-size:11px;color:var(--muted);margin-top:2px">Source: ${esc(r.meeting_original_title)}</div>`
+            : "";
+          return `<div><a href="#" class="review-meeting-link" onclick="event.preventDefault(); openMeeting({id: '${esc(r.meeting_id)}', title: '${esc(title).replace(/'/g, "\\'")}', original_title: '${esc(r.meeting_original_title || '').replace(/'/g, "\\'")}'})">📅 ${esc(title)}</a>${orig}</div>`;
         }]
       ]) + `</div>`;
   } catch (e) { fail("#review-body", e); }

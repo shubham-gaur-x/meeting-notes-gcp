@@ -57,6 +57,7 @@ async def main() -> int:
 
     payload = {
         "title": args.title,
+        "original_title": args.title,
         "text": content,
         "start_time": f"{meeting_date}T12:00:00Z",
     }

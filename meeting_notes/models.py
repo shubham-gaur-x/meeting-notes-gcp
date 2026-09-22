@@ -81,6 +81,7 @@ class ExtractedMeeting(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     title: str
+    original_title: str | None = None
     kind: Literal["meeting", "email_thread", "call", "standup", "review", "other"]
     platform: str
     date: date
