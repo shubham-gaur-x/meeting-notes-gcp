@@ -16,8 +16,8 @@ Two gates run in this order, both exit criteria for Phase 6:
 
 from __future__ import annotations
 
-from typing import Any
 import re
+from typing import Any
 
 import structlog
 
@@ -48,15 +48,7 @@ def is_administrative_task(task: str) -> bool:
     return bool(_ADMINISTRATIVE_REGEX.search(task))
 
 
-def is_self_owned(owner: str, settings: Settings) -> bool:
-    """Return True if owner refers to the current user ('me' / configured identities)."""
-    if not owner:
-        return False
-    owner_clean = owner.strip().lower()
-    if owner_clean in {"me", "myself", "self"}:
-        return True
-
-    # Gather known self identities
+def _get_configured_identities(settings: Settings) -> set[str]:
     identities: set[str] = set()
     if settings.jira_user_identities:
         for ident in settings.jira_user_identities.split(","):
@@ -67,23 +59,33 @@ def is_self_owned(owner: str, settings: Settings) -> bool:
         identities.add(settings.google_workspace_user.strip().lower())
     if settings.jira_email:
         identities.add(settings.jira_email.strip().lower())
+    return identities
 
-    if not identities:
-        # If no identities configured, default to True so we don't block everything unintentionally
+
+def _matches_identity(owner_clean: str, ident: str) -> bool:
+    if owner_clean == ident:
+        return True
+    if "@" in ident and owner_clean == ident.split("@")[0]:
+        return True
+    if "@" in owner_clean and ident == owner_clean.split("@")[0]:
+        return True
+    tokens = ident.split()
+    return len(tokens) > 1 and owner_clean == tokens[0]
+
+
+def is_self_owned(owner: str, settings: Settings) -> bool:
+    """Return True if owner refers to the current user ('me' / configured identities)."""
+    if not owner:
+        return False
+    owner_clean = owner.strip().lower()
+    if owner_clean in {"me", "myself", "self"}:
         return True
 
-    for ident in identities:
-        if owner_clean == ident:
-            return True
-        if "@" in ident and owner_clean == ident.split("@")[0]:
-            return True
-        if "@" in owner_clean and ident == owner_clean.split("@")[0]:
-            return True
-        tokens = ident.split()
-        if len(tokens) > 1 and owner_clean == tokens[0]:
-            return True
+    identities = _get_configured_identities(settings)
+    if not identities:
+        return True
 
-    return False
+    return any(_matches_identity(owner_clean, ident) for ident in identities)
 
 
 async def _default_mark_needs_review(action_id: str, reason: str) -> None:
