@@ -289,6 +289,25 @@ async def assemble_context(
             node_ids.append(record["id"])
             lines.append(f"Fact (confidence {record['confidence']}): {record['text']}")
 
+    # 6. Semantic search over structured chunks (hybrid vector retrieval)
+    # Pulls relevant spoken discussion chunks and attendee details into the synthesis context
+    if search_meetings is None:
+        try:
+            from meeting_notes.memory import vector
+            from meeting_notes.llm_client import embed
+
+            chunk_hits = await vector.search_similar_chunks(
+                question, limit=4, driver=driver, settings=settings, embed=embed
+            )
+            for hit in chunk_hits:
+                if hit.get("id"):
+                    node_ids.append(hit["id"])
+                title = hit.get("meeting_title") or "Meeting"
+                orig = f" (Source: {hit['original_title']})" if hit.get("original_title") and hit["original_title"] != title else ""
+                lines.append(f"Transcript & Discussion Chunk [{title}{orig}]:\n{hit.get('text', '')}")
+        except Exception as exc:
+            log.warning("retrieval.chunk_search_failed", error=str(exc))
+
     # Semantic search as a fallback: a question sharing no keywords with any
     # meeting still finds the right one by meaning. This is the mechanism
     # behind the "zero keyword overlap" exit criterion.

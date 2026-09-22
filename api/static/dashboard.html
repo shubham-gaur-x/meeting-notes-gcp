@@ -639,11 +639,18 @@
           <option value="named">Named people</option>
           <option value="queue">Shared queues</option>
         </select>
+        <select id="atimeframe" onchange="setGlobalTimeframe(this.value)">
+          <option value="">All time</option>
+          <option value="7">Past 7 days</option>
+          <option value="30">Past 30 days</option>
+          <option value="90">Past quarter</option>
+          <option value="365">Past year</option>
+        </select>
         <select id="afilter" onchange="setGlobalPerson(this.value)"><option value="">Everyone</option></select>
-        <input id="asearch" placeholder="Filter tasks, owners, tickets…" style="min-width:220px"
+        <input id="asearch" placeholder="Filter tasks, owners, tickets…" style="min-width:220px;flex:1"
                oninput="renderActions()">
         <button class="action" onclick="loadActions()">Refresh</button>
-        <button type="button" id="aclear-filters" class="clear-filters-btn" style="display:none" onclick="clearAllGlobalFilters()">Clear filter</button>
+        <button type="button" id="aclear-filters" class="clear-filters-btn" style="display:none" onclick="clearAllGlobalFilters()">Clear filters</button>
       </div>
       <p class="hint">Commitments pulled out of meetings, soonest deadline first. A shared queue
          is an owner no Person node resolved to — a team name rather than someone with an inbox.</p>
@@ -1058,16 +1065,13 @@ function syncTimeframeDropdowns() {
   if (r && !$("#custom-range")?.style.display?.includes("inline")) {
     r.value = tf ? tf : "all";
   }
-  const mt = $("#mtimeframe");
-  if (mt) {
-    mt.value = tf;
-    mt.classList.toggle("active-filter", Boolean(tf));
-  }
-  const ct = $("#chat-timeframe");
-  if (ct) {
-    ct.value = tf;
-    ct.classList.toggle("active-filter", Boolean(tf));
-  }
+  ["#atimeframe", "#mtimeframe", "#chat-timeframe"].forEach(sel => {
+    const el = $(sel);
+    if (el) {
+      el.value = tf;
+      el.classList.toggle("active-filter", Boolean(tf));
+    }
+  });
 }
 
 function setGlobalPerson(personName) {
@@ -1594,8 +1598,21 @@ function renderActions() {
   const owned = $("#aowned") ? $("#aowned").value : "all";
   const search = $("#asearch") ? $("#asearch").value.toLowerCase().trim() : "";
 
+  const tf = GLOBAL_FILTERS.timeframe;
+
+  let cutoffDate = null;
+  if (tf && tf !== "all") {
+    const days = parseInt(tf, 10);
+    if (!isNaN(days) && days > 0) {
+      const d = new Date();
+      d.setDate(d.getDate() - days);
+      cutoffDate = d.toISOString().slice(0, 10);
+    }
+  }
+
+  const hasFilter = Boolean(who || (tf && tf !== "all") || search);
   const clearBtn = $("#aclear-filters");
-  if (clearBtn) clearBtn.style.display = who ? "inline-block" : "none";
+  if (clearBtn) clearBtn.style.display = hasFilter ? "inline-block" : "none";
 
   const rows = ACTIONS.filter(a => {
     if (who && a.owner !== who) return false;
@@ -1604,6 +1621,12 @@ function renderActions() {
     if (status === "subtasks" && !a.parent_jira_key) return false;
     if (owned === "named" && isSharedQueue(a)) return false;
     if (owned === "queue" && !isSharedQueue(a)) return false;
+
+    if (cutoffDate) {
+      const actionDate = a.created_at || a.due;
+      if (actionDate && actionDate < cutoffDate) return false;
+    }
+
     if (search) {
       const haystack = [a.task, a.owner, a.jira_key, a.parent_jira_key]
         .filter(Boolean).join(" ").toLowerCase();
