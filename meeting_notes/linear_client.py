@@ -152,6 +152,45 @@ def linear_priority_from_name(priority: str) -> int:
     return _PRIORITY_MAP.get(priority.strip().lower(), 0)
 
 
+_teams_cache: dict[str, str] = {}
+
+
+async def resolve_team_id(
+    team_key_or_id: str,
+    *,
+    settings: Settings | None = None,
+    transport: Transport | None = None,
+) -> str:
+    """Resolve a team key (e.g. 'ONI') or UUID to a valid Linear team UUID."""
+    if not team_key_or_id:
+        return ""
+    val = team_key_or_id.strip()
+    if len(val) == 36 and val.count("-") == 4:
+        return val
+    if val in _teams_cache:
+        return _teams_cache[val]
+
+    settings = settings or get_settings()
+    query = """
+    query GetTeam($key: String!) {
+      teams(filter: { key: { eq: $key } }) {
+        nodes { id key name }
+      }
+    }
+    """
+    try:
+        data = await execute_graphql(query, {"key": val.upper()}, settings=settings, transport=transport)
+        nodes = data.get("teams", {}).get("nodes", [])
+        if nodes and nodes[0].get("id"):
+            uuid_id = nodes[0]["id"]
+            _teams_cache[val] = uuid_id
+            return uuid_id
+    except Exception as exc:
+        log.warning("linear.resolve_team_failed", key=val, error=str(exc))
+
+    return val
+
+
 async def create_issue(
     title: str,
     *,
@@ -172,6 +211,7 @@ async def create_issue(
     team_id = team_id or settings.linear_team_id
     if not team_id:
         raise ValueError("linear_team_id is required to create a Linear issue")
+    team_id = await resolve_team_id(team_id, settings=settings, transport=transport)
 
     int_priority = linear_priority_from_name(priority) if isinstance(priority, str) else priority
 
@@ -455,6 +495,7 @@ async def list_workflow_states(
     team_id = team_id or settings.linear_team_id
     if not team_id:
         return []
+    team_id = await resolve_team_id(team_id, settings=settings, transport=transport)
 
     now = time.time()
     if use_cache and team_id in _workflow_states_cache:
