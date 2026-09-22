@@ -155,6 +155,11 @@ def linear_priority_from_name(priority: str) -> int:
 _teams_cache: dict[str, str] = {}
 
 
+def is_team_key(val: str) -> bool:
+    """Check if value is a Linear team key (e.g. 'ONI', 'ENG') rather than an ID."""
+    return val.isalpha() and val.isupper() and 2 <= len(val) <= 6
+
+
 async def resolve_team_id(
     team_key_or_id: str,
     *,
@@ -165,7 +170,7 @@ async def resolve_team_id(
     if not team_key_or_id:
         return ""
     val = team_key_or_id.strip()
-    if len(val) == 36 and val.count("-") == 4:
+    if not is_team_key(val):
         return val
     if val in _teams_cache:
         return _teams_cache[val]
