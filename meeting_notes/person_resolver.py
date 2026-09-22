@@ -69,6 +69,169 @@ def is_junk_name(n: str | None) -> bool:
     return False
 
 
+@dataclass
+class ContactProfile:
+    """Canonical contact profile linking full names, corporate emails, nicknames, first names, and initials."""
+    full_name: str
+    email: str
+    first_names: list[str] = field(default_factory=list)
+    nicknames: list[str] = field(default_factory=list)
+    initials: list[str] = field(default_factory=list)
+    role: str = ""
+    organization: str = "Onix"
+
+    def all_mentions(self) -> list[str]:
+        candidates = [self.full_name, self.email] + self.nicknames + self.first_names + self.initials
+        seen: set[str] = set()
+        res: list[str] = []
+        for c in candidates:
+            k = normalize_name(c)
+            if k and k not in seen:
+                seen.add(k)
+                res.append(c)
+        return res
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.full_name,
+            "email": self.email,
+            "first_names": self.first_names,
+            "nicknames": self.nicknames,
+            "initials": self.initials,
+            "role": self.role,
+            "organization": self.organization,
+        }
+
+
+# Central team contact dictionary
+CONTACT_PROFILES: dict[str, ContactProfile] = {
+    "leepatrick.mcintire@onixnet.com": ContactProfile(
+        full_name="LeePatrick McIntire",
+        email="leepatrick.mcintire@onixnet.com",
+        first_names=["LeePatrick", "Lee-Patrick", "Lee Patrick", "Lee"],
+        nicknames=["LP", "L.P.", "L P"],
+        initials=["LP"],
+        role="Lead Architect",
+    ),
+    "coley.woyak@onixnet.com": ContactProfile(
+        full_name="Coley Woyak",
+        email="coley.woyak@onixnet.com",
+        first_names=["Coley"],
+        nicknames=["Coley", "Colin", "Coalie", "Colie", "Coaly", "Coley Perry"],
+        initials=["CW"],
+        role="Client Director",
+    ),
+    "matteo.vaiente@onixnet.com": ContactProfile(
+        full_name="Matteo Vaiente",
+        email="matteo.vaiente@onixnet.com",
+        first_names=["Matteo"],
+        nicknames=["Matteo"],
+        initials=["MV"],
+        role="Capability Lead",
+    ),
+    "michael.baylard@onixnet.com": ContactProfile(
+        full_name="Michael Baylard",
+        email="michael.baylard@onixnet.com",
+        first_names=["Michael"],
+        nicknames=["Michael", "Baylard"],
+        initials=["MB"],
+        role="Enterprise Data Architect",
+    ),
+    "katrisa.brock@onixnet.com": ContactProfile(
+        full_name="Katrisa Brock",
+        email="katrisa.brock@onixnet.com",
+        first_names=["Katrisa"],
+        nicknames=["Katrisa"],
+        initials=["KB"],
+        role="Delivery Operations",
+    ),
+    "deliveryexcellence@onixnet.com": ContactProfile(
+        full_name="Sanjay Pradhan",
+        email="deliveryexcellence@onixnet.com",
+        first_names=["Sanjay"],
+        nicknames=["Sanjay Pradhan", "Delivery Excellence"],
+        initials=["SP"],
+        role="Delivery Excellence",
+    ),
+    "mallory.webber@onixnet.com": ContactProfile(
+        full_name="Mallory Webber",
+        email="mallory.webber@onixnet.com",
+        first_names=["Mallory"],
+        nicknames=["Mallory"],
+        initials=["MW"],
+        role="Engagement Manager",
+    ),
+    "natalie.miller@onixnet.com": ContactProfile(
+        full_name="Natalie Miller",
+        email="natalie.miller@onixnet.com",
+        first_names=["Natalie"],
+        nicknames=["Natalie"],
+        initials=["NM"],
+        role="Cloud Consultant",
+    ),
+    "gaurav.bharara@onixnet.com": ContactProfile(
+        full_name="Gaurav Bharara",
+        email="gaurav.bharara@onixnet.com",
+        first_names=["Gaurav"],
+        nicknames=["Gaurav"],
+        initials=["GB"],
+        role="Cloud Architect",
+    ),
+}
+
+
+def resolve_to_full_name(mention: str | None) -> str:
+    """Resolve any first name, nickname, initials, or email to the canonical contact full name."""
+    if not mention:
+        return ""
+    raw = str(mention).strip()
+    norm = normalize_name(raw)
+    if not norm or is_junk_name(norm):
+        return raw
+
+    # 1. Match against contact profiles
+    for profile in CONTACT_PROFILES.values():
+        if norm == normalize_name(profile.full_name) or norm == normalize_name(profile.email):
+            return profile.full_name
+        for n in profile.nicknames:
+            if norm == normalize_name(n):
+                return profile.full_name
+        for f in profile.first_names:
+            if norm == normalize_name(f):
+                return profile.full_name
+        for init in profile.initials:
+            if norm == normalize_name(init):
+                return profile.full_name
+
+    # 2. Check alias map
+    alias_match = KNOWN_PERSON_ALIASES.get(norm)
+    if alias_match:
+        return alias_match[0]
+
+    return raw
+
+
+def expand_contact_mentions(names: list[str]) -> list[str]:
+    """Expand a list of names/mentions to include full names, emails, and all known aliases."""
+    expanded: set[str] = set()
+    for name in names:
+        if not name:
+            continue
+        expanded.add(name)
+        norm = normalize_name(name)
+        for profile in CONTACT_PROFILES.values():
+            profile_mentions = [normalize_name(m) for m in profile.all_mentions()]
+            if norm in profile_mentions:
+                for m in profile.all_mentions():
+                    expanded.add(m)
+    return list(expanded)
+
+
+def get_contact_directory_list() -> list[dict[str, Any]]:
+    """Return all known contact profiles as serializable dictionaries."""
+    return [p.to_dict() for p in CONTACT_PROFILES.values()]
+
+
 # Canonical person resolution for team nicknames, initials, and transcript variants
 KNOWN_PERSON_ALIASES: dict[str, tuple[str, str]] = {
     # LeePatrick McIntire (LP)

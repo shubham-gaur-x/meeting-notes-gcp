@@ -909,6 +909,65 @@ async function get(path) {
 function fail(sel, err) { $(sel).innerHTML = `<div class="err">${esc(err.message)}</div>`; }
 function empty(msg) { return `<div class="empty">${esc(msg)}</div>`; }
 
+const CONTACT_REGISTRY = {
+  "lp": "LeePatrick McIntire",
+  "l.p.": "LeePatrick McIntire",
+  "l p": "LeePatrick McIntire",
+  "leepatrick": "LeePatrick McIntire",
+  "lee patrick": "LeePatrick McIntire",
+  "lee-patrick": "LeePatrick McIntire",
+  "leepatrick mcintire": "LeePatrick McIntire",
+  "coley": "Coley Woyak",
+  "colin": "Coley Woyak",
+  "coalie": "Coley Woyak",
+  "colie": "Coley Woyak",
+  "coaly": "Coley Woyak",
+  "coley woyak": "Coley Woyak",
+  "coley perry": "Coley Woyak",
+  "matteo": "Matteo Vaiente",
+  "matteo vaiente": "Matteo Vaiente",
+  "michael": "Michael Baylard",
+  "baylard": "Michael Baylard",
+  "michael baylard": "Michael Baylard",
+  "katrisa": "Katrisa Brock",
+  "katrisa brock": "Katrisa Brock",
+  "sanjay": "Sanjay Pradhan",
+  "sanjay pradhan": "Sanjay Pradhan",
+  "mallory": "Mallory Webber",
+  "mallory webber": "Mallory Webber",
+  "natalie": "Natalie Miller",
+  "natalie miller": "Natalie Miller",
+  "gaurav": "Gaurav Bharara",
+  "gaurav bharara": "Gaurav Bharara",
+};
+
+let CONTACT_PROFILES = [];
+
+async function loadContacts() {
+  try {
+    const res = await get("/graph/contacts");
+    if (res && res.contacts) {
+      CONTACT_PROFILES = res.contacts;
+      for (const c of res.contacts) {
+        if (c.email) CONTACT_REGISTRY[c.email.toLowerCase()] = c.name;
+        if (c.name) CONTACT_REGISTRY[c.name.toLowerCase()] = c.name;
+        for (const n of (c.nicknames || [])) CONTACT_REGISTRY[n.toLowerCase()] = c.name;
+        for (const f of (c.first_names || [])) CONTACT_REGISTRY[f.toLowerCase()] = c.name;
+        for (const init of (c.initials || [])) CONTACT_REGISTRY[init.toLowerCase()] = c.name;
+      }
+    }
+  } catch (e) {
+    console.warn("Contacts directory fetch failed:", e);
+  }
+}
+
+function resolveToFullName(raw) {
+  if (!raw) return "";
+  const s = String(raw).trim();
+  const k = s.toLowerCase();
+  return CONTACT_REGISTRY[k] || s;
+}
+
 function formatMeetingType(kind) {
   if (!kind || kind === '—' || kind === 'null') return '—';
   const s = String(kind).trim();
@@ -1126,7 +1185,7 @@ async function loadOverview() {
       `<div class="scroll">` +
       table(show, [
         ["Task", r => esc(r.task)],
-        ["Owner", r => esc(r.owner)],
+        ["Owner", r => esc(resolveToFullName(r.owner))],
         ["Due", r => esc(r.due || "—")],
         ["Priority", r => `<span class="${r.priority === "high" ? "pri-high" : ""}">${esc(r.priority || "—")}</span>`],
       ]) + `</div>`;
@@ -1194,7 +1253,7 @@ async function openMeeting(m) {
       `<h3>Action items (${(d.action_items || []).length})</h3>` +
       `<div class="scroll">` + table(d.action_items || [], [
         ["Task", r => esc(r.task)],
-        ["Owner", r => esc(r.owner)],
+        ["Owner", r => esc(resolveToFullName(r.owner))],
         ["Due", r => esc(r.due || "—")],
       ]) + `</div>` +
       (() => {
@@ -1203,8 +1262,8 @@ async function openMeeting(m) {
         const unres = (d.unresolved_attendees || []).filter(u => !isJunk(u));
         const total = resolved.length + unres.length;
         if (!total) return `<h3>Who was there (0)</h3>` + empty("No attendees recorded.");
-        let pills = resolved.map(a => `<span class="pill">👤 ${esc(a.name || a.email)}</span>`).join("");
-        pills += unres.map(u => `<span class="pill" style="opacity:0.9" title="Identified from meeting transcript">👤 ${esc(u)}</span>`).join("");
+        let pills = resolved.map(a => `<span class="pill">👤 ${esc(resolveToFullName(a.name || a.email))}</span>`).join("");
+        pills += unres.map(u => `<span class="pill" style="opacity:0.9" title="Identified from meeting transcript">👤 ${esc(resolveToFullName(u))}</span>`).join("");
         return `<h3>Who was there (${total})</h3><div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px">${pills}</div>`;
       })() +
       ((d.facts && d.facts.length) ? `<h3>What this told us</h3>` +
@@ -1225,6 +1284,7 @@ async function loadActions() {
     const seenActionKeys = new Set();
     ACTIONS = [];
     for (const a of rawActions) {
+      if (a.owner) a.owner = resolveToFullName(a.owner);
       const k = a.id ? a.id : `${a.owner}:${a.task}:${a.jira_key || ''}`;
       if (!seenActionKeys.has(k)) {
         seenActionKeys.add(k);
@@ -1235,7 +1295,7 @@ async function loadActions() {
     // repo moving to the Onix project, and it would point one person's
     // dashboard at another's Jira. Blank means render the key as plain text.
     JIRA_BROWSE_BASE = d.jira_browse_base || "";
-    const owners = [...new Set(ACTIONS.map(a => a.owner).filter(Boolean))].sort();
+    const owners = [...new Set(ACTIONS.map(a => resolveToFullName(a.owner)).filter(Boolean))].sort();
     $("#afilter").innerHTML = `<option value="">Everyone (${ACTIONS.length})</option>` +
       owners.map(o => `<option value="${esc(o)}"${o === owner ? " selected" : ""}>${esc(o)}</option>`).join("");
     renderActions();
@@ -1277,7 +1337,7 @@ function renderActions() {
       return `<div class="subtask"><span class="pill subtask-of">Sub-task of ` +
              `${esc(r.parent_jira_key)}</span><div style="display:flex;align-items:flex-start;justify-content:space-between;gap:6px">${task}${copyBtn}</div></div>`;
     }, "32%"],
-    ["Owner", r => esc(r.owner), "14%"],
+    ["Owner", r => esc(resolveToFullName(r.owner)), "14%"],
     ["Created", r => esc(r.created_at || "—"), "10%"],
     ["Due", r => esc(r.due || "—"), "10%"],
     ["Priority", r => `<span class="${r.priority === "high" ? "pri-high" : ""}">${esc(r.priority || "—")}</span>`, "8%"],
@@ -2525,14 +2585,14 @@ async function loadReview() {
       `<p class="hint">Extracted, but not confident enough to file automatically.</p>` +
       `<div class="scroll" style="margin-bottom:20px">` + table(a.actions, [
         ["Task", r => esc(r.task)],
-        ["Owner", r => esc(r.owner)],
+        ["Owner", r => esc(resolveToFullName(r.owner))],
         ["Confidence", r => esc(r.confidence)],
         ["Why", r => esc(r.review_reason)]
       ]) + `</div>` +
       `<h3>Open blockers (${b.count})</h3>` +
       `<div class="scroll">` + table(b.blockers, [
         ["Blocker", r => esc(r.text)],
-        ["Raised by", r => esc(r.raised_by)],
+        ["Raised by", r => esc(resolveToFullName(r.raised_by))],
         ["Meeting", r => {
           if (!r.meeting_id) return esc(r.meeting_title || "—");
           const title = r.meeting_title || "Meeting Detail";
@@ -2740,6 +2800,7 @@ function getInitialTab() {
 
 CHAT_TURNS = loadChatHistory();
 loadHealth();
+loadContacts();
 refreshReviewBadge();
 const initialTab = getInitialTab();
 switchTab(initialTab, true);

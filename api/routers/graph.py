@@ -90,6 +90,14 @@ async def actions_list(
     }
 
 
+@router.get("/contacts")
+async def contacts_directory(_: Principal = Depends(principal)) -> dict[str, Any]:
+    """Team contact profiles linking full names, corporate emails, nicknames, and aliases."""
+    from meeting_notes import person_resolver
+    contacts = person_resolver.get_contact_directory_list()
+    return {"contacts": contacts, "count": len(contacts)}
+
+
 @router.get("/provenance/{meeting_id}")
 async def meeting_provenance(meeting_id: str, _: Principal = Depends(principal)) -> dict[str, Any]:
     """Empty until v2 — ADR-008 ships the schema in v1, the writers in v2."""

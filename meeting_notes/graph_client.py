@@ -450,6 +450,7 @@ async def _write_action_items(
                 canonical_owner = matched_person["name"]
             elif "@" in str(action.owner):
                 canonical_owner = str(action.owner).split("@")[0].replace(".", " ").replace("_", " ").title()
+        canonical_owner = person_resolver.resolve_to_full_name(canonical_owner)
 
         existing_action_id = await _find_repeat_action(tx, action.task, owner_email)
         action_id = existing_action_id or uuid5_id("action", f"{source_id}:{i}:{action.task}")
@@ -947,7 +948,11 @@ async def get_all_actions(
             """,
             limit=limit,
         )
-        return [dict(r) async for r in result]
+        actions = [dict(r) async for r in result]
+        for act in actions:
+            if act.get("owner"):
+                act["owner"] = person_resolver.resolve_to_full_name(act["owner"])
+        return actions
 
 
 async def get_open_actions(limit: int = 50, driver: Any = None) -> list[dict[str, Any]]:
@@ -1643,6 +1648,13 @@ async def get_meeting_detail(meeting_id: str, driver: Any = None) -> dict[str, A
             )
             if not person_resolver.is_junk_name(r.get("name"))
         ]
+
+        for act in detail.get("action_items") or []:
+            if act.get("owner"):
+                act["owner"] = person_resolver.resolve_to_full_name(act["owner"])
+        for att in detail.get("attendees") or []:
+            if att.get("name"):
+                att["name"] = person_resolver.resolve_to_full_name(att["name"])
 
     return detail
 
