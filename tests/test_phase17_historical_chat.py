@@ -235,7 +235,11 @@ def test_action_items_button_no_wrap_and_typewriter_reveal() -> None:
     html = (Path(api.__file__).parent / "static" / "dashboard.html").read_text(encoding="utf-8")
 
     # 1. Action Items button wrapping prevention
-    assert "white-space:nowrap; display:inline-block;" in html or "white-space: nowrap; display: inline-block;" in html or "white-space:nowrap" in html
+    assert (
+        "white-space:nowrap; display:inline-block;" in html
+        or "white-space: nowrap; display: inline-block;" in html
+        or "white-space:nowrap" in html
+    )
     assert '#actions-body td:last-child { white-space:nowrap; text-align:right; }' in html
     assert '"90px"' in html
 

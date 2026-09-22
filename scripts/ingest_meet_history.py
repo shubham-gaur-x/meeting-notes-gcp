@@ -29,7 +29,9 @@ async def fetch_meet_history(access_token: str, max_records: int = 50) -> list[d
     headers = {"Authorization": f"Bearer {access_token}"}
     async with httpx.AsyncClient(timeout=30.0) as client:
         # 1. List conference records
-        res = await client.get(f"{MEET_API}/conferenceRecords", headers=headers, params={"pageSize": max_records})
+        res = await client.get(
+            f"{MEET_API}/conferenceRecords", headers=headers, params={"pageSize": max_records}
+        )
         if res.status_code != 200:
             log.error("meet_history.list_failed", status=res.status_code, body=res.text)
             return []
@@ -56,7 +58,9 @@ async def fetch_meet_history(access_token: str, max_records: int = 50) -> list[d
                     continue
 
                 # 3. Fetch transcript entries
-                entries_res = await client.get(f"{MEET_API}/{t_name}/entries", headers=headers, params={"pageSize": 100})
+                entries_res = await client.get(
+                    f"{MEET_API}/{t_name}/entries", headers=headers, params={"pageSize": 100}
+                )
                 if entries_res.status_code != 200:
                     continue
 
