@@ -309,8 +309,8 @@
   .chat-select { background:var(--raise); border:1px solid var(--line); color:var(--ink);
                  padding:5px 10px; font-size:12px; border-radius:6px; cursor:pointer;
                  transition:border-color .15s ease, background .15s ease; font-family:inherit; }
-  .chat-select.active-filter { border-color:var(--accent); background:var(--accent-glow);
-                               color:var(--accent); font-weight:600; }
+  select.active-filter, .chat-select.active-filter { border-color:var(--accent) !important; background:var(--accent-glow) !important;
+                               color:var(--accent) !important; font-weight:600; }
   .clear-filters-btn { background:none; border:none; color:var(--muted); font-size:11px;
                        cursor:pointer; text-decoration:underline; padding:2px 6px; font-family:inherit; }
   .clear-filters-btn:hover { color:var(--hot); }
@@ -541,18 +541,29 @@
           </select>
           <div class="filter-badge" style="margin-left:4px">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--accent)" aria-hidden="true">
+              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+              <circle cx="12" cy="7" r="4"></circle>
+            </svg>
+            <span>Person:</span>
+          </div>
+          <select id="chat-person" class="chat-select" onchange="setGlobalPerson(this.value)">
+            <option value="">Everyone</option>
+          </select>
+          <div class="filter-badge" style="margin-left:4px">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--accent)" aria-hidden="true">
               <circle cx="12" cy="12" r="10"></circle>
               <polyline points="12 6 12 12 16 14"></polyline>
             </svg>
             <span>Timeframe:</span>
           </div>
-          <select id="chat-timeframe" class="chat-select" onchange="onChatFilterChange()">
+          <select id="chat-timeframe" class="chat-select" onchange="setGlobalTimeframe(this.value)">
             <option value="">All Time</option>
             <option value="7">Past 7 Days</option>
             <option value="30">Past 30 Days</option>
             <option value="90">Past Quarter</option>
+            <option value="365">Past Year</option>
           </select>
-          <button type="button" id="chat-clear-filters" class="clear-filters-btn" style="display:none" onclick="clearChatFilters()">Clear filters</button>
+          <button type="button" id="chat-clear-filters" class="clear-filters-btn" style="display:none" onclick="clearAllGlobalFilters()">Clear filters</button>
         </div>
         <button type="button" class="chat-btn-new-thread" onclick="clearChatHistory()" title="Start New Conversation Thread" aria-label="New Thread">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -628,10 +639,11 @@
           <option value="named">Named people</option>
           <option value="queue">Shared queues</option>
         </select>
-        <select id="afilter" onchange="renderActions()"><option value="">Everyone</option></select>
+        <select id="afilter" onchange="setGlobalPerson(this.value)"><option value="">Everyone</option></select>
         <input id="asearch" placeholder="Filter tasks, owners, tickets…" style="min-width:220px"
                oninput="renderActions()">
         <button class="action" onclick="loadActions()">Refresh</button>
+        <button type="button" id="aclear-filters" class="clear-filters-btn" style="display:none" onclick="clearAllGlobalFilters()">Clear filter</button>
       </div>
       <p class="hint">Commitments pulled out of meetings, soonest deadline first. A shared queue
          is an owner no Person node resolved to — a team name rather than someone with an inbox.</p>
@@ -663,13 +675,24 @@
           <span>✉️ Email Threads</span>
           <span id="mcount-emails" class="pill" style="margin-left:4px;padding:0 5px;font-size:10px">0</span>
         </button>
-        <button type="button" id="mfilter-chats" class="subnav-btn" onclick="setMeetingSourceFilter('chats')">
+        <button type="button" id="mfilter-chats" class="subnav-btn" onclick="setMeetingSourceFilter('chats')" style="display:none">
           <span>💬 Chats</span>
           <span id="mcount-chats" class="pill" style="margin-left:4px;padding:0 5px;font-size:10px">0</span>
         </button>
       </div>
-      <input id="mfilter" placeholder="Filter communications by title, source, or topic…" style="min-width:240px;flex:1" oninput="renderMeetings()">
+      <select id="mtimeframe" onchange="setGlobalTimeframe(this.value)">
+        <option value="">All time</option>
+        <option value="7">Past 7 days</option>
+        <option value="30">Past 30 days</option>
+        <option value="90">Past quarter</option>
+        <option value="365">Past year</option>
+      </select>
+      <select id="mpeople" onchange="setGlobalPerson(this.value)">
+        <option value="">All attendees</option>
+      </select>
+      <input id="mfilter" placeholder="Filter communications by title, source, or topic…" style="min-width:200px;flex:1" oninput="renderMeetings()">
       <button class="action" onclick="loadMeetings()">Refresh</button>
+      <button type="button" id="mclear-filters" class="clear-filters-btn" style="display:none" onclick="clearAllGlobalFilters()">Clear filters</button>
     </div>
     <p class="hint">Click any communication session to inspect what was decided, who was there, and what came out of it.</p>
     <div class="scroll" id="meetings-body"></div>
@@ -899,12 +922,19 @@ function switchTab(panelId, updateHistory = true) {
     try { localStorage.setItem("mn_active_tab", panelId); } catch {}
   }
 
+  // Synchronize persistent global filter UI elements on tab switch
+  if (typeof syncPersonDropdowns === "function") syncPersonDropdowns();
+  if (typeof syncTimeframeDropdowns === "function") syncTimeframeDropdowns();
+
   if (subView === "workstreams") {
     switchGraphSubView("workstreams");
   } else if (subView === "review") {
     switchActionsSubView("review");
   } else {
     LOADERS[targetTab]?.();
+    if (targetTab === "meetings" && MEETINGS.length) renderMeetings();
+    if (targetTab === "actions" && ACTIONS.length) renderActions();
+    if (targetTab === "ask" && typeof onChatFilterChange === "function") onChatFilterChange();
   }
 }
 
@@ -973,6 +1003,7 @@ async function loadContacts() {
         for (const f of (c.first_names || [])) CONTACT_REGISTRY[f.toLowerCase()] = c.name;
         for (const init of (c.initials || [])) CONTACT_REGISTRY[init.toLowerCase()] = c.name;
       }
+      populatePersonDropdowns();
     }
   } catch (e) {
     console.warn("Contacts directory fetch failed:", e);
@@ -984,6 +1015,148 @@ function resolveToFullName(raw) {
   const s = String(raw).trim();
   const k = s.toLowerCase();
   return CONTACT_REGISTRY[k] || s;
+}
+
+const GLOBAL_FILTERS = {
+  person: "",
+  timeframe: "",
+};
+
+function loadSavedGlobalFilters() {
+  try {
+    const raw = localStorage.getItem("mn_global_filters");
+    if (raw) {
+      const p = JSON.parse(raw);
+      if (p.person) GLOBAL_FILTERS.person = p.person;
+      if (p.timeframe) GLOBAL_FILTERS.timeframe = p.timeframe;
+    }
+  } catch {}
+}
+
+function saveGlobalFilters() {
+  try {
+    localStorage.setItem("mn_global_filters", JSON.stringify(GLOBAL_FILTERS));
+  } catch {}
+}
+
+function syncPersonDropdowns() {
+  const p = GLOBAL_FILTERS.person;
+  ["#afilter", "#mpeople", "#chat-person"].forEach(sel => {
+    const el = $(sel);
+    if (el) {
+      el.value = p;
+      el.classList.toggle("active-filter", Boolean(p));
+    }
+  });
+  const clearBtnA = $("#aclear-filters");
+  if (clearBtnA) clearBtnA.style.display = p ? "inline-block" : "none";
+}
+
+function syncTimeframeDropdowns() {
+  const tf = GLOBAL_FILTERS.timeframe;
+  const r = $("#range");
+  if (r && !$("#custom-range")?.style.display?.includes("inline")) {
+    r.value = tf ? tf : "all";
+  }
+  const mt = $("#mtimeframe");
+  if (mt) {
+    mt.value = tf;
+    mt.classList.toggle("active-filter", Boolean(tf));
+  }
+  const ct = $("#chat-timeframe");
+  if (ct) {
+    ct.value = tf;
+    ct.classList.toggle("active-filter", Boolean(tf));
+  }
+}
+
+function setGlobalPerson(personName) {
+  GLOBAL_FILTERS.person = (personName || "").trim();
+  saveGlobalFilters();
+  syncPersonDropdowns();
+
+  if (typeof renderActions === "function") renderActions();
+  if (typeof renderMeetings === "function") renderMeetings();
+  if (typeof onChatFilterChange === "function") onChatFilterChange();
+}
+
+function setGlobalTimeframe(tf) {
+  GLOBAL_FILTERS.timeframe = (tf === "all" ? "" : (tf || "")).trim();
+  saveGlobalFilters();
+  syncTimeframeDropdowns();
+
+  const active = document.querySelector(".panel.active")?.id;
+  if (active === "overview" && typeof loadOverview === "function") loadOverview();
+  else if (active === "meetings" && typeof renderMeetings === "function") renderMeetings();
+  else if (active === "actions" && typeof renderActions === "function") renderActions();
+  else if (active === "ask" && typeof onChatFilterChange === "function") onChatFilterChange();
+}
+
+function clearAllGlobalFilters() {
+  GLOBAL_FILTERS.person = "";
+  GLOBAL_FILTERS.timeframe = "";
+  saveGlobalFilters();
+  syncPersonDropdowns();
+  syncTimeframeDropdowns();
+
+  const scope = $("#chat-scope");
+  if (scope) { scope.value = ""; scope.classList.remove("active-filter"); }
+  const asearch = $("#asearch");
+  if (asearch) asearch.value = "";
+  const mfilter = $("#mfilter");
+  if (mfilter) mfilter.value = "";
+
+  if (typeof renderActions === "function") renderActions();
+  if (typeof renderMeetings === "function") renderMeetings();
+  if (typeof onChatFilterChange === "function") onChatFilterChange();
+  const active = document.querySelector(".panel.active")?.id;
+  if (active === "overview" && typeof loadOverview === "function") loadOverview();
+}
+
+function populatePersonDropdowns() {
+  const namesSet = new Set();
+  if (CONTACT_PROFILES && CONTACT_PROFILES.length) {
+    CONTACT_PROFILES.forEach(c => { if (c.name) namesSet.add(c.name); });
+  }
+  if (typeof ACTIONS !== "undefined" && ACTIONS.length) {
+    ACTIONS.forEach(a => {
+      if (a.owner) namesSet.add(resolveToFullName(a.owner));
+    });
+  }
+  if (typeof MEETINGS !== "undefined" && MEETINGS.length) {
+    MEETINGS.forEach(m => {
+      (m.attendees || []).forEach(att => {
+        const full = resolveToFullName(typeof att === 'string' ? att : (att.name || att.email));
+        if (full) namesSet.add(full);
+      });
+      (m.unresolved_attendees || []).forEach(att => {
+        const full = resolveToFullName(att);
+        if (full) namesSet.add(full);
+      });
+    });
+  }
+
+  const sorted = [...namesSet].filter(Boolean).sort();
+  const cur = GLOBAL_FILTERS.person;
+
+  const afilter = $("#afilter");
+  if (afilter) {
+    const totalActs = (typeof ACTIONS !== "undefined") ? ACTIONS.length : 0;
+    afilter.innerHTML = `<option value="">Everyone (${totalActs})</option>` +
+      sorted.map(n => `<option value="${esc(n)}"${n === cur ? " selected" : ""}>${esc(n)}</option>`).join("");
+  }
+  const mpeople = $("#mpeople");
+  if (mpeople) {
+    mpeople.innerHTML = `<option value="">All attendees</option>` +
+      sorted.map(n => `<option value="${esc(n)}"${n === cur ? " selected" : ""}>${esc(n)}</option>`).join("");
+  }
+  const chatPerson = $("#chat-person");
+  if (chatPerson) {
+    chatPerson.innerHTML = `<option value="">Everyone</option>` +
+      sorted.map(n => `<option value="${esc(n)}"${n === cur ? " selected" : ""}>${esc(n)}</option>`).join("");
+  }
+
+  syncPersonDropdowns();
 }
 
 function formatMeetingType(kind) {
@@ -1137,9 +1310,13 @@ async function loadHealth() {
 }
 
 function onRangeChange() {
-  const custom = $("#range").value === "custom";
+  const val = $("#range").value;
+  const custom = val === "custom";
   $("#custom-range").style.display = custom ? "" : "none";
-  if (!custom) { loadOverview(); return; }
+  if (!custom) {
+    setGlobalTimeframe(val);
+    return;
+  }
   // Waiting for both dates before querying, so say so rather than leaving the
   // previous range's label sitting above numbers it no longer describes.
   if (!$("#range-start").value || !$("#range-end").value) {
@@ -1248,6 +1425,11 @@ function updateMeetingFilterCounts() {
   if ($("#mcount-calls")) $("#mcount-calls").textContent = callsCount;
   if ($("#mcount-emails")) $("#mcount-emails").textContent = emailsCount;
   if ($("#mcount-chats")) $("#mcount-chats").textContent = chatsCount;
+
+  const chatBtn = $("#mfilter-chats");
+  if (chatBtn) {
+    chatBtn.style.display = chatsCount > 0 ? "" : "none";
+  }
 }
 
 async function loadMeetings() {
@@ -1255,24 +1437,64 @@ async function loadMeetings() {
     const d = await get("/graph/meetings/recent?limit=100");
     MEETINGS = d.meetings || [];
     updateMeetingFilterCounts();
+    populatePersonDropdowns();
     renderMeetings();
   } catch (e) { fail("#meetings-body", e); }
 }
 
 function renderMeetings() {
-  const q = ($("#mfilter").value || "").toLowerCase();
+  const q = ($("#mfilter").value || "").toLowerCase().trim();
+  const who = (GLOBAL_FILTERS.person || "").toLowerCase().trim();
+  const tf = GLOBAL_FILTERS.timeframe;
+
+  let cutoffDate = null;
+  if (tf && tf !== "all") {
+    const days = parseInt(tf, 10);
+    if (!isNaN(days) && days > 0) {
+      const d = new Date();
+      d.setDate(d.getDate() - days);
+      cutoffDate = d.toISOString().slice(0, 10);
+    }
+  }
+
+  const hasActiveFilter = Boolean(who || (tf && tf !== "all") || q);
+  const clearBtn = $("#mclear-filters");
+  if (clearBtn) clearBtn.style.display = hasActiveFilter ? "inline-block" : "none";
+
   const sourceFiltered = MEETINGS.filter(m => {
     if (MEETING_SOURCE_FILTER === "calls") return isCallSession(m);
     if (MEETING_SOURCE_FILTER === "emails") return isEmailSession(m);
     if (MEETING_SOURCE_FILTER === "chats") return isChatSession(m);
     return true;
   });
-  const rows = sourceFiltered.filter(m => !q ||
-    (m.title || "").toLowerCase().includes(q) ||
-    (m.original_title || "").toLowerCase().includes(q) ||
-    (m.platform || "").toLowerCase().includes(q) ||
-    (m.kind || "").toLowerCase().includes(q)
-  );
+
+  const rows = sourceFiltered.filter(m => {
+    if (cutoffDate && m.date && m.date < cutoffDate) {
+      return false;
+    }
+
+    if (who) {
+      const attendees = [...(m.attendees || []), ...(m.unresolved_attendees || [])]
+        .map(a => resolveToFullName(typeof a === 'string' ? a : (a.name || a.email || ''))).filter(Boolean);
+      const attendeeMatch = attendees.some(a => a.toLowerCase().includes(who) || who.includes(a.toLowerCase()));
+      const textMatch = `${m.title || ''} ${m.original_title || ''} ${m.summary || ''}`.toLowerCase().includes(who);
+      if (!attendeeMatch && !textMatch) {
+        return false;
+      }
+    }
+
+    if (q) {
+      const match = (m.title || "").toLowerCase().includes(q) ||
+                    (m.original_title || "").toLowerCase().includes(q) ||
+                    (m.platform || "").toLowerCase().includes(q) ||
+                    (m.kind || "").toLowerCase().includes(q) ||
+                    (m.summary || "").toLowerCase().includes(q);
+      if (!match) return false;
+    }
+
+    return true;
+  });
+
   $("#meetings-body").innerHTML = table(rows, [
     ["Date", r => `<span style="white-space:nowrap;font-variant-numeric:tabular-nums;">${esc(r.date)}</span>`, "105px"],
     ["Topic / Title", r => {
@@ -1340,10 +1562,7 @@ async function openMeeting(m) {
 let JIRA_BROWSE_BASE = "";
 
 async function loadActions() {
-  // Read the owner back BEFORE the list is rebuilt. Repopulating the select
-  // resets it to "Everyone", so refreshing while filtered to one person --
-  // which is what Mark Done does -- silently threw the filter away.
-  const owner = $("#afilter") ? $("#afilter").value : "";
+  const owner = GLOBAL_FILTERS.person || ($("#afilter") ? $("#afilter").value : "");
   try {
     const d = await get("/graph/actions?status=all&limit=500");
     const rawActions = d.actions || [];
@@ -1357,13 +1576,8 @@ async function loadActions() {
         ACTIONS.push(a);
       }
     }
-    // Never a literal Atlassian domain: a hardcoded tenant is what stops this
-    // repo moving to the Onix project, and it would point one person's
-    // dashboard at another's Jira. Blank means render the key as plain text.
     JIRA_BROWSE_BASE = d.jira_browse_base || "";
-    const owners = [...new Set(ACTIONS.map(a => resolveToFullName(a.owner)).filter(Boolean))].sort();
-    $("#afilter").innerHTML = `<option value="">Everyone (${ACTIONS.length})</option>` +
-      owners.map(o => `<option value="${esc(o)}"${o === owner ? " selected" : ""}>${esc(o)}</option>`).join("");
+    populatePersonDropdowns();
     renderActions();
   } catch (e) { fail("#actions-body", e); }
 }
@@ -1375,10 +1589,13 @@ async function loadActions() {
 function isSharedQueue(a) { return !a.owner_email; }
 
 function renderActions() {
-  const who = $("#afilter") ? $("#afilter").value : "";
+  const who = GLOBAL_FILTERS.person || ($("#afilter") ? $("#afilter").value : "");
   const status = $("#astatus") ? $("#astatus").value : "open";
   const owned = $("#aowned") ? $("#aowned").value : "all";
   const search = $("#asearch") ? $("#asearch").value.toLowerCase().trim() : "";
+
+  const clearBtn = $("#aclear-filters");
+  if (clearBtn) clearBtn.style.display = who ? "inline-block" : "none";
 
   const rows = ACTIONS.filter(a => {
     if (who && a.owner !== who) return false;
@@ -1814,22 +2031,19 @@ function handleChatKeydown(e) {
 
 function onChatFilterChange() {
   const scope = $("#chat-scope");
+  const cp = $("#chat-person");
   const tf = $("#chat-timeframe");
   const clearBtn = $("#chat-clear-filters");
-  const hasFilter = Boolean((scope && scope.value) || (tf && tf.value));
+  const hasFilter = Boolean((scope && scope.value) || (cp && cp.value) || (tf && tf.value));
 
   if (scope) scope.classList.toggle("active-filter", Boolean(scope.value));
+  if (cp) cp.classList.toggle("active-filter", Boolean(cp.value));
   if (tf) tf.classList.toggle("active-filter", Boolean(tf.value));
   if (clearBtn) clearBtn.style.display = hasFilter ? "inline-block" : "none";
 }
 
 function clearChatFilters() {
-  const scope = $("#chat-scope");
-  const tf = $("#chat-timeframe");
-  if (scope) { scope.value = ""; scope.classList.remove("active-filter"); }
-  if (tf) { tf.value = ""; tf.classList.remove("active-filter"); }
-  const clearBtn = $("#chat-clear-filters");
-  if (clearBtn) clearBtn.style.display = "none";
+  clearAllGlobalFilters();
 }
 
 function openChatSettings() {
@@ -2294,6 +2508,7 @@ async function renderChatFeed() {
     const turn = CHAT_TURNS[idx];
     if (turn.role === "user") {
       let filterPills = "";
+      if (turn.person) filterPills += `<span class="pill" style="font-size:10px;margin:0">👤 ${esc(turn.person)}</span>`;
       if (turn.scope) filterPills += `<span class="pill" style="font-size:10px;margin:0">Scope: ${esc(turn.scope)}</span>`;
       if (turn.timeframe) filterPills += `<span class="pill" style="font-size:10px;margin:0">Past ${esc(turn.timeframe)}d</span>`;
 
@@ -2349,9 +2564,11 @@ async function askMemory() {
   if (!question) return;
 
   const scope = $("#chat-scope")?.value || "";
-  const timeframe = $("#chat-timeframe")?.value || "";
+  const person = GLOBAL_FILTERS.person || $("#chat-person")?.value || "";
+  const timeframe = GLOBAL_FILTERS.timeframe || $("#chat-timeframe")?.value || "";
   let payloadQuestion = question;
   const constraints = [];
+  if (person) constraints.push(`Contact: ${person}`);
   if (scope) constraints.push(`Scope: ${scope}`);
   if (timeframe) constraints.push(`Timeframe: past ${timeframe} days`);
   if (constraints.length) {
@@ -2383,6 +2600,7 @@ async function askMemory() {
     role: "user",
     text: question,
     timestamp: timeStr,
+    person,
     scope,
     timeframe,
   };
@@ -2864,6 +3082,7 @@ function getInitialTab() {
   return "overview";
 }
 
+loadSavedGlobalFilters();
 CHAT_TURNS = loadChatHistory();
 loadHealth();
 loadContacts();

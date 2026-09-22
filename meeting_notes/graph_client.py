@@ -814,22 +814,40 @@ def _normalise_topic(name: str) -> str:
 
 
 async def get_recent_meetings(limit: int = 10, driver: Any = None) -> list[dict[str, Any]]:
-    """Meetings by date descending — the dashboard's Meetings tab."""
+    """Meetings by date descending — the dashboard's Communications tab."""
     driver = driver or get_driver()
     async with driver.session() as session:
         result = await session.run(
             """
             MATCH (m:Meeting)
+            OPTIONAL MATCH (p:Person)-[:ATTENDED]->(m)
+            WITH m, collect(DISTINCT p.name) AS attendees
             RETURN m.id AS id, m.title AS title, coalesce(m.original_title, m.title) AS original_title,
                    m.date AS date, m.kind AS kind,
                    m.summary AS summary, m.platform AS platform,
-                   coalesce(m.relevance_weight, 1.0) AS relevance_weight
+                   coalesce(m.relevance_weight, 1.0) AS relevance_weight,
+                   attendees,
+                   coalesce(m.unresolved_attendees, []) AS unresolved_attendees
             ORDER BY m.date DESC
             LIMIT $limit
             """,
             limit=limit,
         )
-        return [dict(r) async for r in result]
+        meetings = []
+        async for r in result:
+            row = dict(r)
+            row["attendees"] = [
+                person_resolver.resolve_to_full_name(name)
+                for name in (row.get("attendees") or [])
+                if name and not person_resolver.is_junk_name(name)
+            ]
+            row["unresolved_attendees"] = [
+                person_resolver.resolve_to_full_name(name)
+                for name in (row.get("unresolved_attendees") or [])
+                if name and not person_resolver.is_junk_name(name)
+            ]
+            meetings.append(row)
+        return meetings
 
 
 async def get_timeline(limit: int = 30, driver: Any = None) -> list[dict[str, Any]]:
