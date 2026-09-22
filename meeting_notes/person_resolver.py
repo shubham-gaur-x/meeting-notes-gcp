@@ -29,7 +29,76 @@ log = structlog.get_logger()
 
 FUZZY_THRESHOLD = 0.85
 
-# Known transcription artifacts and phonetic aliases common in speech-to-text models
+_JUNK_NAMES = {
+    "unknown",
+    "unknown speaker",
+    "speaker",
+    "speaker 1",
+    "speaker 2",
+    "speaker 3",
+    "speaker 4",
+    "speaker 5",
+    "unidentified",
+    "unidentified speaker",
+    "none",
+    "nobody",
+    "the group",
+    "all",
+    "everyone",
+    "someone",
+    "n/a",
+    "na",
+    "—",
+    "-",
+}
+
+
+def is_junk_name(n: str | None) -> bool:
+    """Return True if candidate name is an empty placeholder or transcription artifact."""
+    if not n or not str(n).strip():
+        return True
+    norm = normalize_name(n)
+    if norm in _JUNK_NAMES:
+        return True
+    if re.match(r"^speaker\s*\d*$", norm):
+        return True
+    if re.match(r"^unknown(\s*speaker)?$", norm):
+        return True
+    if re.match(r"^unidentified(\s*speaker)?$", norm):
+        return True
+    return False
+
+
+# Canonical person resolution for team nicknames, initials, and transcript variants
+KNOWN_PERSON_ALIASES: dict[str, tuple[str, str]] = {
+    # LeePatrick McIntire (LP)
+    "lp": ("LeePatrick McIntire", "leepatrick.mcintire@onixnet.com"),
+    "l.p.": ("LeePatrick McIntire", "leepatrick.mcintire@onixnet.com"),
+    "l p": ("LeePatrick McIntire", "leepatrick.mcintire@onixnet.com"),
+    "leepatrick": ("LeePatrick McIntire", "leepatrick.mcintire@onixnet.com"),
+    "lee patrick": ("LeePatrick McIntire", "leepatrick.mcintire@onixnet.com"),
+    "lee-patrick": ("LeePatrick McIntire", "leepatrick.mcintire@onixnet.com"),
+    "leepatrick mcintire": ("LeePatrick McIntire", "leepatrick.mcintire@onixnet.com"),
+    "lee patrick mcintire": ("LeePatrick McIntire", "leepatrick.mcintire@onixnet.com"),
+    "lee-patrick mcintire": ("LeePatrick McIntire", "leepatrick.mcintire@onixnet.com"),
+    # Coley Woyak / Coley Perry
+    "coley": ("Coley Woyak", "coley.woyak@onixnet.com"),
+    "colin": ("Coley Woyak", "coley.woyak@onixnet.com"),
+    "coalie": ("Coley Woyak", "coley.woyak@onixnet.com"),
+    "colie": ("Coley Woyak", "coley.woyak@onixnet.com"),
+    "coaly": ("Coley Woyak", "coley.woyak@onixnet.com"),
+    "coley woyak": ("Coley Woyak", "coley.woyak@onixnet.com"),
+    "coley perry": ("Coley Woyak", "coley.woyak@onixnet.com"),
+    # Matteo Vaiente
+    "matteo": ("Matteo Vaiente", "matteo.vaiente@onixnet.com"),
+    "matteo vaiente": ("Matteo Vaiente", "matteo.vaiente@onixnet.com"),
+}
+
+EMAIL_ALIASES: dict[str, str] = {
+    "coley.perry@onixnet.com": "coley.woyak@onixnet.com",
+}
+
+# Retained backward compatibility mapping
 COMMON_NAME_ALIASES: dict[str, str] = {
     "colin": "Coley",
     "coalie": "Coley",
@@ -70,6 +139,27 @@ def _name_sim(a: str, b: str) -> float:
     return SequenceMatcher(None, na, nb).ratio()
 
 
+def _initials_matches(
+    mention: str, known_people: list[dict[str, Any]]
+) -> list[tuple[str | None, str | None, bool]]:
+    """Known people whose initials match a 2-3 letter mention (e.g. 'LP')."""
+    m = _norm_name(mention).replace(".", "").replace(" ", "")
+    if len(m) < 2 or len(m) > 3 or not m.isalpha():
+        return []
+
+    out: list[tuple[str | None, str | None, bool]] = []
+    for person in known_people:
+        p_name = _norm_name(person.get("name", ""))
+        parts = p_name.split()
+        if len(parts) >= 2:
+            initials = "".join(p[0] for p in parts if p)
+            if initials == m:
+                out.append((person.get("email"), person.get("name"), bool(person.get("tracked", False))))
+            elif parts[0].startswith("lee") and "patrick" in parts[0] and m == "lp":
+                out.append((person.get("email"), person.get("name"), bool(person.get("tracked", False))))
+    return out
+
+
 def _given_name_matches(
     mention: str, known_people: list[dict[str, Any]]
 ) -> list[tuple[str | None, str | None, bool]]:
@@ -83,7 +173,7 @@ def _given_name_matches(
     if len(tokens) != 1:
         return []
     first = tokens[0]
-    if len(first) < 3:  # "TK", "JD" -- initials are not a given name
+    if len(first) < 3:  # Initials handled separately in _initials_matches
         return []
 
     out: list[tuple[str | None, str | None, bool]] = []
@@ -199,18 +289,35 @@ def resolve(
         role = getattr(attendee, "role", "attendee") or "attendee"
         email = getattr(attendee, "email", None)
 
-    alias = COMMON_NAME_ALIASES.get(_norm_name(name))
+    # 1. Filter out junk placeholder speaker names immediately
+    if is_junk_name(name):
+        return Resolution(name, role, None, "dropped", False, "junk-name")
+
+    # 2. Check canonical known person aliases (LP, Coley, Colin, Matteo, etc.)
+    norm_n = _norm_name(name)
+    alias_match = KNOWN_PERSON_ALIASES.get(norm_n)
+    if alias_match and (not email or "@" not in email):
+        c_name, c_email = alias_match
+        return Resolution(c_name, role, c_email, "resolved", False, "known-alias")
+
+    # Retained backward compatibility mapping
+    alias = COMMON_NAME_ALIASES.get(norm_n)
     if alias:
         name = alias
 
     # Tier 1 — deterministic (email present)
     if email and "@" in email:
         ne = normalize_email(email)
+        ne = EMAIL_ALIASES.get(ne, ne)
         entry = roster.match_email(ne)
         if entry:
             return Resolution(
                 entry.name or name, role, entry.email, "resolved", entry.tracked, "roster-email"
             )
+        # Check if known_people has this email to retain full canonical display name
+        for kp in known_people:
+            if normalize_email(kp.get("email")) == ne and kp.get("name"):
+                return Resolution(kp["name"], role, ne, "resolved", bool(kp.get("tracked", False)), "known-email")
         # Real email, not in roster → canonical is the normalized email (a new person).
         return Resolution(name, role, ne, "resolved", False, "email-normalized")
 
@@ -221,10 +328,6 @@ def resolve(
             entry.name, role, entry.email, "resolved", entry.tracked, f"roster-name:{score:.2f}"
         )
 
-    # `tracked` is carried in the tuple deliberately. v5 read it off `p`
-    # after the loop -- the LAST person iterated, not the one that matched --
-    # so the governance gate was decided by list ordering. Person.tracked is
-    # opt-in (CLAUDE.md); getting it from the wrong person is a real leak.
     best: tuple[str | None, str | None, float, bool] = (None, None, 0.0, False)
     for p in known_people:
         s = _name_sim(name, p.get("name", ""))
@@ -235,16 +338,13 @@ def resolve(
             best[1] or name, role, best[0], "resolved", best[3], f"person-name:{best[2]:.2f}"
         )
 
+    # Initials match (e.g. "LP" matching "LeePatrick McIntire")
+    initials_candidates = _initials_matches(name, known_people)
+    if len(initials_candidates) == 1:
+        email, full, tracked = initials_candidates[0]
+        return Resolution(full or name, role, email, "resolved", tracked, "person-initials")
+
     # Unambiguous first-name match.
-    #
-    # Meeting notes refer to colleagues by first name constantly, and whole-string
-    # similarity is hopeless at it: "Matteo" vs "Matteo Vaiente" scores 0.60 against a
-    # 0.85 threshold, so EVERY first-name mention of a known person landed in the review
-    # queue. Measured on the real corpus, that was most of it.
-    #
-    # Resolves only when the mention matches exactly ONE known person's given name. Two
-    # Matteos means genuine ambiguity, and guessing between colleagues is worse than
-    # asking -- so it stays in review.
     given = _given_name_matches(name, known_people)
     if len(given) == 1:
         email, full, tracked = given[0]
@@ -252,7 +352,7 @@ def resolve(
     if len(given) > 1:
         return Resolution(name, role, None, "review", False, "ambiguous-given-name")
 
-    # Give up → review. Never silently drop.
+    # Give up → review. Never silently drop real human names.
     return Resolution(name, role, None, "review", False, "no-email-no-match" if not email else "unresolved")
 
 
@@ -261,12 +361,18 @@ def resolve_attendees(
     roster: Roster,
     known_people: list[dict[str, Any]] | None = None,
 ) -> tuple[list[Resolution], list[Resolution]]:
-    """Return (resolved, reviews) for a list of attendees."""
+    """Return (resolved, reviews) for a list of attendees.
+
+    Junk speakers (e.g. 'Unknown speaker') are dropped from both queues.
+    """
     resolved: list[Resolution] = []
     reviews: list[Resolution] = []
     for a in attendees:
         r = resolve(a, roster, known_people=known_people)
-        (resolved if r.status == "resolved" else reviews).append(r)
+        if r.status == "resolved":
+            resolved.append(r)
+        elif r.status == "review":
+            reviews.append(r)
     return resolved, reviews
 
 

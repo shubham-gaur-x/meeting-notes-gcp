@@ -419,6 +419,7 @@ def _attach_header_emails(
     """
     by_full: dict[str, list[dict[str, str]]] = {}
     by_given: dict[str, list[dict[str, str]]] = {}
+    by_initials: dict[str, list[dict[str, str]]] = {}
     for hr in header_recipients:
         name = person_resolver.normalize_name(hr.get("name"))
         if not name:
@@ -427,6 +428,17 @@ def _attach_header_emails(
         parts = name.split()
         if parts:
             by_given.setdefault(parts[0], []).append(hr)
+            if len(parts) >= 2:
+                initials = "".join(p[0] for p in parts if p)
+                by_initials.setdefault(initials, []).append(hr)
+            if parts[0].startswith("lee") and "patrick" in parts[0]:
+                by_initials.setdefault("lp", []).append(hr)
+
+    # Prune junk speakers from the attendee list in place
+    attendees[:] = [
+        att for att in attendees
+        if not person_resolver.is_junk_name(att.get("name"))
+    ]
 
     for att in attendees:
         if att.get("email"):
@@ -438,12 +450,23 @@ def _attach_header_emails(
         matches = by_full.get(att_name) or []
         if not matches and len(att_name) >= 3 and " " not in att_name:
             matches = by_given.get(att_name) or []
+        if not matches and len(att_name) <= 3:
+            matches = by_initials.get(att_name) or []
+
         # More than one candidate is not a match, it is a coin toss.
-        if len(matches) != 1:
+        if len(matches) > 1:
+            continue
+        if len(matches) == 1:
+            att["email"] = matches[0].get("email")
+            att["name"] = matches[0].get("name") or att.get("name")
             continue
 
-        att["email"] = matches[0].get("email")
-        att["name"] = matches[0].get("name") or att.get("name")
+        # Check known person alias dictionary as fallback
+        alias_tuple = person_resolver.KNOWN_PERSON_ALIASES.get(att_name)
+        if alias_tuple:
+            c_name, c_email = alias_tuple
+            att["name"] = c_name
+            att["email"] = c_email
 
 
 async def enrich(

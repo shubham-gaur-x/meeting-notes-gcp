@@ -91,18 +91,34 @@ def repair(data: dict[str, Any], context: dict[str, Any] | None = None) -> dict[
         if isinstance(decision, dict) and _is_null_like(decision.get("confidence")):
             decision["confidence"] = 1.0
 
-    # Normalize speech-to-text phonetic mistranscriptions for key team members (e.g. Coley -> Colin / Coalie)
+    # Normalize speech-to-text phonetic mistranscriptions and aliases
+    from meeting_notes.person_resolver import is_junk_name
+
+    # Filter out junk speakers (e.g. "Unknown speaker", "Speaker 1") from extracted attendees
+    if "attendees" in data and isinstance(data["attendees"], list):
+        data["attendees"] = [
+            att for att in data["attendees"]
+            if isinstance(att, dict) and not is_junk_name(att.get("name"))
+        ]
+
     for att in data.get("attendees") or []:
         if isinstance(att, dict) and att.get("name"):
             n = str(att["name"]).strip()
             if n.lower() in ("colin", "coalie", "colie", "coaly"):
                 att["name"] = "Coley"
+            elif n.lower() in ("lp", "l.p.", "l p"):
+                att["name"] = "LeePatrick McIntire"
+                att["email"] = "leepatrick.mcintire@onixnet.com"
 
     for item in data.get("action_items") or []:
         if isinstance(item, dict) and item.get("owner"):
             o = str(item["owner"]).strip()
-            if o.lower() in ("colin", "coalie", "colie", "coaly"):
+            if o != "Unknown" and is_junk_name(o):
+                item["owner"] = "Unassigned"
+            elif o.lower() in ("colin", "coalie", "colie", "coaly"):
                 item["owner"] = "Coley"
+            elif o.lower() in ("lp", "l.p.", "l p"):
+                item["owner"] = "LeePatrick McIntire"
 
     if isinstance(data.get("summary"), str):
         data["summary"] = re.sub(r"\bColin\b", "Coley", data["summary"])

@@ -1066,7 +1066,8 @@ async function openMeeting(m) {
       ]) + `</div>` +
       (() => {
         const resolved = d.attendees || [];
-        const unres = (d.unresolved_attendees || []).filter(u => u && !/unknown\s*speaker/i.test(u));
+        const isJunk = u => !u || /^(unknown(\s*speaker)?|speaker\s*\d*|unidentified(\s*speaker)?|none|nobody|the group|someone|all|everyone|n\/a|na|—|-)$/i.test(u.trim());
+        const unres = (d.unresolved_attendees || []).filter(u => !isJunk(u));
         const total = resolved.length + unres.length;
         if (!total) return `<h3>Who was there (0)</h3>` + empty("No attendees recorded.");
         let pills = resolved.map(a => `<span class="pill">👤 ${esc(a.name || a.email)}</span>`).join("");

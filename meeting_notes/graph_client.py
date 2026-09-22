@@ -140,6 +140,8 @@ def _resolve_owner_email(
         given = [email for name, email in known if _given_name(name) == norm_owner]
         if len(given) == 1:
             return given[0].lower()
+        if len(given) > 1:
+            return None
 
         # Local part, e.g. an owner written as "michael.baylard".
         for _name, email in known:
@@ -1639,6 +1641,7 @@ async def get_meeting_detail(meeting_id: str, driver: Any = None) -> dict[str, A
                 "MATCH (:Meeting {id: $meeting_id})-[:NEEDS_REVIEW]->(r:PersonReview) "
                 "WHERE coalesce(r.status, 'pending') = 'pending' RETURN r.name AS name",
             )
+            if not person_resolver.is_junk_name(r.get("name"))
         ]
 
     return detail
