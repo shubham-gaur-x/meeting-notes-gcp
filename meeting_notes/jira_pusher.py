@@ -16,6 +16,7 @@ Two gates run in this order, both exit criteria for Phase 6:
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import structlog
@@ -26,6 +27,65 @@ from meeting_notes.models import ActionItem, ExtractedMeeting
 from meeting_notes.utils import gmail_thread_url, uuid5_id
 
 log = structlog.get_logger()
+
+_ADMINISTRATIVE_PATTERNS = [
+    r"\b(timecard|timesheet|time[- ]entry|time[- ]entries)\b",
+    r"\bsalesforce\b",
+    r"\bpsa\b",
+    r"\bskills?\s+profile\b",
+    r"\b(optum|optum\s*bank)\b",
+    r"\bsocial\s+security\b",
+    r"\b(benefits?|enrollment|401k|healthcare|hsa|fsa)\b",
+]
+
+_ADMINISTRATIVE_REGEX = re.compile("|".join(_ADMINISTRATIVE_PATTERNS), re.IGNORECASE)
+
+
+def is_administrative_task(task: str) -> bool:
+    """Check if task is routine administrative or small-stuff overhead."""
+    if not task:
+        return False
+    return bool(_ADMINISTRATIVE_REGEX.search(task))
+
+
+def _get_configured_identities(settings: Settings) -> set[str]:
+    identities: set[str] = set()
+    if settings.jira_user_identities:
+        for ident in settings.jira_user_identities.split(","):
+            ident_clean = ident.strip().lower()
+            if ident_clean:
+                identities.add(ident_clean)
+    if settings.google_workspace_user:
+        identities.add(settings.google_workspace_user.strip().lower())
+    if settings.jira_email:
+        identities.add(settings.jira_email.strip().lower())
+    return identities
+
+
+def _matches_identity(owner_clean: str, ident: str) -> bool:
+    if owner_clean == ident:
+        return True
+    if "@" in ident and owner_clean == ident.split("@")[0]:
+        return True
+    if "@" in owner_clean and ident == owner_clean.split("@")[0]:
+        return True
+    tokens = ident.split()
+    return len(tokens) > 1 and owner_clean == tokens[0]
+
+
+def is_self_owned(owner: str, settings: Settings) -> bool:
+    """Return True if owner refers to the current user ('me' / configured identities)."""
+    if not owner:
+        return False
+    owner_clean = owner.strip().lower()
+    if owner_clean in {"me", "myself", "self"}:
+        return True
+
+    identities = _get_configured_identities(settings)
+    if not identities:
+        return True
+
+    return any(_matches_identity(owner_clean, ident) for ident in identities)
 
 
 async def _default_mark_needs_review(action_id: str, reason: str) -> None:
@@ -168,11 +228,28 @@ async def _is_gated(
 ) -> bool:
     """True when this item must NOT become a ticket.
 
-    Two independent reasons, both of which leave the item in the graph: the
-    extractor was not confident enough to file it automatically, or it repeats
-    something already open. Neither is a failure — an item that reaches the
-    review queue is one the system chose to ask about rather than guess.
+    Reasons:
+    - Administrative overhead (timecards, salesforce, benefits) is filtered.
+    - Non-self ownership (when jira_push_self_only is enabled).
+    - Extractor confidence below threshold (routed to needs_review).
+    - Near-duplicate of an already open item (linked via MENTIONED_IN).
     """
+    if settings.jira_skip_administrative and is_administrative_task(action.task):
+        log.info(
+            "jira_pusher.skipped_administrative",
+            task=action.task[:60],
+            owner=action.owner,
+        )
+        return True
+
+    if settings.jira_push_self_only and not is_self_owned(action.owner, settings):
+        log.info(
+            "jira_pusher.skipped_not_self",
+            task=action.task[:60],
+            owner=action.owner,
+        )
+        return True
+
     if action.confidence < settings.jira_confidence_threshold:
         await mark_needs_review(action_id, f"confidence {action.confidence:.2f} below threshold")
         log.info(

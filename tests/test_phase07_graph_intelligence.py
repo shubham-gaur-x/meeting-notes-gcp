@@ -1238,3 +1238,115 @@ async def test_reresolve_leaves_an_unresolvable_owner_alone() -> None:
     )
     assert out["resolved"] == 0
     assert not written, "an unresolvable owner must not write an edge"
+
+
+# ─── structured chunk embedding tests ─────────────────────────────────────────
+
+
+def test_format_meeting_chunk_includes_all_metadata_and_names() -> None:
+    chunk = vector.format_meeting_chunk(
+        title="Architecture Sync",
+        original_title="Coley <> Michael - CFA",
+        attendees=["Coley Woyak", "Michael Baylard"],
+        topics=["Cloud Migration", "GKE"],
+        decisions=["Migrate to GKE before Q4"],
+        actions=["Coley Woyak: Send updated CFA statement of work"],
+        summary="Deep dive into Chick-fil-A cloud migration architecture.",
+        date="2026-09-21",
+        platform="Google Meet",
+    )
+
+    assert "Meeting Title: Architecture Sync" in chunk
+    assert "Original Title: Coley <> Michael - CFA" in chunk
+    assert "Date: 2026-09-21 | Platform: Google Meet" in chunk
+    assert "Attendees: Coley Woyak, Michael Baylard" in chunk
+    assert "Topics: Cloud Migration, GKE" in chunk
+    assert "Decisions: Migrate to GKE before Q4" in chunk
+    assert "Action Items: Coley Woyak: Send updated CFA statement of work" in chunk
+    assert "Summary: Deep dive into Chick-fil-A cloud migration architecture." in chunk
+
+
+def test_chunk_meeting_content_preserves_context_header_across_chunks() -> None:
+    long_summary = "This is a detailed technical section discussing system architecture. " * 30
+    chunks = vector.chunk_meeting_content(
+        title="Sprint Planning",
+        original_title="[Sprint 42] Planning & Review",
+        attendees=["Coley Woyak", "Michael Baylard"],
+        topics=["Sprint 42", "Backlog Grooming"],
+        summary=long_summary,
+        max_chunk_chars=400,
+        overlap_chars=50,
+    )
+
+    assert len(chunks) > 1, "long content should be split into multiple chunks"
+    for c in chunks:
+        # Every single chunk must retain the essential entity header
+        assert "Meeting: Sprint Planning" in c
+        assert "Original: [Sprint 42] Planning & Review" in c
+        assert "Attendees: Coley Woyak, Michael Baylard" in c
+
+
+def test_format_action_item_chunk_includes_owner_and_meeting() -> None:
+    chunk = vector.format_action_item_chunk(
+        "Update Terraform scripts",
+        owner="Coley Woyak",
+        meeting_title="Architecture Sync",
+        original_title="Coley <> Michael - CFA",
+    )
+    assert chunk == (
+        "Action Item: Update Terraform scripts | Assignee: Coley Woyak | "
+        "Meeting: Architecture Sync | Source: Coley <> Michael - CFA"
+    )
+
+
+def test_format_fact_chunk_includes_meeting_and_source() -> None:
+    chunk = vector.format_fact_chunk(
+        "GKE cluster staging environment is ready",
+        meeting_title="Architecture Sync",
+        original_title="Coley <> Michael - CFA",
+    )
+    assert chunk == (
+        "Fact: GKE cluster staging environment is ready | "
+        "Meeting: Architecture Sync | Source: Coley <> Michael - CFA"
+    )
+
+
+async def test_embed_meeting_with_extracted_meeting_writes_chunk_nodes() -> None:
+    session = FakeSession()
+
+    async def fake_embed(text, **kw):
+        return _vec()
+
+    class _Attendee:
+        def __init__(self, name: str, email: str = ""):
+            self.name = name
+            self.email = email
+
+    class _MockMeeting:
+        title = "Cloud Strategy"
+        original_title = "Strategy Call"
+        summary = "Discussed multi-cloud rollout plan."
+        attendees = [_Attendee("Coley Woyak"), _Attendee("Michael Baylard")]
+        topics = ["Multi-Cloud", "GCP"]
+        decisions = []
+        action_items = []
+
+    ok = await vector.embed_meeting(
+        "m_test",
+        meeting=_MockMeeting(),
+        driver=FakeDriver(session),
+        embed=fake_embed,
+    )
+
+    assert ok is True
+    assert len(session.calls) >= 2, "must write meeting embedding and chunk node"
+    m_call = session.calls[0]
+    assert "SET m.embedding = $embedding" in m_call[0]
+    assert "Meeting Title: Cloud Strategy" in m_call[1]["primary_chunk"]
+    assert "Original Title: Strategy Call" in m_call[1]["primary_chunk"]
+    assert "Attendees: Coley Woyak, Michael Baylard" in m_call[1]["primary_chunk"]
+
+    c_call = session.calls[1]
+    assert "MERGE (c:Chunk {id: $chunk_id})" in c_call[0]
+    assert "Meeting Title: Cloud Strategy" in c_call[1]["text"]
+

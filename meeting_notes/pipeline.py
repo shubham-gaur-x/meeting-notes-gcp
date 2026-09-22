@@ -406,19 +406,16 @@ def apply_source_overrides(
     return ExtractedMeeting.model_validate({**data, **overrides_copy})
 
 
-def _attach_header_emails(
-    attendees: list[dict[str, Any]], header_recipients: list[dict[str, str]]
-) -> None:
-    """Fill in missing attendee emails from verified message headers, in place.
-
-    A given name only identifies someone while it is unique among the handful
-    of addresses on the message. Matching the first Katrisa in the headers
-    attaches one person's address to another person's name, and nothing
-    downstream can tell that it guessed -- the same failure `graph_client`'s
-    owner resolution was fixed for, so it is refused the same way here.
-    """
+def _build_header_indices(
+    header_recipients: list[dict[str, str]],
+) -> tuple[
+    dict[str, list[dict[str, str]]],
+    dict[str, list[dict[str, str]]],
+    dict[str, list[dict[str, str]]],
+]:
     by_full: dict[str, list[dict[str, str]]] = {}
     by_given: dict[str, list[dict[str, str]]] = {}
+    by_initials: dict[str, list[dict[str, str]]] = {}
     for hr in header_recipients:
         name = person_resolver.normalize_name(hr.get("name"))
         if not name:
@@ -427,6 +424,41 @@ def _attach_header_emails(
         parts = name.split()
         if parts:
             by_given.setdefault(parts[0], []).append(hr)
+            if len(parts) >= 2:
+                initials = "".join(p[0] for p in parts if p)
+                by_initials.setdefault(initials, []).append(hr)
+            if parts[0].startswith("lee") and "patrick" in parts[0]:
+                by_initials.setdefault("lp", []).append(hr)
+    return by_full, by_given, by_initials
+
+
+def _match_header_recipient(
+    att_name: str,
+    by_full: dict[str, list[dict[str, str]]],
+    by_given: dict[str, list[dict[str, str]]],
+    by_initials: dict[str, list[dict[str, str]]],
+) -> dict[str, str] | None:
+    matches = by_full.get(att_name) or []
+    if not matches and len(att_name) >= 3 and " " not in att_name:
+        matches = by_given.get(att_name) or []
+    if not matches and len(att_name) <= 3:
+        matches = by_initials.get(att_name) or []
+    if len(matches) == 1:
+        return matches[0]
+    return None
+
+
+def _attach_header_emails(
+    attendees: list[dict[str, Any]], header_recipients: list[dict[str, str]]
+) -> None:
+    """Fill in missing attendee emails from verified message headers, in place."""
+    by_full, by_given, by_initials = _build_header_indices(header_recipients)
+
+    # Prune junk speakers from the attendee list in place
+    attendees[:] = [
+        att for att in attendees
+        if not person_resolver.is_junk_name(att.get("name"))
+    ]
 
     for att in attendees:
         if att.get("email"):
@@ -435,15 +467,18 @@ def _attach_header_emails(
         if not att_name:
             continue
 
-        matches = by_full.get(att_name) or []
-        if not matches and len(att_name) >= 3 and " " not in att_name:
-            matches = by_given.get(att_name) or []
-        # More than one candidate is not a match, it is a coin toss.
-        if len(matches) != 1:
+        matched = _match_header_recipient(att_name, by_full, by_given, by_initials)
+        if matched:
+            att["email"] = matched.get("email")
+            att["name"] = matched.get("name") or att.get("name")
             continue
 
-        att["email"] = matches[0].get("email")
-        att["name"] = matches[0].get("name") or att.get("name")
+        # Check known person alias dictionary as fallback
+        alias_tuple = person_resolver.KNOWN_PERSON_ALIASES.get(att_name)
+        if alias_tuple:
+            c_name, c_email = alias_tuple
+            att["name"] = c_name
+            att["email"] = c_email
 
 
 async def enrich(
@@ -481,7 +516,7 @@ async def enrich(
         ("temporal", lambda: episodic.link_temporal_chain(meeting_id, str(meeting.date), emails)),
         ("causality", lambda: episodic.detect_causality(meeting, meeting_id, settings=settings)),
         ("procedures", lambda: procedural.match_to_procedure(meeting, meeting_id)),
-        ("embed_meeting", lambda: vector.embed_meeting(meeting_id, meeting.summary, settings=settings)),
+        ("embed_meeting", lambda: vector.embed_meeting(meeting_id, meeting=meeting, settings=settings)),
         ("embed_actions", lambda: vector.embed_action_items_for_meeting(meeting_id, settings=settings)),
         # Without this, every Fact stays outside the vector index and
         # /graph/search/facts can never return a result -- found live against
@@ -502,6 +537,35 @@ async def enrich(
     return outcome
 
 
+def _infer_original_title(payload: dict[str, Any], source_type: str) -> str | None:
+    orig = payload.get("original_title")
+    if orig:
+        return str(orig)
+    if source_type == "email":
+        return payload.get("subject")
+    if source_type == "calendar":
+        return payload.get("summary")
+    if source_type == "meet":
+        t = payload.get("title")
+        if t and not str(t).startswith("spaces/"):
+            return str(t)
+    return None
+
+
+async def _push_issue_trackers(
+    settings: Settings,
+    meeting: ExtractedMeeting,
+    source_id: str,
+    push_jira: Any,
+    push_linear: Any,
+) -> None:
+    tracker = (settings.issue_tracker or "jira").lower()
+    if tracker in ("jira", "both"):
+        await push_jira(meeting.action_items, meeting, source_id)
+    if tracker in ("linear", "both"):
+        await push_linear(meeting.action_items, meeting, source_id)
+
+
 async def process(
     record: StagedRecord,
     adapter: Adapter,
@@ -509,13 +573,14 @@ async def process(
     settings: Settings | None = None,
     upsert: Any = None,
     push_jira: Any = None,
+    push_linear: Any = None,
     mark_processed: Any = None,
     transport: Any = None,
     enrich_fn: Any = None,
 ) -> PipelineResult:
-    """classify -> route -> extract -> graph write -> push to Jira.
+    """classify -> route -> extract -> graph write -> push to Jira / Linear.
 
-    `upsert`, `push_jira`, `mark_processed` and `transport` are injectable so
+    `upsert`, `push_jira`, `push_linear`, `mark_processed` and `transport` are injectable so
     the suite exercises every branch with no LLM, no database, no Memgraph.
     `transport` passes straight through to `extractor.extract_meeting`, which
     already exposes it for exactly this purpose. Defaults wire the real
@@ -530,6 +595,10 @@ async def process(
         from meeting_notes import jira_pusher
 
         push_jira = jira_pusher.push_action_items
+    if push_linear is None:
+        from meeting_notes import linear_pusher
+
+        push_linear = linear_pusher.push_action_items_to_linear
     if mark_processed is None:
         from meeting_notes import db
 
@@ -563,12 +632,16 @@ async def process(
 
     # Source-authoritative fields win over whatever the model inferred.
     meeting = apply_source_overrides(meeting, adapter.extract_overrides(payload))
+    if not meeting.original_title:
+        orig = _infer_original_title(payload, adapter.source_type)
+        if orig:
+            meeting = meeting.model_copy(update={"original_title": orig})
 
     bound = bound.bind(step="graph_write", meeting_title=meeting.title)
     meeting_id: str = await upsert(meeting, record.source_id)
 
-    bound = bound.bind(step="jira_push")
-    await push_jira(meeting.action_items, meeting, record.source_id)
+    # Push to configured issue trackers (Jira and/or Linear)
+    await _push_issue_trackers(settings, meeting, record.source_id, push_jira, push_linear)
 
     bound = bound.bind(step="enrich")
     try:

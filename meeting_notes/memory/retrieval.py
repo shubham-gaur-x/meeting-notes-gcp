@@ -44,9 +44,13 @@ SYNTHESIS_SYSTEM_PREFIX = (
     "Formatting & Guidelines:\n"
     "- Address the user directly using natural second-person language ('you' / "
     "'your'). Never refer to the user in the third person or leak the user's name.\n"
-    "- Structure your answer with rich, scannable formatting (e.g. bold deliverable "
-    "titles, clear stakeholder headers, and inline attribute metadata) — never just "
-    "a flat list of plain bullets.\n"
+    "- Structure deliverables and tasks as distinct, easily scannable sections/cards "
+    "— with a bold item title, followed by structured metadata: **Owner**, **Due Date**, "
+    "**Priority**, and **Details**, plus inline Jira and Source links. Do not crowd deliverables "
+    "into flat, indistinct bullet lists.\n"
+    "- Cite source meetings and Gmail links: For every deliverable, decision, or update, "
+    "always include its relevant source meeting title and link (e.g. `[Meeting Title](url)`) "
+    "and Jira ticket (e.g. `[Jira KEY-123](url)`) exactly as provided in the context.\n"
     # Links are reproduced, never composed. The earlier wording told the model
     # to ALWAYS include a link and showed it the URL shapes, which is a recipe
     # for a confidently invented Jira key -- and a fabricated link is worse
@@ -55,13 +59,15 @@ SYNTHESIS_SYSTEM_PREFIX = (
     "the item they belong to. Never construct, guess, or complete a URL that is not "
     "written in the context verbatim. If an item has no link, say nothing about "
     "links for it.\n"
-    "- For each deliverable or task, display its owner, due date (if any), and "
-    "actionable details inline.\n"
     "- Do NOT create a separate duplicate 'Links Summary' or 'References' section "
     "at the bottom; attach links directly to each item.\n"
     "- Answer using ONLY the context below. Cite names and dates when they are "
     "present. If the context does not contain enough information to answer, say so "
-    "plainly -- do not guess.\n\n"
+    "plainly -- do not guess.\n"
+    "- Contacts & Nicknames: The team uses nicknames and first names (e.g. 'LP' = LeePatrick McIntire, "
+    "'Coley' = Coley Woyak, 'Matteo' = Matteo Vaiente, 'Michael' = Michael Baylard). "
+    "Always refer to colleagues by their canonical full names in your final answer "
+    "while understanding their nicknames.\n\n"
     'Respond ONLY with JSON of exactly this shape: {"answer": "your markdown answer here"}.\n'
     "The answer value must be formatted markdown text, not nested objects or lists.\n\n"
     "Context:\n"
@@ -131,6 +137,92 @@ def _links_suffix(*links: str | None) -> str:
     return f" | Links: {' '.join(present)}" if present else ""
 
 
+async def _query_people_context(
+    session: Any,
+    people: list[str],
+    settings: Settings,
+    lines: list[str],
+    node_ids: list[str],
+) -> None:
+    from meeting_notes import person_resolver
+
+    expanded_people = person_resolver.expand_contact_mentions(people)
+    result = await session.run(
+        """
+        UNWIND $names AS name
+        MATCH (p:Person)
+        WHERE toLower(p.name) CONTAINS toLower(name)
+           OR toLower(p.email) CONTAINS toLower(name)
+           OR ANY(alias IN coalesce(p.aliases, []) WHERE toLower(alias) = toLower(name))
+        RETURN DISTINCT p.id AS id, p.name AS name, p.email AS email, p.aliases AS aliases
+        LIMIT 10
+        """,
+        names=expanded_people,
+    )
+    async for record in result:
+        node_ids.append(record["id"])
+        aliases = record.get("aliases") or []
+        alias_str = f" (aka {', '.join(aliases)})" if aliases else ""
+        lines.append(f"Person: {record['name']} <{record['email']}>{alias_str}")
+
+    actions_by_person = await session.run(
+        """
+        UNWIND $names AS name
+        MATCH (a:ActionItem)
+        WHERE (toLower(a.owner) CONTAINS toLower(name)
+           OR EXISTS {
+               MATCH (a)-[:ASSIGNED_TO]->(p:Person)
+               WHERE toLower(p.name) CONTAINS toLower(name)
+                  OR toLower(p.email) CONTAINS toLower(name)
+                  OR ANY(alias IN coalesce(p.aliases, []) WHERE toLower(alias) = toLower(name))
+           })
+        OPTIONAL MATCH (m:Meeting)-[:FOLLOWS_UP]->(a)
+        RETURN DISTINCT a.id AS id, a.task AS task, a.owner AS owner,
+               a.due AS due, a.priority AS priority, a.jira_key AS jira_key,
+               m.title AS meeting_title, m.source_id AS source_id, m.date AS date
+        LIMIT 10
+        """,
+        names=expanded_people,
+    )
+    async for record in actions_by_person:
+        node_ids.append(record["id"])
+        links = _links_suffix(
+            _jira_link(record.get("jira_key"), settings),
+            _gmail_link(record.get("source_id")),
+        )
+        owner_full = person_resolver.resolve_to_full_name(record["owner"])
+        lines.append(
+            f"ActionItem: Task: {record['task']} | Owner: {owner_full}"
+            f" | Due: {record['due'] or 'None'} | Priority: {record['priority']}"
+            f" | Source: {record['meeting_title']}{links}"
+        )
+
+
+async def _query_semantic_chunks(
+    question: str,
+    driver: Any,
+    settings: Settings,
+    lines: list[str],
+    node_ids: list[str],
+) -> None:
+    try:
+        from meeting_notes.llm_client import embed
+        from meeting_notes.memory import vector
+
+        chunk_hits = await vector.search_similar_chunks(
+            question, limit=4, driver=driver, settings=settings, embed=embed
+        )
+        for hit in chunk_hits:
+            if hit.get("id"):
+                node_ids.append(hit["id"])
+            title = hit.get("meeting_title") or "Meeting"
+            orig_t = hit.get("original_title")
+            orig = f" (Source: {orig_t})" if orig_t and orig_t != title else ""
+            lines.append(f"Transcript & Discussion Chunk [{title}{orig}]:\n{hit.get('text', '')}")
+    except Exception as exc:
+        log.warning("retrieval.chunk_search_failed", error=str(exc))
+
+
 async def assemble_context(
     entities: dict[str, Any],
     question: str,
@@ -173,22 +265,9 @@ async def assemble_context(
                 f" | Source: {record['meeting_title']}{links}"
             )
 
-        # 2. People
+        # 2. People & Contact Profiles
         if people:
-            result = await session.run(
-                """
-                UNWIND $names AS name
-                MATCH (p:Person)
-                WHERE toLower(p.name) CONTAINS toLower(name)
-                   OR toLower(p.email) CONTAINS toLower(name)
-                RETURN DISTINCT p.id AS id, p.name AS name, p.email AS email
-                LIMIT 10
-                """,
-                names=people,
-            )
-            async for record in result:
-                node_ids.append(record["id"])
-                lines.append(f"Person: {record['name']} <{record['email']}>")
+            await _query_people_context(session, people, settings, lines, node_ids)
 
         # 3. Topics & Meetings
         if topics:
@@ -246,6 +325,11 @@ async def assemble_context(
             node_ids.append(record["id"])
             lines.append(f"Fact (confidence {record['confidence']}): {record['text']}")
 
+    # 6. Semantic search over structured chunks (hybrid vector retrieval)
+    # Pulls relevant spoken discussion chunks and attendee details into the synthesis context
+    if search_meetings is None:
+        await _query_semantic_chunks(question, driver, settings, lines, node_ids)
+
     # Semantic search as a fallback: a question sharing no keywords with any
     # meeting still finds the right one by meaning. This is the mechanism
     # behind the "zero keyword overlap" exit criterion.
@@ -257,9 +341,23 @@ async def assemble_context(
     return lines, node_ids
 
 
+def _format_history_context(history: list[dict[str, Any]]) -> str:
+    """Format recent turns into conversational memory context."""
+    turns: list[str] = []
+    for turn in history[-4:]:  # last 2 exchanges
+        role = "User" if turn.get("role") == "user" else "Assistant"
+        text = str(turn.get("text") or turn.get("answer") or "").strip()
+        if text:
+            if len(text) > 500:
+                text = text[:500] + "..."
+            turns.append(f"{role}: {text}")
+    return "\n".join(turns)
+
+
 async def full_memory_query(
     question: str,
     *,
+    history: list[dict[str, Any]] | None = None,
     driver: Any = None,
     settings: Settings | None = None,
     chat: Any = None,
@@ -274,7 +372,12 @@ async def full_memory_query(
     settings = settings or get_settings()
     driver = driver or _driver()
 
-    entities = await extract_entities(question, settings=settings, chat=chat)
+    search_prompt = question
+    recent_context = _format_history_context(history) if history else ""
+    if recent_context:
+        search_prompt = f"Previous conversation:\n{recent_context}\n\nCurrent Question: {question}"
+
+    entities = await extract_entities(search_prompt, settings=settings, chat=chat)
     lines, node_ids = await assemble_context(
         entities, question, driver=driver, settings=settings, search_meetings=search_meetings
     )
@@ -285,8 +388,12 @@ async def full_memory_query(
         return {"question": question, "answer": NO_CONTEXT_ANSWER, "node_ids": [], "entities": entities}
 
     context = "\n".join(lines)
+    synth_user = question
+    if recent_context:
+        synth_user = f"Recent conversation context:\n{recent_context}\n\nQuestion: {question}"
+
     try:
-        parsed = await _chat(f"{SYNTHESIS_SYSTEM_PREFIX}{context}", question, settings, chat)
+        parsed = await _chat(f"{SYNTHESIS_SYSTEM_PREFIX}{context}", synth_user, settings, chat)
         answer = (
             parsed.get("answer")
             if isinstance(parsed, dict) and parsed.get("answer")
