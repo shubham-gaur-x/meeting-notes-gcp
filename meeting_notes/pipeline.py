@@ -481,7 +481,7 @@ async def enrich(
         ("temporal", lambda: episodic.link_temporal_chain(meeting_id, str(meeting.date), emails)),
         ("causality", lambda: episodic.detect_causality(meeting, meeting_id, settings=settings)),
         ("procedures", lambda: procedural.match_to_procedure(meeting, meeting_id)),
-        ("embed_meeting", lambda: vector.embed_meeting(meeting_id, meeting.summary, settings=settings)),
+        ("embed_meeting", lambda: vector.embed_meeting(meeting_id, meeting=meeting, settings=settings)),
         ("embed_actions", lambda: vector.embed_action_items_for_meeting(meeting_id, settings=settings)),
         # Without this, every Fact stays outside the vector index and
         # /graph/search/facts can never return a result -- found live against
