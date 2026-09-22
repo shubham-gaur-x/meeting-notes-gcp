@@ -120,6 +120,16 @@ The staging tables are a transactional work queue with a `processed` flag and ro
 updates. That's exactly what BigQuery is bad at and Postgres is good at. BigQuery may earn a
 place later as an analytics sink; it does not replace Cloud SQL here.
 
+### Google Chat and Slack groupchat ingestion — deferred to future phase (out of scope for v6)
+
+Direct chat and groupchat ingestion (Google Chat spaces/DMs, Slack channels, and Google Meet
+in-call sidechats) is deferred. The ingestion architecture explicitly scopes to four sources:
+Google Meet spoken audio transcripts, Gmail threads, Google Calendar events, and Jira issues.
+Google Meet's API delivers conference record spoken transcripts, not in-call text chats.
+Adding chat requires separate Workspace API scopes (`chat.messages.readonly`, `chat.spaces.readonly`),
+a dedicated `sources/chat.py` adapter, and a new Cloud Run Job (`ingest-chat`). The dashboard
+schema and filter models retain the capability to display chat objects once a connector is introduced.
+
 ---
 
 ## 4. GCP resource inventory

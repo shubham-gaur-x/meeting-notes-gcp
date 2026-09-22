@@ -1150,6 +1150,33 @@ model, where it can be validated against a real re-embed.
 
 ---
 
+## ADR-028 — Scope boundary: Chat and groupchat ingestion deferred to future phase
+
+**Date:** 2026-09-22 · **Status:** Accepted
+
+**Context.** Inquiries arose regarding whether Google Chat (spaces/DMs), Slack groupchats,
+and Google Meet in-call text chats are ingested into the meeting-memory knowledge graph.
+
+**Decision.** Chat and groupchat ingestion is explicitly out of scope for v6. The four-source
+ingestion contract remains:
+1. Google Meet (`sources/meet.py`): Spoken audio transcripts via `google.workspace.meet.transcript.v2.fileGenerated` Pub/Sub events.
+2. Gmail (`sources/gmail.py`): Email threads.
+3. Google Calendar (`sources/calendar.py`): Calendar events and invitees.
+4. Jira (`sources/jira.py`): Issues and bidirectional task status.
+
+**Consequences.** No chat messages are ingested or processed. The dashboard UI safely
+handles this boundary by hiding the chat filter pill when 0 chat items exist. Adding chat in
+a future phase requires:
+- Requesting Google Workspace OAuth scopes `https://www.googleapis.com/auth/chat.messages.readonly` and `chat.spaces.readonly` (or Slack Bot scopes).
+- Creating a new `sources/chat.py` adapter conforming to the `Source` protocol.
+- Deploying an `ingest-chat` Cloud Run Job and Cloud Scheduler trigger.
+
+**Rejected:** *Attempting ad-hoc scraping of Google Meet in-call sidechats.* Google Meet's
+Workspace Events API delivers transcripts only; in-meeting chat logs are stored separately
+and cannot be reliably fetched with the current `meetings.space.readonly` scope.
+
+---
+
 ## Template
 
 ```
