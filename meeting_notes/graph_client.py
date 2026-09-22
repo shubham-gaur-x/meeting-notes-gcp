@@ -120,6 +120,10 @@ def _resolve_owner_email(
     if not owner:
         return None
 
+    alias = person_resolver.COMMON_NAME_ALIASES.get(person_resolver.normalize_name(owner))
+    if alias:
+        owner = alias
+
     # 1. The meeting's own attendees, strongest signal first.
     if attendees:
         norm_owner = person_resolver.normalize_name(owner)

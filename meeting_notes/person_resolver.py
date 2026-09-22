@@ -29,6 +29,14 @@ log = structlog.get_logger()
 
 FUZZY_THRESHOLD = 0.85
 
+# Known transcription artifacts and phonetic aliases common in speech-to-text models
+COMMON_NAME_ALIASES: dict[str, str] = {
+    "colin": "Coley",
+    "coalie": "Coley",
+    "colie": "Coley",
+    "coaly": "Coley",
+}
+
 
 def normalize_email(email: str | None) -> str:
     """Lowercase, trim, and drop any ``+tag`` from the local part."""
@@ -190,6 +198,10 @@ def resolve(
         name = getattr(attendee, "name", "") or ""
         role = getattr(attendee, "role", "attendee") or "attendee"
         email = getattr(attendee, "email", None)
+
+    alias = COMMON_NAME_ALIASES.get(_norm_name(name))
+    if alias:
+        name = alias
 
     # Tier 1 — deterministic (email present)
     if email and "@" in email:

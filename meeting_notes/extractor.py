@@ -16,6 +16,7 @@ only module allowed to construct a client (CLAUDE.md).
 
 from __future__ import annotations
 
+import re
 import time
 from datetime import UTC, datetime
 from typing import Any
@@ -89,6 +90,22 @@ def repair(data: dict[str, Any], context: dict[str, Any] | None = None) -> dict[
     for decision in data.get("decisions") or []:
         if isinstance(decision, dict) and _is_null_like(decision.get("confidence")):
             decision["confidence"] = 1.0
+
+    # Normalize speech-to-text phonetic mistranscriptions for key team members (e.g. Coley -> Colin / Coalie)
+    for att in data.get("attendees") or []:
+        if isinstance(att, dict) and att.get("name"):
+            n = str(att["name"]).strip()
+            if n.lower() in ("colin", "coalie", "colie", "coaly"):
+                att["name"] = "Coley"
+
+    for item in data.get("action_items") or []:
+        if isinstance(item, dict) and item.get("owner"):
+            o = str(item["owner"]).strip()
+            if o.lower() in ("colin", "coalie", "colie", "coaly"):
+                item["owner"] = "Coley"
+
+    if isinstance(data.get("summary"), str):
+        data["summary"] = re.sub(r"\bColin\b", "Coley", data["summary"])
 
     return data
 
