@@ -68,6 +68,7 @@
   h1 { font-size: 13.5px; margin: 0; font-weight: 700; letter-spacing: -0.2px; color: var(--ink); white-space: nowrap; }
   .sub { color: var(--muted); font-size: 11px; white-space: nowrap; }
   nav.header-nav {
+    position: absolute; left: 50%; transform: translateX(-50%);
     display: flex; align-items: center; gap: 2px; background: var(--raise);
     border: 1px solid var(--line); padding: 3px; border-radius: 8px; overflow-x: auto;
     scrollbar-width: none;
@@ -101,7 +102,7 @@
   .panel.active { display: block; }
   @media (max-width: 920px) {
     header { height: auto; padding: 8px 14px; flex-wrap: wrap; }
-    nav.header-nav { order: 3; width: 100%; overflow-x: auto; }
+    nav.header-nav { position: static; transform: none; order: 3; width: 100%; overflow-x: auto; justify-content: center; }
   }
   .row { display:flex; gap:10px; align-items:center; margin-bottom:14px; flex-wrap:wrap; }
   input, select { background:var(--bg); border:1px solid var(--line); color:var(--ink);
