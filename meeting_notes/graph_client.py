@@ -1010,6 +1010,157 @@ async def get_person_reviews(limit: int = 50, driver: Any = None) -> list[dict[s
         return [dict(r) async for r in result]
 
 
+async def resolve_person_review(
+    review_id: str, name: str, email: str | None = None, driver: Any | None = None
+) -> dict[str, Any]:
+    """Resolve a PersonReview node into a verified Person node and link them to the meeting."""
+    driver = driver or get_driver()
+    norm_email = email.strip().lower() if email and email.strip() else None
+    norm_name = name.strip()
+
+    async with driver.session() as session:
+        find_res = await session.run(
+            """
+            MATCH (m:Meeting)-[rel:NEEDS_REVIEW]->(r:PersonReview {id: $review_id})
+            RETURN r.id AS review_id, r.name AS old_name, m.id AS meeting_id, m.title AS meeting_title
+            """,
+            review_id=review_id,
+        )
+        record = None
+        async for rec in find_res:
+            record = dict(rec)
+            break
+        if not record:
+            return {}
+
+        old_name = record["old_name"]
+        meeting_id = record["meeting_id"]
+
+        if not norm_email:
+            p_res = await session.run(
+                "MATCH (p:Person) WHERE toLower(p.name) = toLower($name) RETURN p.email AS email LIMIT 1",
+                name=norm_name,
+            )
+            async for prec in p_res:
+                norm_email = prec["email"]
+                break
+
+        if not norm_email:
+            sanitized = re.sub(r"[^a-zA-Z0-9]+", ".", norm_name.lower()).strip(".")
+            norm_email = f"{sanitized}@onixnet.com"
+
+        res = await session.run(
+            """
+            MATCH (m:Meeting {id: $meeting_id})
+            MATCH (r:PersonReview {id: $review_id})
+            MERGE (p:Person {email: $email})
+            ON CREATE SET p.name = $name, p.id = $person_id, p.created_at = datetime()
+            ON MATCH SET p.name = coalesce(p.name, $name)
+            MERGE (p)-[:ATTENDED]->(m)
+            SET r.status = 'resolved'
+            WITH m, p
+            OPTIONAL MATCH (m)-[:FOLLOWS_UP]->(a:ActionItem)
+            WHERE toLower(a.owner) = toLower($old_name)
+            SET a.owner = p.name
+            FOREACH (_ IN CASE WHEN a IS NOT NULL THEN [1] ELSE [] END |
+                MERGE (a)-[:ASSIGNED_TO]->(p)
+            )
+            RETURN p.id AS person_id, p.name AS name, p.email AS email, m.id AS meeting_id
+            """,
+            meeting_id=meeting_id,
+            review_id=review_id,
+            email=norm_email,
+            name=norm_name,
+            person_id=uuid5_id("person", norm_email),
+            old_name=old_name,
+        )
+        resolved_rec = None
+        async for r in res:
+            resolved_rec = dict(r)
+            break
+        return resolved_rec or {"review_id": review_id, "status": "resolved", "name": norm_name, "email": norm_email}
+
+
+async def delete_person_review(
+    review_id: str, delete_actions: bool = True, driver: Any | None = None
+) -> bool:
+    """Permanently delete a PersonReview node and optionally remove erroneous actions."""
+    driver = driver or get_driver()
+    async with driver.session() as session:
+        find_res = await session.run(
+            """
+            MATCH (m:Meeting)-[rel:NEEDS_REVIEW]->(r:PersonReview {id: $review_id})
+            RETURN r.name AS name, m.id AS meeting_id
+            """,
+            review_id=review_id,
+        )
+        record = None
+        async for rec in find_res:
+            record = dict(rec)
+            break
+
+        if not record:
+            del_res = await session.run(
+                "MATCH (r:PersonReview {id: $review_id}) DETACH DELETE r",
+                review_id=review_id,
+            )
+            await del_res.consume()
+            return True
+
+        name = record["name"]
+        meeting_id = record["meeting_id"]
+
+        if delete_actions and name:
+            del_act = await session.run(
+                """
+                MATCH (m:Meeting {id: $meeting_id})-[:FOLLOWS_UP]->(a:ActionItem)
+                WHERE toLower(a.owner) = toLower($name) AND a.jira_key IS NULL
+                DETACH DELETE a
+                """,
+                meeting_id=meeting_id,
+                name=name,
+            )
+            await del_act.consume()
+
+        del_rev = await session.run(
+            "MATCH (r:PersonReview {id: $review_id}) DETACH DELETE r",
+            review_id=review_id,
+        )
+        await del_rev.consume()
+        return True
+
+
+async def add_meeting_attendee(
+    meeting_id: str, name: str, email: str, driver: Any | None = None
+) -> dict[str, Any]:
+    """Add an attendee to a meeting directly."""
+    driver = driver or get_driver()
+    norm_email = email.strip().lower()
+    norm_name = name.strip()
+    person_id = uuid5_id("person", norm_email)
+
+    async with driver.session() as session:
+        res = await session.run(
+            """
+            MATCH (m:Meeting {id: $meeting_id})
+            MERGE (p:Person {email: $email})
+            ON CREATE SET p.name = $name, p.id = $person_id, p.created_at = datetime()
+            ON MATCH SET p.name = coalesce($name, p.name)
+            MERGE (p)-[:ATTENDED]->(m)
+            RETURN p.id AS person_id, p.name AS name, p.email AS email, m.id AS meeting_id
+            """,
+            meeting_id=meeting_id,
+            email=norm_email,
+            name=norm_name,
+            person_id=person_id,
+        )
+        rec = None
+        async for r in res:
+            rec = dict(r)
+            break
+        return rec or {}
+
+
 async def get_open_blockers(limit: int = 50, driver: Any = None) -> list[dict[str, Any]]:
     """Blockers still open, newest first, with the meeting that raised each."""
     driver = driver or get_driver()

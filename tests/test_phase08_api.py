@@ -93,6 +93,12 @@ async def _post(app: Any, path: str, **kw: Any) -> httpx.Response:
         return await client.post(path, **kw)
 
 
+async def _delete(app: Any, path: str, **kw: Any) -> httpx.Response:
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        return await client.delete(path, **kw)
+
+
 @pytest.fixture(autouse=True)
 def stub_graph(monkeypatch: Any) -> None:
     """Replace every graph read with a shaped stub, so routes are driven for
@@ -1305,3 +1311,63 @@ async def test_get_open_actions_is_the_undone_slice_of_get_all_actions(
     driver = _CapturingDriver()
     await _REAL_OPEN_ACTIONS(limit=7, driver=driver)
     assert "coalesce(a.done, false) = false" in driver.cypher[0]
+
+
+async def test_resolve_person_review_endpoint(app: Any, monkeypatch: Any) -> None:
+    captured: dict[str, Any] = {}
+
+    async def mock_resolve(review_id: str, name: str, email: str | None = None, driver: Any = None) -> dict[str, Any]:
+        captured.update({"review_id": review_id, "name": name, "email": email})
+        return {"name": name, "email": email or "", "meeting_id": "m1"}
+
+    monkeypatch.setattr(graph_client, "resolve_person_review", mock_resolve)
+    resp = await _post(
+        app,
+        "/review/people/rev-123/resolve",
+        json={"name": "Alice Smith", "email": "alice@onixnet.com"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "ok"
+    assert data["person"]["name"] == "Alice Smith"
+    assert captured["review_id"] == "rev-123"
+    assert captured["name"] == "Alice Smith"
+    assert captured["email"] == "alice@onixnet.com"
+
+
+async def test_delete_person_review_endpoint(app: Any, monkeypatch: Any) -> None:
+    captured: dict[str, Any] = {}
+
+    async def mock_delete(review_id: str, delete_actions: bool = True, driver: Any = None) -> bool:
+        captured.update({"review_id": review_id, "delete_actions": delete_actions})
+        return True
+
+    monkeypatch.setattr(graph_client, "delete_person_review", mock_delete)
+    resp = await _delete(app, "/review/people/rev-123?delete_actions=true")
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "ok", "deleted": True}
+    assert captured["review_id"] == "rev-123"
+    assert captured["delete_actions"] is True
+
+
+async def test_add_meeting_attendee_endpoint(app: Any, monkeypatch: Any) -> None:
+    captured: dict[str, Any] = {}
+
+    async def mock_add(meeting_id: str, name: str, email: str, driver: Any = None) -> dict[str, Any]:
+        captured.update({"meeting_id": meeting_id, "name": name, "email": email})
+        return {"name": name, "email": email, "meeting_id": meeting_id}
+
+    monkeypatch.setattr(graph_client, "add_meeting_attendee", mock_add)
+    resp = await _post(
+        app,
+        "/review/meeting/meet-456/attendee",
+        json={"name": "Bob Builder", "email": "bob@onixnet.com"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "ok"
+    assert data["attendee"]["email"] == "bob@onixnet.com"
+    assert captured["meeting_id"] == "meet-456"
+    assert captured["name"] == "Bob Builder"
+    assert captured["email"] == "bob@onixnet.com"
+
