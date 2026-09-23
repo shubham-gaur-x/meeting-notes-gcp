@@ -132,6 +132,9 @@ class Settings(BaseSettings):
     jira_confidence_threshold: float = 0.6
     jira_dedup_enabled: bool = True
     jira_dedup_threshold: float = 0.9
+    jira_push_self_only: bool = False
+    jira_user_identities: str = ""
+    jira_skip_administrative: bool = True
     # Shared machine secret gating POST /webhook/jira/sync. NOT a Jira
     # credential and not per-person: Jira identity is jira_email/jira_api_token
     # above, one service account for the whole deployment. This only answers

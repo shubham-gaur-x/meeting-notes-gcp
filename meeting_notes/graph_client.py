@@ -918,9 +918,13 @@ async def get_all_actions(
             OPTIONAL MATCH (m:Meeting)-[:FOLLOWS_UP]->(a)
             OPTIONAL MATCH (a)-[:ASSIGNED_TO]->(p:Person)
             OPTIONAL MATCH (parent:ActionItem)-[:PARENT_OF]->(a)
+            WITH a,
+                 min(m.date) AS meeting_date,
+                 head(collect(DISTINCT p)) AS p,
+                 head(collect(DISTINCT parent)) AS parent
             RETURN a.id AS id, a.task AS task, coalesce(p.name, a.owner) AS owner,
                    a.due AS due,
-                   coalesce(substring(a.created_at, 0, 10), m.date, '') AS created_at,
+                   coalesce(substring(a.created_at, 0, 10), meeting_date, '') AS created_at,
                    a.priority AS priority, a.jira_key AS jira_key,
                    a.jira_status AS jira_status, coalesce(a.done, false) AS done,
                    p.email AS owner_email,

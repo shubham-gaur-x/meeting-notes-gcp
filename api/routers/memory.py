@@ -16,7 +16,8 @@ router = APIRouter(prefix="/graph", tags=["memory"])
 
 
 class MemoryQuery(BaseModel):
-    question: str = Field(min_length=1, max_length=2000)
+    question: str = Field(min_length=1, max_length=4000)
+    history: list[dict[str, Any]] | None = Field(default=None)
 
 
 @router.get("/memory/suggested-questions")
@@ -34,7 +35,9 @@ async def memory_query(body: MemoryQuery, _: Principal = Depends(principal)) -> 
     keywords with any meeting still finds it by meaning.
     """
     return await retrieval.full_memory_query(
-        body.question, search_meetings=vector.search_similar_meetings
+        body.question,
+        history=body.history,
+        search_meetings=vector.search_similar_meetings,
     )
 
 
