@@ -30,6 +30,13 @@ class Settings(BaseSettings):
     # ─── GCP ──────────────────────────────────────────────────────────────
     gcp_project_id: str = ""
     gcp_region: str = "us-central1"
+
+    # Injected by Cloud Run itself (the service name); empty everywhere else.
+    # This is the "am I deployed" signal, and it is deliberately NOT
+    # `gcp_project_id`: a tier-2 local run sets a project so Vertex works, so
+    # keying on that locks a developer out of their own dashboard. K_SERVICE
+    # cannot be set by accident locally.
+    k_service: str = ""
     gcp_zone: str = "us-central1-a"
 
     # ─── LLM (ADR-002, ADR-014) ───────────────────────────────────────────
