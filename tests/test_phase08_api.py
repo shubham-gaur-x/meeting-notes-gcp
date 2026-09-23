@@ -1305,3 +1305,55 @@ async def test_get_open_actions_is_the_undone_slice_of_get_all_actions(
     driver = _CapturingDriver()
     await _REAL_OPEN_ACTIONS(limit=7, driver=driver)
     assert "coalesce(a.done, false) = false" in driver.cypher[0]
+
+
+# ─── the auth dependency fails closed when deployed (issue #39) ───────────────
+#
+# `principal()` returned LOCAL_PRINCIPAL -- role="admin", every scope -- whenever
+# ACCESS_POLICY_FILE was unset. That keeps tier 0 runnable, and it did the same
+# thing in a deployed service, where the surface includes POST /jira/* (mutates a
+# real Jira project) and POST /dev_agent/trigger (starts a coding agent).
+# ACCESS_POLICY_FILE appears nowhere in .env.example or terraform, so unset was
+# the deployed default.
+
+
+def _cloud_run(**kw: Any) -> Settings:
+    """Settings as Cloud Run injects them: K_SERVICE set, no policy file."""
+    return Settings(_env_file=None, K_SERVICE="meeting-notes-api", **kw)
+
+
+async def test_principal_fails_closed_when_deployed_without_a_policy_file(
+    app: Any, monkeypatch: Any
+) -> None:
+    """503, not an admin principal. Loud and unusable beats quietly open."""
+    monkeypatch.setattr("api.deps.get_settings", _cloud_run)
+    response = await _get(app, "/graph/meetings/recent")
+    assert response.status_code == 503
+    assert "ACCESS_POLICY_FILE" in response.json()["detail"]
+
+
+async def test_principal_stays_open_locally_without_a_policy_file(
+    app: Any, monkeypatch: Any
+) -> None:
+    """Tier 0 and local development are unaffected -- that is the whole point of
+    keying on K_SERVICE rather than on gcp_project_id, which a tier-2 local run
+    legitimately sets so Vertex works."""
+    monkeypatch.setattr(
+        "api.deps.get_settings",
+        lambda: Settings(_env_file=None, GCP_PROJECT_ID="a-real-project"),
+    )
+    response = await _get(app, "/graph/meetings/recent")
+    assert response.status_code == 200
+
+
+async def test_a_configured_policy_file_is_still_enforced(
+    app: Any, monkeypatch: Any
+) -> None:
+    """The existing behaviour must not regress: with a policy file, a caller
+    without a bearer token is rejected rather than allowed."""
+    monkeypatch.setattr(
+        "api.deps.get_settings",
+        lambda: _cloud_run(ACCESS_POLICY_FILE="/tmp/policy.yaml"),
+    )
+    response = await _get(app, "/graph/meetings/recent")
+    assert response.status_code == 401
