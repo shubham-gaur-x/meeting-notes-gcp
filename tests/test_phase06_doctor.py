@@ -6,6 +6,7 @@ with no Docker, no sockets, no filesystem, no gcloud, and no network.
 
 from __future__ import annotations
 
+import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -333,3 +334,40 @@ def test_parser_accepts_tier_and_env() -> None:
 
 def test_parser_defaults_to_tier_zero() -> None:
     assert build_parser().parse_args([]).tier == 0
+
+
+def test_direct_execution_does_not_raise_module_not_found() -> None:
+    """MNV-108: `python scripts/doctor.py` must not crash with ModuleNotFoundError.
+
+    `scripts` is deliberately NOT an installed package -- `pyproject.toml` ships
+    only `meeting_notes*` -- so `from scripts.auth_spike import ...` resolves only
+    when the repo root is on `sys.path`. Running the file directly puts
+    `scripts/` there, not the root, which is the bug.
+
+    PYTHONPATH is scrubbed from the child environment on purpose. Inheriting it
+    makes this test pass whenever the caller happens to have the repo root on
+    PYTHONPATH -- pytest invoked one way reproduces the bug, invoked another way
+    does not, and a green run means nothing. Scrubbing it is what makes this a
+    regression guard rather than a reflection of how the suite was launched.
+    """
+    import subprocess
+    import sys
+
+    repo_root = Path(__file__).resolve().parent.parent
+    script_path = repo_root / "scripts" / "doctor.py"
+
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+
+    result = subprocess.run(
+        [sys.executable, str(script_path), "--tier", "0"],
+        capture_output=True,
+        text=True,
+        cwd=str(repo_root),
+        env=env,
+    )
+
+    assert "ModuleNotFoundError" not in result.stderr, (
+        "scripts/doctor.py could not import its own package when run directly:\n"
+        + result.stderr[-600:]
+    )
+
