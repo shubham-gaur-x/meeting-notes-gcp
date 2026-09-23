@@ -469,34 +469,77 @@ async def enrich(
         result: dict[str, Any] = await enrich_fn(meeting, meeting_id)
         return result
 
+    import asyncio
+
     from meeting_notes import graph_algorithms
+    from meeting_notes.config import get_settings
     from meeting_notes.memory import episodic, procedural, semantic, vector
 
     emails = [a.email for a in meeting.attendees if a.email]
     outcome: dict[str, Any] = {}
 
-    steps: list[tuple[str, Any]] = [
+    # One semaphore shared across all three embedding passes so total in-flight
+    # Vertex API calls never exceed settings.embedding_concurrency (default 8).
+    _settings = settings or get_settings()
+    _embed_sem = asyncio.Semaphore(max(1, _settings.embedding_concurrency))
+
+    prep_steps: list[tuple[str, Any]] = [
         ("facts", lambda: semantic.extract_facts(meeting, meeting_id, settings=settings)),
         ("relationships", lambda: semantic.strengthen_relationships(meeting, meeting_id)),
         ("temporal", lambda: episodic.link_temporal_chain(meeting_id, str(meeting.date), emails)),
         ("causality", lambda: episodic.detect_causality(meeting, meeting_id, settings=settings)),
         ("procedures", lambda: procedural.match_to_procedure(meeting, meeting_id)),
-        ("embed_meeting", lambda: vector.embed_meeting(meeting_id, meeting.summary, settings=settings)),
-        ("embed_actions", lambda: vector.embed_action_items_for_meeting(meeting_id, settings=settings)),
+    ]
+    embed_steps: list[tuple[str, Any]] = [
+        (
+            "embed_meeting",
+            lambda: vector.embed_meeting(
+                meeting_id, meeting.summary, settings=settings, semaphore=_embed_sem
+            ),
+        ),
+        (
+            "embed_actions",
+            lambda: vector.embed_action_items_for_meeting(
+                meeting_id, settings=settings, semaphore=_embed_sem
+            ),
+        ),
         # Without this, every Fact stays outside the vector index and
         # /graph/search/facts can never return a result -- found live against
         # 83 real Facts, all unembedded.
-        ("embed_facts", lambda: vector.embed_facts_for_meeting(meeting_id, settings=settings)),
+        (
+            "embed_facts",
+            lambda: vector.embed_facts_for_meeting(
+                meeting_id, settings=settings, semaphore=_embed_sem
+            ),
+        ),
+    ]
+    algo_steps: list[tuple[str, Any]] = [
         ("algorithms", lambda: graph_algorithms.run_fast()),
     ]
-    assert tuple(n for n, _ in steps) == ENRICH_STEPS, "ENRICH_STEPS drifted from enrich()"
 
-    for name, step in steps:
+    all_steps = prep_steps + embed_steps + algo_steps
+    assert tuple(n for n, _ in all_steps) == ENRICH_STEPS, "ENRICH_STEPS drifted from enrich()"
+
+    async def _run_step(name: str, step_fn: Any) -> Any:
         try:
-            outcome[name] = await step()
+            return await step_fn()
         except Exception as exc:  # noqa: BLE001 - enrichment never fails the record
             log.warning("pipeline.enrich_step_failed", enrich_step=name, error=str(exc))
-            outcome[name] = None
+            return None
+
+    # 1. Sequential graph/memory layers (facts must exist before embedding)
+    for name, step in prep_steps:
+        outcome[name] = await _run_step(name, step)
+
+    # 2. Concurrent Vertex AI embedding passes (~40s saved per meeting)
+    embed_tasks = [_run_step(name, step) for name, step in embed_steps]
+    embed_results = await asyncio.gather(*embed_tasks)
+    for (name, _), res in zip(embed_steps, embed_results, strict=True):
+        outcome[name] = res
+
+    # 3. Fast graph algorithms
+    for name, step in algo_steps:
+        outcome[name] = await _run_step(name, step)
 
     log.info("pipeline.enriched", meeting_id=meeting_id, steps=list(outcome))
     return outcome
