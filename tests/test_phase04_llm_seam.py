@@ -655,3 +655,92 @@ async def test_chat_list_reaches_the_backend_and_parses() -> None:
 
     result = await chat_list("s", "u", settings=_vertex_settings(), transport=transport)
     assert result == ["fact one", "fact two"]
+
+
+# ─── raw url extraction & repair links merging ───────────────────────────────
+
+
+def test_extract_raw_urls_harvests_valid_document_links() -> None:
+    from meeting_notes.extractor import _extract_raw_urls
+
+    text = (
+        "Please review the design spec at https://docs.google.com/document/d/123/edit "
+        "and the project board at https://michael-baylard.atlassian.net/browse/MDP-45. "
+        "Also see https://drive.google.com/file/d/456/view."
+    )
+    urls = _extract_raw_urls(text)
+    assert urls == [
+        "https://docs.google.com/document/d/123/edit",
+        "https://michael-baylard.atlassian.net/browse/MDP-45",
+        "https://drive.google.com/file/d/456/view",
+    ]
+
+
+def test_extract_raw_urls_filters_noise_domains_and_image_assets() -> None:
+    from meeting_notes.extractor import _extract_raw_urls
+
+    text = (
+        "Check namespace http://schemas.microsoft.com/office/2004/12/omml and "
+        "http://www.w3.org/1999/xhtml. Logo at https://cdn.example.com/logo.png and "
+        "https://mail.google.com/mail/u/0/#inbox. "
+        "Real doc: https://company.atlassian.net/wiki/spaces/ENG/pages/789."
+    )
+    urls = _extract_raw_urls(text)
+    assert urls == ["https://company.atlassian.net/wiki/spaces/ENG/pages/789"]
+
+
+def test_repair_merges_raw_urls_with_extracted_links() -> None:
+    from meeting_notes.extractor import repair
+
+    raw_data = {
+        "title": "Architecture Sync",
+        "links": ["https://docs.google.com/document/d/extracted"],
+    }
+    context = {
+        "text": "Meeting notes with additional doc https://docs.google.com/document/d/raw_in_body",
+    }
+    repaired = repair(raw_data, context=context)
+    assert repaired["links"] == [
+        "https://docs.google.com/document/d/extracted",
+        "https://docs.google.com/document/d/raw_in_body",
+    ]
+
+
+def test_extract_raw_urls_harvests_ecosystem_platform_links() -> None:
+    """Explicitly verifies Linear, Lucid, Chat, Meet, Google Skills, and Databricks links are harvested."""
+    from meeting_notes.extractor import _extract_raw_urls
+
+    platform_text = (
+        "Check Linear issue https://linear.app/ag-team/issue/ENG-402/pipeline-scale. "
+        "System architecture diagram: https://lucid.app/lucidchart/98765/edit. "
+        "Also see whiteboard at https://lucidchart.com/documents/view/54321. "
+        "Slack discussion thread: https://workspace.slack.com/archives/C012345/p1693000000. "
+        "Google Chat channel: https://chat.google.com/room/AAAA1234567. "
+        "Sync call was held at https://meet.google.com/abc-defg-hij with "
+        "Zoom backup at https://zoom.us/j/9876543210. "
+        "Prerequisite coursework: https://www.cloudskillsboost.google/paths/18/course/42 and "
+        "https://skills.google/certification/data-engineer. "
+        "Databricks certification track: https://academy.databricks.com/pathway/data-engineering "
+        "and workspace notebook https://dbc-corp.cloud.databricks.com/?o=12345#notebook/67890."
+    )
+
+    urls = _extract_raw_urls(platform_text)
+
+    expected = [
+        "https://linear.app/ag-team/issue/ENG-402/pipeline-scale",
+        "https://lucid.app/lucidchart/98765/edit",
+        "https://lucidchart.com/documents/view/54321",
+        "https://workspace.slack.com/archives/C012345/p1693000000",
+        "https://chat.google.com/room/AAAA1234567",
+        "https://meet.google.com/abc-defg-hij",
+        "https://zoom.us/j/9876543210",
+        "https://www.cloudskillsboost.google/paths/18/course/42",
+        "https://skills.google/certification/data-engineer",
+        "https://academy.databricks.com/pathway/data-engineering",
+        "https://dbc-corp.cloud.databricks.com/?o=12345#notebook/67890",
+    ]
+
+    for expected_url in expected:
+        assert expected_url in urls, f"Missing expected platform link: {expected_url}"
+
+
