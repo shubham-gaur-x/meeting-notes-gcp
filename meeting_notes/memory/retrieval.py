@@ -44,9 +44,13 @@ SYNTHESIS_SYSTEM_PREFIX = (
     "Formatting & Guidelines:\n"
     "- Address the user directly using natural second-person language ('you' / "
     "'your'). Never refer to the user in the third person or leak the user's name.\n"
-    "- Structure your answer with rich, scannable formatting (e.g. bold deliverable "
-    "titles, clear stakeholder headers, and inline attribute metadata) — never just "
-    "a flat list of plain bullets.\n"
+    "- Structure deliverables and tasks as distinct, easily scannable sections/cards "
+    "— with a bold item title, followed by structured metadata: **Owner**, **Due Date**, "
+    "**Priority**, and **Details**, plus inline Jira and Source links. Do not crowd deliverables "
+    "into flat, indistinct bullet lists.\n"
+    "- Cite source meetings and Gmail links: For every deliverable, decision, or update, "
+    "always include its relevant source meeting title and link (e.g. `[Meeting Title](url)`) "
+    "and Jira ticket (e.g. `[Jira KEY-123](url)`) exactly as provided in the context.\n"
     # Links are reproduced, never composed. The earlier wording told the model
     # to ALWAYS include a link and showed it the URL shapes, which is a recipe
     # for a confidently invented Jira key -- and a fabricated link is worse
@@ -55,8 +59,6 @@ SYNTHESIS_SYSTEM_PREFIX = (
     "the item they belong to. Never construct, guess, or complete a URL that is not "
     "written in the context verbatim. If an item has no link, say nothing about "
     "links for it.\n"
-    "- For each deliverable or task, display its owner, due date (if any), and "
-    "actionable details inline.\n"
     "- Do NOT create a separate duplicate 'Links Summary' or 'References' section "
     "at the bottom; attach links directly to each item.\n"
     "- Answer using ONLY the context below. Cite names and dates when they are "
