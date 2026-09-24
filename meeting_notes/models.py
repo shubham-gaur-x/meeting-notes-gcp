@@ -39,6 +39,8 @@ class ActionItem(BaseModel):
     done: bool = False
     priority: Literal["high", "medium", "low"] = "medium"
     jira_key: str | None = None
+    linear_id: str | None = None
+    linear_identifier: str | None = None
     is_engineering_task: bool = False
     # Per-item extraction confidence. Defaults to 1.0 so items the model does not
     # score are not gated; the extractor prompt asks for a real 0.0-1.0 value.
