@@ -361,6 +361,61 @@ async def _query_topics_context(session: Any, topics: list[str]) -> tuple[list[s
     return lines, node_ids
 
 
+async def _query_people_context(
+    session: Any, people: list[str]
+) -> tuple[list[str], list[str]]:
+    """Query people matching mentions and return context lines and node IDs."""
+    from meeting_notes import person_resolver
+
+    lines: list[str] = []
+    node_ids: list[str] = []
+    expanded_people = person_resolver.expand_contact_mentions(people)
+    result = await session.run(
+        """
+        UNWIND $names AS name
+        MATCH (p:Person)
+        WHERE toLower(p.name) CONTAINS toLower(name)
+           OR toLower(p.email) CONTAINS toLower(name)
+        RETURN DISTINCT p.id AS id, p.name AS name, p.email AS email
+        LIMIT 10
+        """,
+        names=expanded_people,
+    )
+    async for record in result:
+        node_ids.append(record["id"])
+        lines.append(f"Person: {record['name']} <{record['email']}>")
+    return lines, node_ids
+
+
+async def _query_decisions_context(session: Any) -> tuple[list[str], list[str]]:
+    """Query recent decisions and return formatted context lines and node IDs."""
+    lines: list[str] = []
+    node_ids: list[str] = []
+    decisions_res = await session.run(
+        """
+        MATCH (m:Meeting)-[:PRODUCED]->(d:Decision)
+        RETURN DISTINCT d.id AS id, d.text AS text, m.title AS meeting_title,
+               m.date AS date, m.source_id AS source_id, m.links AS links
+        ORDER BY m.date DESC
+        LIMIT 8
+        """
+    )
+    async for record in decisions_res:
+        node_ids.append(record["id"])
+        seen_urls = set()
+        gmail_l = _gmail_link(record.get("source_id"))
+        if record.get("source_id"):
+            g_url = gmail_thread_url(record["source_id"])
+            if g_url:
+                seen_urls.add(g_url)
+        doc_links = _format_doc_links(record.get("links"), seen_urls)
+        links = _links_suffix(gmail_l, *doc_links)
+        lines.append(
+            f"Decision: {record['text']} (Meeting: {record['meeting_title']}{links})"
+        )
+    return lines, node_ids
+
+
 async def assemble_context(
     entities: dict[str, Any],
     question: str,
@@ -389,20 +444,9 @@ async def assemble_context(
 
         # 2. People
         if people:
-            result = await session.run(
-                """
-                UNWIND $names AS name
-                MATCH (p:Person)
-                WHERE toLower(p.name) CONTAINS toLower(name)
-                   OR toLower(p.email) CONTAINS toLower(name)
-                RETURN DISTINCT p.id AS id, p.name AS name, p.email AS email
-                LIMIT 10
-                """,
-                names=people,
-            )
-            async for record in result:
-                node_ids.append(record["id"])
-                lines.append(f"Person: {record['name']} <{record['email']}>")
+            p_lines, p_ids = await _query_people_context(session, people)
+            lines.extend(p_lines)
+            node_ids.extend(p_ids)
 
         # 3. Topics & Meetings
         if topics:
@@ -410,32 +454,10 @@ async def assemble_context(
             lines.extend(top_lines)
             node_ids.extend(top_ids)
 
-        # 4. Decisions. PRODUCED, not DECIDED: `_write_decisions` and every
-        # other reader in graph_client use PRODUCED, so DECIDED matched nothing
-        # and this block returned zero rows against a real graph -- silently,
-        # because an empty result is indistinguishable from "no decisions yet".
-        decisions_res = await session.run(
-            """
-            MATCH (m:Meeting)-[:PRODUCED]->(d:Decision)
-            RETURN DISTINCT d.id AS id, d.text AS text, m.title AS meeting_title,
-                   m.date AS date, m.source_id AS source_id, m.links AS links
-            ORDER BY m.date DESC
-            LIMIT 8
-            """
-        )
-        async for record in decisions_res:
-            node_ids.append(record["id"])
-            seen_urls = set()
-            gmail_l = _gmail_link(record.get("source_id"))
-            if record.get("source_id"):
-                g_url = gmail_thread_url(record["source_id"])
-                if g_url:
-                    seen_urls.add(g_url)
-            doc_links = _format_doc_links(record.get("links"), seen_urls)
-            links = _links_suffix(gmail_l, *doc_links)
-            lines.append(
-                f"Decision: {record['text']} (Meeting: {record['meeting_title']}{links})"
-            )
+        # 4. Decisions
+        dec_lines, dec_ids = await _query_decisions_context(session)
+        lines.extend(dec_lines)
+        node_ids.extend(dec_ids)
 
         # 5. Facts
         result = await session.run(
@@ -451,6 +473,24 @@ async def assemble_context(
         async for record in result:
             node_ids.append(record["id"])
             lines.append(f"Fact (confidence {record['confidence']}): {record['text']}")
+
+    # 6. Semantic search over structured chunks (hybrid vector retrieval)
+    if search_meetings is None:
+        try:
+            from meeting_notes.memory import vector
+
+            chunk_hits = await vector.search_similar_chunks(
+                question, limit=4, driver=driver, settings=settings
+            )
+            for hit in chunk_hits:
+                if hit.get("id"):
+                    node_ids.append(hit["id"])
+                title = hit.get("meeting_title") or "Meeting"
+                orig_t = hit.get("original_title")
+                orig = f" (Source: {orig_t})" if orig_t and orig_t != title else ""
+                lines.append(f"Transcript & Discussion Chunk [{title}{orig}]:\n{hit.get('text', '')}")
+        except Exception as exc:  # noqa: BLE001
+            log.warning("retrieval.chunk_search_failed", error=str(exc))
 
     # Semantic search as a fallback: a question sharing no keywords with any
     # meeting still finds the right one by meaning. This is the mechanism

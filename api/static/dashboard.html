@@ -3,28 +3,39 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>meeting-notes-gcp</title>
+<title>Onix Delivery Memory · Meeting Intelligence & Orchestration</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@500;600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
   :root {
-    --bg:#0f1115; --panel:#171a21; --raise:#1e222b; --line:#272b35;
-    --ink:#e6e8ec; --muted:#9aa3b2; --accent:#6ea8fe;
-    --accent-hover:#8cbaff; --accent-glow:rgba(110,168,254,0.15);
-    --warn:#f0b429; --ok:#4ade80; --hot:#f87171;
-    --shadow:0 8px 30px rgba(0,0,0,0.35);
+    --bg:#090d16; --panel:#0f172a; --raise:#162238; --line:#1e2e4a;
+    --ink:#f8fafc; --muted:#94a3b8; --accent:#ff5e00;
+    --accent-hover:#ff781f; --accent-glow:rgba(255,94,0,0.18);
+    --onix-orange:#ff5e00; --onix-orange-dark:#e05300;
+    --google-blue:#4285f4; --google-green:#34a853; --google-yellow:#fbbc04; --google-red:#ea4335;
+    --warn:#f59e0b; --ok:#10b981; --hot:#ef4444;
+    --shadow:0 8px 30px rgba(0,0,0,0.45);
     color-scheme: dark light;
   }
   @media (prefers-color-scheme: light) {
     :root {
-      --bg:#f6f7f9; --panel:#ffffff; --raise:#f0f2f5; --line:#e2e5ea;
-      --ink:#1a1d23; --muted:#5b6472; --accent:#2563eb;
-      --accent-hover:#1d4ed8; --accent-glow:rgba(37,99,235,0.12);
+      --bg:#f8fafc; --panel:#ffffff; --raise:#f1f5f9; --line:#e2e8f0;
+      --ink:#0f172a; --muted:#64748b; --accent:#e65100;
+      --accent-hover:#bf360c; --accent-glow:rgba(230,81,0,0.12);
+      --onix-orange:#e65100; --onix-orange-dark:#bf360c;
+      --google-blue:#1a73e8; --google-green:#1e8e3e; --google-yellow:#f9ab00; --google-red:#d93025;
+      --warn:#d97706; --ok:#059669; --hot:#dc2626;
       --shadow:0 8px 30px rgba(0,0,0,0.08);
     }
   }
   * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:var(--ink);
-         font:14px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+         font:14px/1.55 'Inter', ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
          -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale; }
+  h1, h2, h3, .card .n, .onix-wordmark, .onix-app-name {
+    font-family: 'Outfit', 'Inter', sans-serif;
+  }
   body, header, nav, nav button, .panel, .card, input, select, textarea,
   .chat-chip, .prompt-card, .answer, dialog, .setting-item {
     transition: background-color 0.22s ease, border-color 0.22s ease, color 0.22s ease, box-shadow 0.22s ease;
@@ -32,12 +43,32 @@
   header {
     padding: 0 18px; height: 48px; border-bottom: 1px solid var(--line); background: var(--bg);
     display: flex; align-items: center; justify-content: space-between; gap: 12px;
-    position: sticky; top: 0; z-index: 25;
+    position: sticky; top: 0; z-index: 25; backdrop-filter: blur(12px);
   }
-  .header-brand { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+  .header-brand { display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
+  .onix-brand-lockup { display: flex; align-items: center; gap: 10px; }
+  .onix-real-logo { flex-shrink: 0; height: 23px; width: auto; display: block; filter: drop-shadow(0 2px 5px rgba(255, 94, 0, 0.25)); }
+  .review-meeting-link { color: var(--accent); font-weight: 500; text-decoration: underline; cursor: pointer; transition: opacity .15s ease; }
+  .review-meeting-link:hover { opacity: 0.85; }
+  .onix-titles { display: flex; flex-direction: column; gap: 1px; }
+  .onix-title-row { display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; }
+  .onix-wordmark {
+    font-size: 15px; font-weight: 800; letter-spacing: 0.8px; line-height: 1;
+    background: linear-gradient(135deg, #ffffff 0%, #cbd5e1 100%);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  }
+  .onix-app-name { font-size: 13.5px; font-weight: 600; letter-spacing: -0.2px; color: var(--ink); white-space: nowrap; line-height: 1; }
+  .onix-partner-tag {
+    display: inline-flex; align-items: center; gap: 5px; font-size: 10px; font-weight: 600;
+    color: var(--muted); background: rgba(255, 255, 255, 0.04); border: 1px solid var(--line);
+    padding: 2px 7px; border-radius: 12px; white-space: nowrap; letter-spacing: 0.2px;
+  }
+  .gcp-quad-dot { display: grid; grid-template-columns: 3.5px 3.5px; grid-gap: 1.5px; width: 8.5px; height: 8.5px; }
+  .gcp-quad-dot span { width: 3.5px; height: 3.5px; border-radius: 50%; }
   h1 { font-size: 13.5px; margin: 0; font-weight: 700; letter-spacing: -0.2px; color: var(--ink); white-space: nowrap; }
-  .header-brand .sub { color: var(--muted); font-size: 11px; white-space: nowrap; }
+  .sub { color: var(--muted); font-size: 11px; white-space: nowrap; }
   nav.header-nav {
+    position: absolute; left: 50%; transform: translateX(-50%);
     display: flex; align-items: center; gap: 2px; background: var(--raise);
     border: 1px solid var(--line); padding: 3px; border-radius: 8px; overflow-x: auto;
     scrollbar-width: none;
@@ -45,12 +76,13 @@
   nav.header-nav::-webkit-scrollbar { display: none; }
   nav.header-nav button {
     background: transparent; border: none; color: var(--muted);
-    padding: 5px 11px; border-radius: 6px; cursor: pointer; font-size: 12.5px;
+    padding: 5px 12px; border-radius: 6px; cursor: pointer; font-size: 12.5px;
     font-family: inherit; font-weight: 500; transition: all .14s ease; white-space: nowrap;
   }
   nav.header-nav button:hover { color: var(--ink); background: rgba(255,255,255,0.05); }
   nav.header-nav button.active {
-    color: #fff; background: var(--accent); box-shadow: 0 1px 3px rgba(0,0,0,0.25); font-weight: 600;
+    color: #fff; background: linear-gradient(135deg, #ff6a00 0%, #ff4500 100%);
+    box-shadow: 0 2px 8px rgba(255, 94, 0, 0.35); font-weight: 600;
   }
   .header-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
   .subnav-bar {
@@ -70,17 +102,17 @@
   .panel.active { display: block; }
   @media (max-width: 920px) {
     header { height: auto; padding: 8px 14px; flex-wrap: wrap; }
-    nav.header-nav { order: 3; width: 100%; overflow-x: auto; }
+    nav.header-nav { position: static; transform: none; order: 3; width: 100%; overflow-x: auto; justify-content: center; }
   }
   .row { display:flex; gap:10px; align-items:center; margin-bottom:14px; flex-wrap:wrap; }
   input, select { background:var(--bg); border:1px solid var(--line); color:var(--ink);
                   padding:9px 11px; border-radius:7px; font-size:13px; font-family:inherit; }
   input:focus, select:focus { outline:none; border-color:var(--accent); }
   input { min-width:min(420px, 100%); }
-  button.action { background:var(--accent); border:none; color:#fff; padding:9px 15px;
+  button.action { background:linear-gradient(135deg, #ff6a00 0%, #ff4500 100%); border:none; color:#fff; padding:9px 16px;
                   border-radius:7px; cursor:pointer; font-size:13px; font-family:inherit;
-                  font-weight:500; transition:all .15s ease; }
-  button.action:hover { filter:brightness(1.08); transform:translateY(-1px); }
+                  font-weight:600; transition:all .15s ease; box-shadow:0 2px 6px rgba(255,94,0,0.25); }
+  button.action:hover { filter:brightness(1.1); box-shadow:0 4px 12px rgba(255,94,0,0.35); transform:translateY(-1px); }
   button.action:active { transform:translateY(0); }
   button.ghost { background:var(--raise); border:1px solid var(--line); color:var(--ink);
                  padding:6px 11px; border-radius:20px; cursor:pointer; font-size:12px;
@@ -89,14 +121,14 @@
   .cards { display:grid; grid-template-columns:repeat(auto-fill,minmax(132px,1fr));
            gap:10px; margin-bottom:6px; }
   .card { background:var(--raise); border:1px solid var(--line); border-radius:9px;
-          padding:12px 14px; }
-  .card .n { font-size:23px; font-weight:650; line-height:1.15; }
+          padding:12px 14px; box-shadow:0 2px 4px rgba(0,0,0,0.12); }
+  .card .n { font-size:24px; font-weight:700; line-height:1.15; }
   .card .l { color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.6px; }
   .card.hot .n { color:var(--hot); }
   table { width:100%; border-collapse:collapse; font-size:13px; table-layout:auto; }
   th, td { text-align:left; padding:9px 10px; border-bottom:1px solid var(--line);
            vertical-align:top; white-space:normal; word-break:break-word; overflow-wrap:anywhere; }
-  th { color:var(--muted); font-weight:500; font-size:11px;
+  th { color:var(--muted); font-weight:600; font-size:11px;
        text-transform:uppercase; letter-spacing:.6px; }
   tr.clickable { cursor:pointer; }
   tr.clickable:hover td { background:var(--raise); }
@@ -116,10 +148,13 @@
                   border-radius:6px; overflow:hidden; }
   .answer table th { background:rgba(255,255,255,0.04); font-weight:600; }
   .answer table tr:nth-child(even) td { background:rgba(255,255,255,0.02); }
-  .btn-xs { padding:3px 8px; font-size:11px; cursor:pointer; color:#fff; border:none;
-            border-radius:4px; background:var(--accent); font-family:inherit;
-            white-space:nowrap; display:inline-block; }
-  .btn-xs.undo { background:#4a5568; }
+  .btn-xs { padding:4px 9px; font-size:11px; cursor:pointer; color:#fff; border:none;
+            border-radius:5px; background:linear-gradient(135deg, #ff6a00 0%, #ff4500 100%);
+            font-family:inherit; font-weight:600; white-space:nowrap; display:inline-block;
+            transition:all .15s ease; box-shadow:0 1px 3px rgba(255,94,0,0.25); }
+  .btn-xs:hover { filter:brightness(1.1); box-shadow:0 2px 6px rgba(255,94,0,0.4); transform:translateY(-1px); }
+  .btn-xs.undo { background:#334155; box-shadow:none; font-weight:500; }
+  .btn-xs.undo:hover { background:#475569; }
   #actions-body td:last-child { white-space:nowrap; text-align:right; }
   .pill.done { background:#134e4a; border-color:#134e4a; color:#fff; font-weight:600; }
   .pill.progress { background:#1e3a8a; border-color:#1e3a8a; color:#fff; font-weight:600; }
@@ -256,11 +291,11 @@
                         box-sizing:border-box; font-family:inherit; font-size:13.5px; line-height:1.5;
                         overflow-y:hidden; outline:none; }
   .chat-input-actions { display:flex; align-items:center; gap:6px; flex-shrink:0; }
-  .chat-btn-send { background:var(--accent); border:none; color:#fff; padding:7px 15px;
+  .chat-btn-send { background:linear-gradient(135deg, #ff6a00 0%, #ff4500 100%); border:none; color:#fff; padding:7px 16px;
                    border-radius:8px; cursor:pointer; font-size:13px; font-weight:600;
                    display:inline-flex; align-items:center; gap:6px; transition:all .15s ease;
-                   height:36px; font-family:inherit; }
-  .chat-btn-send:hover { background:var(--accent-hover); transform:translateY(-1px); }
+                   height:36px; font-family:inherit; box-shadow:0 2px 6px rgba(255,94,0,0.25); }
+  .chat-btn-send:hover { filter:brightness(1.1); box-shadow:0 3px 10px rgba(255,94,0,0.35); transform:translateY(-1px); }
   .chat-btn-send:disabled { opacity:.6; cursor:not-allowed; transform:none; }
   .chat-btn-settings { background:var(--raise); border:1px solid var(--line); color:var(--muted);
                        height:34px; width:34px; border-radius:7px; cursor:pointer;
@@ -275,8 +310,8 @@
   .chat-select { background:var(--raise); border:1px solid var(--line); color:var(--ink);
                  padding:5px 10px; font-size:12px; border-radius:6px; cursor:pointer;
                  transition:border-color .15s ease, background .15s ease; font-family:inherit; }
-  .chat-select.active-filter { border-color:var(--accent); background:var(--accent-glow);
-                               color:var(--accent); font-weight:600; }
+  select.active-filter, .chat-select.active-filter { border-color:var(--accent) !important; background:var(--accent-glow) !important;
+                               color:var(--accent) !important; font-weight:600; }
   .clear-filters-btn { background:none; border:none; color:var(--muted); font-size:11px;
                        cursor:pointer; text-decoration:underline; padding:2px 6px; font-family:inherit; }
   .clear-filters-btn:hover { color:var(--hot); }
@@ -371,8 +406,14 @@
 
   /* General Components */
   .scroll { overflow-x:auto; }
-  .pill { display:inline-block; background:var(--raise); border:1px solid var(--line);
-          border-radius:20px; padding:2px 10px; font-size:11px; margin:0 5px 5px 0; }
+  .pill { display:inline-flex; align-items:center; background:var(--raise); border:1px solid var(--line);
+          border-radius:20px; padding:2px 10px; font-size:11px; margin:0 5px 5px 0;
+          white-space:nowrap; }
+  th.sortable { cursor:pointer; user-select:none; transition:all .15s ease; white-space:nowrap; }
+  th.sortable:hover { color:var(--ink); background:rgba(255,255,255,0.02); }
+  th.sortable:hover .sort-icon { opacity:0.85 !important; }
+  th.sortable.sorted-asc .sort-icon,
+  th.sortable.sorted-desc .sort-icon { opacity:1 !important; color:var(--accent, #ff5e00) !important; }
   .pri-high { color:var(--hot); font-weight:600; }
   .quote { border-left:2px solid var(--accent); padding:2px 0 2px 12px; margin:0 0 10px; }
   code { font:12px ui-monospace,SFMono-Regular,Menlo,monospace; color:var(--accent); }
@@ -393,12 +434,13 @@
   .ticket-badge.jira { color:#60a5fa; background:rgba(96,165,250,0.15); border:1px solid rgba(96,165,250,0.3); }
   .ticket-badge.jira:hover { background:rgba(96,165,250,0.25); }
 
-  /* Command Palette (Cmd+K) */
+  /* Cmd+K Palette */
   .cmd-k-trigger { background:var(--raise); border:1px solid var(--line); color:var(--muted); padding:6px 12px; border-radius:7px; font-size:12px; cursor:pointer; display:inline-flex; align-items:center; gap:7px; transition:all .15s ease; font-family:inherit; }
   .cmd-k-trigger:hover { border-color:var(--accent); color:var(--ink); }
   .cmd-k-trigger kbd { background:var(--bg); border:1px solid var(--line); border-radius:4px; padding:1px 5px; font-size:10px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
-  #cmd-dialog { max-width:620px; border-radius:12px; overflow:hidden; border:1px solid var(--line); background:var(--panel); box-shadow:0 20px 40px rgba(0,0,0,0.5); }
-  .cmd-input-wrap { padding:14px 18px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:10px; }
+  #cmd-dialog { width:min(580px, 90vw); border-radius:12px; border:1px solid var(--line); background:var(--card); color:var(--ink); box-shadow:0 20px 40px rgba(0,0,0,0.5); padding:0; overflow:hidden; }
+  #cmd-dialog::backdrop { background:rgba(0,0,0,0.55); backdrop-filter:blur(3px); }
+  .cmd-input-wrap { display:flex; align-items:center; gap:10px; padding:12px 16px; border-bottom:1px solid var(--line); background:var(--raise); }
   .cmd-input { width:100%; background:transparent; border:none; color:var(--ink); font-size:14px; outline:none; font-family:inherit; }
   .cmd-results { max-height:360px; overflow-y:auto; padding:8px; }
   .cmd-item { display:flex; align-items:center; justify-content:space-between; padding:9px 12px; border-radius:7px; cursor:pointer; font-size:13px; color:var(--ink); transition:background .1s ease; text-decoration:none; }
@@ -409,14 +451,37 @@
 <body>
 <header>
   <div class="header-brand">
-    <h1>meeting-notes-gcp</h1>
-    <span class="sub" id="health">checking…</span>
+    <div class="onix-brand-lockup">
+      <svg class="onix-real-logo" viewBox="0 0 133 50.19" height="23" fill="none" xmlns="http://www.w3.org/2000/svg" aria-label="Onix">
+        <path fill="#ff5e00" d="m31.29,50.19c-5.08-3.51-8.42-9.37-8.42-16,0-10.71,8.71-19.43,19.43-19.43,5.62,0,11.57,3.05,16.01,7.84v-.02c-2.49-4.64-6.86-8.13-12.09-9.43-1.45-7.5-8.04-13.16-15.96-13.16s-14.47,5.63-15.95,13.09C6.1,15.12,0,22.51,0,31.35c0,10.22,8.15,18.52,18.31,18.79v.03s12.99.03,12.99.03h0Z"/>
+        <path fill="currentColor" d="m126.16,18.73h-5.1l-9.08,12.46-9.17-12.46h-5.33s-4.42,0-4.42,0v30.91h4.42,0s5.33,0,5.33,0l9.17-12.46,9.08,12.46h5.1l-11.41-15.46,11.41-15.46h0Zm-28.68,30.91v-30.9l11.3,15.45-11.3,15.45Z"/>
+        <path fill="currentColor" d="m42.3,18.37c-8.74,0-15.83,7.09-15.83,15.83s7.09,15.83,15.83,15.83,15.83-7.09,15.83-15.83-7.09-15.83-15.83-15.83h0Zm0,27.48c-6.44,0-11.65-5.22-11.65-11.65s5.22-11.65,11.65-11.65,11.65,5.22,11.65,11.65-5.22,11.65-11.65,11.65h0Z"/>
+        <path fill="currentColor" d="m75.23,18.72h0c-4.05,0-7.72,1.63-10.39,4.26v-4.26h-4.42v30.91h4.49v-16.11c0-5.7,4.62-10.32,10.32-10.32h0c5.7,0,10.32,4.62,10.32,10.32v16.11h4.49v-16.11c0-8.18-6.63-14.81-14.81-14.81h0Z"/>
+        <path fill="currentColor" d="m131.52,20.1l-.6-1.04c.15-.06.27-.15.36-.28s.13-.28.13-.46-.04-.31-.11-.44c-.08-.12-.18-.21-.31-.28-.13-.06-.28-.1-.46-.1h-.94v2.59h.41v-.97h.5l.55.97h.47Zm-.73-1.39c-.07.04-.15.06-.25.06h-.54v-.88h.54c.09,0,.18.02.25.05.07.04.12.09.16.15.04.07.06.14.06.23s-.02.17-.06.23c-.04.07-.09.12-.16.15h0Z"/>
+        <path fill="currentColor" d="m130.42,21.31c-1.42,0-2.58-1.16-2.58-2.58s1.16-2.58,2.58-2.58,2.58,1.16,2.58,2.58-1.16,2.58-2.58,2.58Zm0-4.79c-1.22,0-2.21.99-2.21,2.21s.99,2.21,2.21,2.21,2.21-.99,2.21-2.21-.99-2.21-2.21-2.21Z"/>
+      </svg>
+      <div class="onix-titles">
+        <div class="onix-title-row">
+          <span class="onix-app-name" style="font-size:12.5px;color:var(--muted)">/ Delivery Memory</span>
+          <span class="onix-partner-tag" title="Onix is a Premier Google Cloud Partner">
+            <span class="gcp-quad-dot">
+              <span style="background:#4285F4"></span>
+              <span style="background:#EA4335"></span>
+              <span style="background:#FBBC04"></span>
+              <span style="background:#34A853"></span>
+            </span>
+            Google Cloud Partner
+          </span>
+        </div>
+        <span class="sub" id="health">checking…</span>
+      </div>
+    </div>
   </div>
   <nav class="header-nav" aria-label="Main Navigation">
     <button data-panel="overview" class="active">Overview</button>
     <button data-panel="ask">Ask</button>
     <button data-panel="actions">Action Items</button>
-    <button data-panel="meetings">Meetings</button>
+    <button data-panel="meetings">Communications</button>
     <button data-panel="graph">Knowledge Graph</button>
   </nav>
   <div class="header-actions">
@@ -478,18 +543,29 @@
           </select>
           <div class="filter-badge" style="margin-left:4px">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--accent)" aria-hidden="true">
+              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+              <circle cx="12" cy="7" r="4"></circle>
+            </svg>
+            <span>Person:</span>
+          </div>
+          <select id="chat-person" class="chat-select" onchange="setGlobalPerson(this.value)">
+            <option value="">Everyone</option>
+          </select>
+          <div class="filter-badge" style="margin-left:4px">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--accent)" aria-hidden="true">
               <circle cx="12" cy="12" r="10"></circle>
               <polyline points="12 6 12 12 16 14"></polyline>
             </svg>
             <span>Timeframe:</span>
           </div>
-          <select id="chat-timeframe" class="chat-select" onchange="onChatFilterChange()">
+          <select id="chat-timeframe" class="chat-select" onchange="setGlobalTimeframe(this.value)">
             <option value="">All Time</option>
             <option value="7">Past 7 Days</option>
             <option value="30">Past 30 Days</option>
             <option value="90">Past Quarter</option>
+            <option value="365">Past Year</option>
           </select>
-          <button type="button" id="chat-clear-filters" class="clear-filters-btn" style="display:none" onclick="clearChatFilters()">Clear filters</button>
+          <button type="button" id="chat-clear-filters" class="clear-filters-btn" style="display:none" onclick="clearAllGlobalFilters()">Clear filters</button>
         </div>
         <button type="button" class="chat-btn-new-thread" onclick="clearChatHistory()" title="Start New Conversation Thread" aria-label="New Thread">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -565,10 +641,18 @@
           <option value="named">Named people</option>
           <option value="queue">Shared queues</option>
         </select>
-        <select id="afilter" onchange="renderActions()"><option value="">Everyone</option></select>
-        <input id="asearch" placeholder="Filter tasks, owners, tickets…" style="min-width:220px"
+        <select id="atimeframe" onchange="setGlobalTimeframe(this.value)">
+          <option value="">All time</option>
+          <option value="7">Past 7 days</option>
+          <option value="30">Past 30 days</option>
+          <option value="90">Past quarter</option>
+          <option value="365">Past year</option>
+        </select>
+        <select id="afilter" onchange="setGlobalPerson(this.value)"><option value="">Everyone</option></select>
+        <input id="asearch" placeholder="Filter tasks, owners, tickets…" style="min-width:220px;flex:1"
                oninput="renderActions()">
         <button class="action" onclick="loadActions()">Refresh</button>
+        <button type="button" id="aclear-filters" class="clear-filters-btn" style="display:none" onclick="clearAllGlobalFilters()">Clear filters</button>
       </div>
       <p class="hint">Commitments pulled out of meetings, soonest deadline first. A shared queue
          is an owner no Person node resolved to — a team name rather than someone with an inbox.</p>
@@ -584,13 +668,42 @@
     </div>
   </section>
 
-  <!-- 4. Meetings -->
+  <!-- 4. Communications (Meetings, Calls, Emails & Chats) -->
   <section class="panel" id="meetings">
-    <div class="row">
-      <input id="mfilter" placeholder="Filter by title…" oninput="renderMeetings()">
+    <div class="row" style="flex-wrap:wrap;gap:10px;align-items:center">
+      <div class="subnav-bar" style="margin:0;padding:2px;display:inline-flex">
+        <button type="button" id="mfilter-all" class="subnav-btn active" onclick="setMeetingSourceFilter('all')">
+          <span>All</span>
+          <span id="mcount-all" class="pill" style="margin-left:4px;padding:0 5px;font-size:10px">0</span>
+        </button>
+        <button type="button" id="mfilter-calls" class="subnav-btn" onclick="setMeetingSourceFilter('calls')">
+          <span>🎥 Calls & Meetings</span>
+          <span id="mcount-calls" class="pill" style="margin-left:4px;padding:0 5px;font-size:10px">0</span>
+        </button>
+        <button type="button" id="mfilter-emails" class="subnav-btn" onclick="setMeetingSourceFilter('emails')">
+          <span>✉️ Email Threads</span>
+          <span id="mcount-emails" class="pill" style="margin-left:4px;padding:0 5px;font-size:10px">0</span>
+        </button>
+        <button type="button" id="mfilter-chats" class="subnav-btn" onclick="setMeetingSourceFilter('chats')" style="display:none">
+          <span>💬 Chats</span>
+          <span id="mcount-chats" class="pill" style="margin-left:4px;padding:0 5px;font-size:10px">0</span>
+        </button>
+      </div>
+      <select id="mtimeframe" onchange="setGlobalTimeframe(this.value)">
+        <option value="">All time</option>
+        <option value="7">Past 7 days</option>
+        <option value="30">Past 30 days</option>
+        <option value="90">Past quarter</option>
+        <option value="365">Past year</option>
+      </select>
+      <select id="mpeople" onchange="setGlobalPerson(this.value)">
+        <option value="">All attendees</option>
+      </select>
+      <input id="mfilter" placeholder="Filter communications by title, source, or topic…" style="min-width:200px;flex:1" oninput="renderMeetings()">
       <button class="action" onclick="loadMeetings()">Refresh</button>
+      <button type="button" id="mclear-filters" class="clear-filters-btn" style="display:none" onclick="clearAllGlobalFilters()">Clear filters</button>
     </div>
-    <p class="hint">Click any meeting to see what was decided, who was there, and what came out of it.</p>
+    <p class="hint">Click any communication session to inspect what was decided, who was there, and what came out of it.</p>
     <div class="scroll" id="meetings-body"></div>
   </section>
 
@@ -656,13 +769,54 @@
   <div class="dlg-body" id="d-body"></div>
 </dialog>
 
-<dialog id="cmd-dialog">
-  <div class="cmd-input-wrap">
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--muted)"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
-    <input class="cmd-input" id="cmd-input" placeholder="Search meetings, actions, topics, or type a command…" autocomplete="off" oninput="filterCmdPalette(this.value)">
-    <kbd style="font-size:11px;color:var(--muted);background:var(--raise);padding:2px 6px;border-radius:4px;border:1px solid var(--line)">ESC</kbd>
+<dialog id="review-person-dialog">
+  <div class="dlg-head">
+    <div><strong id="rpd-title">Resolve / Edit Attendee</strong><div class="muted">Confirm this attendee's identity and link them to this meeting.</div></div>
+    <button class="x" onclick="document.getElementById('review-person-dialog').close()" aria-label="Close dialog">&times;</button>
   </div>
-  <div class="cmd-results" id="cmd-results"></div>
+  <div class="dlg-body">
+    <div style="display:flex;flex-direction:column;gap:12px;margin-bottom:18px">
+      <div>
+        <label style="font-size:12px;color:var(--muted);display:block;margin-bottom:5px;font-weight:500">Full Name</label>
+        <input type="text" id="rpd-name" style="width:100%" placeholder="e.g. Patrick Schablitzki">
+      </div>
+      <div>
+        <label style="font-size:12px;color:var(--muted);display:block;margin-bottom:5px;font-weight:500">Email Address (optional)</label>
+        <input type="email" id="rpd-email" style="width:100%" placeholder="e.g. patrick.s@onixnet.com">
+      </div>
+    </div>
+    <div style="display:flex;justify-content:flex-end;gap:8px">
+      <button type="button" class="btn-xs undo" onclick="document.getElementById('review-person-dialog').close()" style="padding:7px 14px;font-size:12px">Cancel</button>
+      <button type="button" class="action" id="rpd-submit-btn" style="padding:7px 16px;font-size:12px">Save &amp; Resolve</button>
+    </div>
+  </div>
+</dialog>
+
+<dialog id="add-attendee-dialog">
+  <div class="dlg-head">
+    <div><strong>Add Person to Meeting</strong><div class="muted">Directly attach a verified attendee to a meeting record.</div></div>
+    <button class="x" onclick="document.getElementById('add-attendee-dialog').close()" aria-label="Close dialog">&times;</button>
+  </div>
+  <div class="dlg-body">
+    <div style="display:flex;flex-direction:column;gap:12px;margin-bottom:18px">
+      <div>
+        <label style="font-size:12px;color:var(--muted);display:block;margin-bottom:5px;font-weight:500">Meeting</label>
+        <select id="aad-meeting" style="width:100%"></select>
+      </div>
+      <div>
+        <label style="font-size:12px;color:var(--muted);display:block;margin-bottom:5px;font-weight:500">Full Name</label>
+        <input type="text" id="aad-name" style="width:100%" placeholder="e.g. Coley Perry">
+      </div>
+      <div>
+        <label style="font-size:12px;color:var(--muted);display:block;margin-bottom:5px;font-weight:500">Email Address</label>
+        <input type="email" id="aad-email" style="width:100%" placeholder="e.g. coley.perry@onixnet.com">
+      </div>
+    </div>
+    <div style="display:flex;justify-content:flex-end;gap:8px">
+      <button type="button" class="btn-xs undo" onclick="document.getElementById('add-attendee-dialog').close()" style="padding:7px 14px;font-size:12px">Cancel</button>
+      <button type="button" class="action" onclick="submitAddAttendee()" style="padding:7px 16px;font-size:12px">Add Attendee</button>
+    </div>
+  </div>
 </dialog>
 
 <dialog id="chat-settings-modal">
@@ -699,7 +853,15 @@
       <span class="muted" style="font-size:11px" id="settings-save-notice"></span>
       <button class="ghost" onclick="resetDefaultQueries()">Reset to Defaults</button>
     </div>
+</dialog>
+
+<dialog id="cmd-dialog">
+  <div class="cmd-input-wrap">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--muted)"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+    <input class="cmd-input" id="cmd-input" placeholder="Search meetings, actions, topics, or type a command…" autocomplete="off" oninput="filterCmdPalette(this.value)">
+    <kbd style="font-size:11px;color:var(--muted);background:var(--raise);padding:2px 6px;border-radius:4px;border:1px solid var(--line)">ESC</kbd>
   </div>
+  <div class="cmd-results" id="cmd-results"></div>
 </dialog>
 
 <script>
@@ -768,12 +930,19 @@ function switchTab(panelId, updateHistory = true) {
     try { localStorage.setItem("mn_active_tab", panelId); } catch {}
   }
 
+  // Synchronize persistent global filter UI elements on tab switch
+  if (typeof syncPersonDropdowns === "function") syncPersonDropdowns();
+  if (typeof syncTimeframeDropdowns === "function") syncTimeframeDropdowns();
+
   if (subView === "workstreams") {
     switchGraphSubView("workstreams");
   } else if (subView === "review") {
     switchActionsSubView("review");
   } else {
     LOADERS[targetTab]?.();
+    if (targetTab === "meetings" && MEETINGS.length) renderMeetings();
+    if (targetTab === "actions" && ACTIONS.length) renderActions();
+    if (targetTab === "ask" && typeof onChatFilterChange === "function") onChatFilterChange();
   }
 }
 
@@ -796,18 +965,342 @@ async function get(path) {
 function fail(sel, err) { $(sel).innerHTML = `<div class="err">${esc(err.message)}</div>`; }
 function empty(msg) { return `<div class="empty">${esc(msg)}</div>`; }
 
+const CONTACT_REGISTRY = {
+  "lp": "LeePatrick McIntire",
+  "l.p.": "LeePatrick McIntire",
+  "l p": "LeePatrick McIntire",
+  "leepatrick": "LeePatrick McIntire",
+  "lee patrick": "LeePatrick McIntire",
+  "lee-patrick": "LeePatrick McIntire",
+  "leepatrick mcintire": "LeePatrick McIntire",
+  "coley": "Coley Woyak",
+  "colin": "Coley Woyak",
+  "coalie": "Coley Woyak",
+  "colie": "Coley Woyak",
+  "coaly": "Coley Woyak",
+  "coley woyak": "Coley Woyak",
+  "coley perry": "Coley Woyak",
+  "matteo": "Matteo Vaiente",
+  "matteo vaiente": "Matteo Vaiente",
+  "michael": "Michael Baylard",
+  "baylard": "Michael Baylard",
+  "michael baylard": "Michael Baylard",
+  "katrisa": "Katrisa Brock",
+  "katrisa brock": "Katrisa Brock",
+  "sanjay": "Sanjay Pradhan",
+  "sanjay pradhan": "Sanjay Pradhan",
+  "mallory": "Mallory Webber",
+  "mallory webber": "Mallory Webber",
+  "natalie": "Natalie Miller",
+  "natalie miller": "Natalie Miller",
+  "gaurav": "Gaurav Bharara",
+  "gaurav bharara": "Gaurav Bharara",
+};
+
+let CONTACT_PROFILES = [];
+
+async function loadContacts() {
+  try {
+    const res = await get("/graph/contacts");
+    if (res && res.contacts) {
+      CONTACT_PROFILES = res.contacts;
+      for (const c of res.contacts) {
+        if (c.email) CONTACT_REGISTRY[c.email.toLowerCase()] = c.name;
+        if (c.name) CONTACT_REGISTRY[c.name.toLowerCase()] = c.name;
+        for (const n of (c.nicknames || [])) CONTACT_REGISTRY[n.toLowerCase()] = c.name;
+        for (const f of (c.first_names || [])) CONTACT_REGISTRY[f.toLowerCase()] = c.name;
+        for (const init of (c.initials || [])) CONTACT_REGISTRY[init.toLowerCase()] = c.name;
+      }
+      populatePersonDropdowns();
+    }
+  } catch (e) {
+    console.warn("Contacts directory fetch failed:", e);
+  }
+}
+
+function resolveToFullName(raw) {
+  if (!raw) return "";
+  const s = String(raw).trim();
+  const k = s.toLowerCase();
+  return CONTACT_REGISTRY[k] || s;
+}
+
+const GLOBAL_FILTERS = {
+  person: "",
+  timeframe: "",
+};
+
+function loadSavedGlobalFilters() {
+  try {
+    const raw = localStorage.getItem("mn_global_filters");
+    if (raw) {
+      const p = JSON.parse(raw);
+      if (p.person) GLOBAL_FILTERS.person = p.person;
+      if (p.timeframe) GLOBAL_FILTERS.timeframe = p.timeframe;
+    }
+  } catch {}
+}
+
+function saveGlobalFilters() {
+  try {
+    localStorage.setItem("mn_global_filters", JSON.stringify(GLOBAL_FILTERS));
+  } catch {}
+}
+
+function syncPersonDropdowns() {
+  const p = GLOBAL_FILTERS.person;
+  ["#afilter", "#mpeople", "#chat-person"].forEach(sel => {
+    const el = $(sel);
+    if (el) {
+      el.value = p;
+      el.classList.toggle("active-filter", Boolean(p));
+    }
+  });
+  const clearBtnA = $("#aclear-filters");
+  if (clearBtnA) clearBtnA.style.display = p ? "inline-block" : "none";
+}
+
+function syncTimeframeDropdowns() {
+  const tf = GLOBAL_FILTERS.timeframe;
+  const r = $("#range");
+  if (r && !$("#custom-range")?.style.display?.includes("inline")) {
+    r.value = tf ? tf : "all";
+  }
+  ["#atimeframe", "#mtimeframe", "#chat-timeframe"].forEach(sel => {
+    const el = $(sel);
+    if (el) {
+      el.value = tf;
+      el.classList.toggle("active-filter", Boolean(tf));
+    }
+  });
+}
+
+function setGlobalPerson(personName) {
+  GLOBAL_FILTERS.person = (personName || "").trim();
+  saveGlobalFilters();
+  syncPersonDropdowns();
+
+  if (typeof renderActions === "function") renderActions();
+  if (typeof renderMeetings === "function") renderMeetings();
+  if (typeof onChatFilterChange === "function") onChatFilterChange();
+}
+
+function setGlobalTimeframe(tf) {
+  GLOBAL_FILTERS.timeframe = (tf === "all" ? "" : (tf || "")).trim();
+  saveGlobalFilters();
+  syncTimeframeDropdowns();
+
+  const active = document.querySelector(".panel.active")?.id;
+  if (active === "overview" && typeof loadOverview === "function") loadOverview();
+  else if (active === "meetings" && typeof renderMeetings === "function") renderMeetings();
+  else if (active === "actions" && typeof renderActions === "function") renderActions();
+  else if (active === "ask" && typeof onChatFilterChange === "function") onChatFilterChange();
+}
+
+function clearAllGlobalFilters() {
+  GLOBAL_FILTERS.person = "";
+  GLOBAL_FILTERS.timeframe = "";
+  saveGlobalFilters();
+  syncPersonDropdowns();
+  syncTimeframeDropdowns();
+
+  const scope = $("#chat-scope");
+  if (scope) { scope.value = ""; scope.classList.remove("active-filter"); }
+  const asearch = $("#asearch");
+  if (asearch) asearch.value = "";
+  const mfilter = $("#mfilter");
+  if (mfilter) mfilter.value = "";
+
+  if (typeof renderActions === "function") renderActions();
+  if (typeof renderMeetings === "function") renderMeetings();
+  if (typeof onChatFilterChange === "function") onChatFilterChange();
+  const active = document.querySelector(".panel.active")?.id;
+  if (active === "overview" && typeof loadOverview === "function") loadOverview();
+}
+
+function populatePersonDropdowns() {
+  const namesSet = new Set();
+  if (CONTACT_PROFILES && CONTACT_PROFILES.length) {
+    CONTACT_PROFILES.forEach(c => { if (c.name) namesSet.add(c.name); });
+  }
+  if (typeof ACTIONS !== "undefined" && ACTIONS.length) {
+    ACTIONS.forEach(a => {
+      if (a.owner) namesSet.add(resolveToFullName(a.owner));
+    });
+  }
+  if (typeof MEETINGS !== "undefined" && MEETINGS.length) {
+    MEETINGS.forEach(m => {
+      (m.attendees || []).forEach(att => {
+        const full = resolveToFullName(typeof att === 'string' ? att : (att.name || att.email));
+        if (full) namesSet.add(full);
+      });
+      (m.unresolved_attendees || []).forEach(att => {
+        const full = resolveToFullName(att);
+        if (full) namesSet.add(full);
+      });
+    });
+  }
+
+  const sorted = [...namesSet].filter(Boolean).sort();
+  const cur = GLOBAL_FILTERS.person;
+
+  const afilter = $("#afilter");
+  if (afilter) {
+    const totalActs = (typeof ACTIONS !== "undefined") ? ACTIONS.length : 0;
+    afilter.innerHTML = `<option value="">Everyone (${totalActs})</option>` +
+      sorted.map(n => `<option value="${esc(n)}"${n === cur ? " selected" : ""}>${esc(n)}</option>`).join("");
+  }
+  const mpeople = $("#mpeople");
+  if (mpeople) {
+    mpeople.innerHTML = `<option value="">All attendees</option>` +
+      sorted.map(n => `<option value="${esc(n)}"${n === cur ? " selected" : ""}>${esc(n)}</option>`).join("");
+  }
+  const chatPerson = $("#chat-person");
+  if (chatPerson) {
+    chatPerson.innerHTML = `<option value="">Everyone</option>` +
+      sorted.map(n => `<option value="${esc(n)}"${n === cur ? " selected" : ""}>${esc(n)}</option>`).join("");
+  }
+
+  syncPersonDropdowns();
+}
+
+function formatMeetingType(kind) {
+  if (!kind || kind === '—' || kind === 'null') return '—';
+  const s = String(kind).trim();
+  if (/^1[-_]?on[-_]?1$/i.test(s) || /^1[-_]1$/i.test(s)) return '1-on-1';
+  return s.replace(/[_-]+/g, ' ')
+    .split(' ')
+    .filter(Boolean)
+    .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+    .join(' ');
+}
+
+function formatPlatform(p) {
+  if (!p || p === '—' || p === 'null') return '—';
+  const s = String(p).trim().toLowerCase();
+  if (s === 'google_meet' || s === 'google meet' || s === 'meet') return 'Google Meet';
+  if (s === 'email' || s === 'gmail' || s === 'email_thread') return 'Email';
+  if (s === 'google_calendar' || s === 'google calendar' || s === 'calendar') return 'Google Calendar';
+  if (s === 'slack') return 'Slack';
+  if (s === 'zoom') return 'Zoom';
+  if (s === 'teams' || s === 'ms_teams' || s === 'microsoft teams') return 'Microsoft Teams';
+  return p.replace(/[_-]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
 // A column is [label, render] or [label, render, width]. The width is set on
-// the header only; the cells inherit it, and repeating it per row is what made
-// a long task column collapse to its content width on some rows and not others.
+// the header only; the cells inherit it. Clicking non-empty headers sorts asc/desc.
 function table(rows, cols, clickable) {
   if (!rows || !rows.length) return empty("Nothing here yet.");
-  const head = "<tr>" + cols.map(c =>
-    `<th${c[2] ? ` style="width:${c[2]}"` : ""}>${esc(c[0])}</th>`).join("") + "</tr>";
-  const body = rows.map((r, i) =>
+  const head = "<thead><tr>" + cols.map((c, i) => {
+    const w = c[2] ? `width:${c[2]};` : "";
+    if (!c[0]) return `<th style="${w}"></th>`;
+    return `<th class="sortable" onclick="sortTable(this, ${i})" title="Click to sort by ${esc(c[0])} (asc/desc)" style="${w}">` +
+      `<div style="display:inline-flex;align-items:center;justify-content:space-between;gap:6px;width:100%">` +
+        `<span>${esc(c[0])}</span>` +
+        `<span class="sort-icon" style="font-size:10px;opacity:0.35;transition:all .15s ease">↕</span>` +
+      `</div></th>`;
+  }).join("") + "</tr></thead>";
+  const body = "<tbody>" + rows.map((r, i) =>
     `<tr class="${clickable ? "clickable" : ""}" data-i="${i}">` +
-    cols.map(c => `<td>${c[1](r)}</td>`).join("") + "</tr>").join("");
+    cols.map(c => `<td>${c[1](r)}</td>`).join("") + "</tr>").join("") + "</tbody>";
   return `<table>${head}${body}</table>`;
 }
+
+function sortTable(th, colIdx) {
+  const table = th.closest('table');
+  if (!table) return;
+  const tbody = table.querySelector('tbody') || table;
+  const thead = table.querySelector('thead') || table;
+  const allThs = Array.from(thead.querySelectorAll('th'));
+
+  const currentDir = th.getAttribute('data-sort-dir') || 'none';
+  const newDir = currentDir === 'asc' ? 'desc' : 'asc';
+
+  allThs.forEach(h => {
+    h.removeAttribute('data-sort-dir');
+    h.classList.remove('sorted-asc', 'sorted-desc');
+    const icon = h.querySelector('.sort-icon');
+    if (icon) {
+      icon.textContent = '↕';
+      icon.style.opacity = '0.35';
+      icon.style.color = '';
+    }
+  });
+
+  th.setAttribute('data-sort-dir', newDir);
+  th.classList.add(newDir === 'asc' ? 'sorted-asc' : 'sorted-desc');
+  const icon = th.querySelector('.sort-icon');
+  if (icon) {
+    icon.textContent = newDir === 'asc' ? '▲' : '▼';
+    icon.style.opacity = '1';
+    icon.style.color = 'var(--accent, #ff5e00)';
+  }
+
+  const container = table.closest('[id]');
+  if (container && container.id) {
+    container.dataset.sortCol = colIdx;
+    container.dataset.sortDir = newDir;
+  }
+
+  const rows = Array.from(tbody.querySelectorAll('tr')).filter(tr => !tr.querySelector('th'));
+  if (rows.length <= 1) return;
+
+  const priorityOrder = { 'high': 3, 'medium': 2, 'low': 1, '—': 0, '': 0 };
+
+  rows.sort((a, b) => {
+    const cellA = a.children[colIdx];
+    const cellB = b.children[colIdx];
+    if (!cellA || !cellB) return 0;
+
+    let textA = cellA.innerText.trim();
+    let textB = cellB.innerText.trim();
+
+    if (textA === '—' || !textA) return 1;
+    if (textB === '—' || !textB) return -1;
+
+    const lowerA = textA.toLowerCase();
+    const lowerB = textB.toLowerCase();
+    if (lowerA in priorityOrder && lowerB in priorityOrder) {
+      const pDiff = priorityOrder[lowerA] - priorityOrder[lowerB];
+      return newDir === 'asc' ? pDiff : -pDiff;
+    }
+
+    const isDateA = /^\d{4}-\d{2}-\d{2}/.test(textA);
+    const isDateB = /^\d{4}-\d{2}-\d{2}/.test(textB);
+    if (isDateA && isDateB) {
+      const cmp = textA.localeCompare(textB);
+      return newDir === 'asc' ? cmp : -cmp;
+    }
+
+    const cleanA = textA.replace(/[^0-9.-]/g, '');
+    const cleanB = textB.replace(/[^0-9.-]/g, '');
+    const numA = parseFloat(cleanA);
+    const numB = parseFloat(cleanB);
+    if (!isNaN(numA) && !isNaN(numB) && cleanA !== '' && cleanB !== '' && !textA.includes(' ') && !textB.includes(' ')) {
+      return newDir === 'asc' ? numA - numB : numB - numA;
+    }
+
+    const cmp = textA.localeCompare(textB, undefined, { numeric: true, sensitivity: 'base' });
+    return newDir === 'asc' ? cmp : -cmp;
+  });
+
+  rows.forEach(r => tbody.appendChild(r));
+}
+
+function restoreTableSort(containerSelector) {
+  const container = $(containerSelector);
+  if (!container || container.dataset.sortCol === undefined) return;
+  const colIdx = parseInt(container.dataset.sortCol, 10);
+  const dir = container.dataset.sortDir;
+  const table = container.querySelector('table');
+  if (!table) return;
+  const th = table.querySelectorAll('thead th')[colIdx] || table.querySelectorAll('th')[colIdx];
+  if (th && th.classList.contains('sortable')) {
+    th.setAttribute('data-sort-dir', dir === 'desc' ? 'asc' : 'desc');
+    sortTable(th, colIdx);
+  }
+}
+
 function wire(sel, rows, onClick) {
   $(sel).querySelectorAll("tr.clickable").forEach(tr =>
     tr.onclick = () => onClick(rows[+tr.dataset.i]));
@@ -822,9 +1315,13 @@ async function loadHealth() {
 }
 
 function onRangeChange() {
-  const custom = $("#range").value === "custom";
+  const val = $("#range").value;
+  const custom = val === "custom";
   $("#custom-range").style.display = custom ? "" : "none";
-  if (!custom) { loadOverview(); return; }
+  if (!custom) {
+    setGlobalTimeframe(val);
+    return;
+  }
   // Waiting for both dates before querying, so say so rather than leaving the
   // previous range's label sitting above numbers it no longer describes.
   if (!$("#range-start").value || !$("#range-end").value) {
@@ -859,7 +1356,7 @@ async function loadOverview() {
       get(`/graph/digest/weekly?${range.qs}`), get("/graph/decisions?limit=6")]);
     const s = d.summary || {};
     $("#cards").innerHTML = [
-      ["Meetings", s.total_meetings, ""],
+      ["Communications", s.total_meetings, ""],
       ["Decisions", s.total_decisions, ""],
       ["Open actions", s.open_action_items, ""],
       ["High priority", s.high_priority_open, s.high_priority_open > 0 ? "hot" : ""],
@@ -876,49 +1373,169 @@ async function loadOverview() {
       `<h3>Latest decisions</h3>` +
       `<div class="muted" style="font-size:12px;margin:-6px 0 8px">The most recent decisions, regardless of the range above.</div>` +
       ((dec.decisions && dec.decisions.length)
-        ? dec.decisions.map(x =>
-            `<div class="quote">${esc(x.text)}<div class="muted" style="font-size:12px">` +
-            `${esc(x.date)} · ${esc(x.meeting_title)}</div></div>`).join("")
+        ? dec.decisions.map(x => {
+            const orig = (x.meeting_original_title && x.meeting_original_title !== x.meeting_title)
+              ? ` · <span class="muted" style="font-size:11px" title="Original meeting name">Source: ${esc(x.meeting_original_title)}</span>`
+              : "";
+            return `<div class="quote">${esc(x.text)}<div class="muted" style="font-size:12px">` +
+              `${esc(x.date)} · ${esc(x.meeting_title)}${orig}</div></div>`;
+          }).join("")
         : empty("No decisions captured yet.")) +
       `<h3>${hi.length ? "Needs attention" : "Open commitments"}</h3>` +
       `<div class="scroll">` +
       table(show, [
         ["Task", r => esc(r.task)],
-        ["Owner", r => esc(r.owner)],
+        ["Owner", r => esc(resolveToFullName(r.owner))],
         ["Due", r => esc(r.due || "—")],
         ["Priority", r => `<span class="${r.priority === "high" ? "pri-high" : ""}">${esc(r.priority || "—")}</span>`],
       ]) + `</div>`;
   } catch (e) { fail("#overview-body", e); }
 }
 
+let MEETING_SOURCE_FILTER = "all";
+
+function isCallSession(m) {
+  const k = (m.kind || "").toLowerCase();
+  const p = (m.platform || "").toLowerCase();
+  return k === "meeting" || k === "1_on_1" || k === "1-1" || k === "standup" || p.includes("meet") || p.includes("zoom");
+}
+
+function isEmailSession(m) {
+  const k = (m.kind || "").toLowerCase();
+  const p = (m.platform || "").toLowerCase();
+  return k.includes("email") || p.includes("email") || p.includes("gmail") || p.includes("mail");
+}
+
+function isChatSession(m) {
+  const k = (m.kind || "").toLowerCase();
+  const p = (m.platform || "").toLowerCase();
+  return k.includes("chat") || (k.includes("thread") && !isEmailSession(m)) || p.includes("slack") || p.includes("teams");
+}
+
+function setMeetingSourceFilter(source) {
+  MEETING_SOURCE_FILTER = source;
+  document.querySelectorAll('#meetings .subnav-btn').forEach(b => b.classList.remove('active'));
+  const activeBtn = $(`#mfilter-${source}`);
+  if (activeBtn) activeBtn.classList.add('active');
+  renderMeetings();
+}
+
+function updateMeetingFilterCounts() {
+  const allCount = MEETINGS.length;
+  const callsCount = MEETINGS.filter(isCallSession).length;
+  const emailsCount = MEETINGS.filter(isEmailSession).length;
+  const chatsCount = MEETINGS.filter(isChatSession).length;
+
+  if ($("#mcount-all")) $("#mcount-all").textContent = allCount;
+  if ($("#mcount-calls")) $("#mcount-calls").textContent = callsCount;
+  if ($("#mcount-emails")) $("#mcount-emails").textContent = emailsCount;
+  if ($("#mcount-chats")) $("#mcount-chats").textContent = chatsCount;
+
+  const chatBtn = $("#mfilter-chats");
+  if (chatBtn) {
+    chatBtn.style.display = chatsCount > 0 ? "" : "none";
+  }
+}
+
 async function loadMeetings() {
   try {
     const d = await get("/graph/meetings/recent?limit=100");
     MEETINGS = d.meetings || [];
+    updateMeetingFilterCounts();
+    populatePersonDropdowns();
     renderMeetings();
   } catch (e) { fail("#meetings-body", e); }
 }
+
 function renderMeetings() {
-  const q = ($("#mfilter").value || "").toLowerCase();
-  const rows = MEETINGS.filter(m => !q || (m.title || "").toLowerCase().includes(q));
+  const q = ($("#mfilter").value || "").toLowerCase().trim();
+  const who = (GLOBAL_FILTERS.person || "").toLowerCase().trim();
+  const tf = GLOBAL_FILTERS.timeframe;
+
+  let cutoffDate = null;
+  if (tf && tf !== "all") {
+    const days = parseInt(tf, 10);
+    if (!isNaN(days) && days > 0) {
+      const d = new Date();
+      d.setDate(d.getDate() - days);
+      cutoffDate = d.toISOString().slice(0, 10);
+    }
+  }
+
+  const hasActiveFilter = Boolean(who || (tf && tf !== "all") || q);
+  const clearBtn = $("#mclear-filters");
+  if (clearBtn) clearBtn.style.display = hasActiveFilter ? "inline-block" : "none";
+
+  const sourceFiltered = MEETINGS.filter(m => {
+    if (MEETING_SOURCE_FILTER === "calls") return isCallSession(m);
+    if (MEETING_SOURCE_FILTER === "emails") return isEmailSession(m);
+    if (MEETING_SOURCE_FILTER === "chats") return isChatSession(m);
+    return true;
+  });
+
+  const rows = sourceFiltered.filter(m => {
+    if (cutoffDate && m.date && m.date < cutoffDate) {
+      return false;
+    }
+
+    if (who) {
+      const attendees = [...(m.attendees || []), ...(m.unresolved_attendees || [])]
+        .map(a => resolveToFullName(typeof a === 'string' ? a : (a.name || a.email || ''))).filter(Boolean);
+      const attendeeMatch = attendees.some(a => a.toLowerCase().includes(who) || who.includes(a.toLowerCase()));
+      const textMatch = `${m.title || ''} ${m.original_title || ''} ${m.summary || ''}`.toLowerCase().includes(who);
+      if (!attendeeMatch && !textMatch) {
+        return false;
+      }
+    }
+
+    if (q) {
+      const match = (m.title || "").toLowerCase().includes(q) ||
+                    (m.original_title || "").toLowerCase().includes(q) ||
+                    (m.platform || "").toLowerCase().includes(q) ||
+                    (m.kind || "").toLowerCase().includes(q) ||
+                    (m.summary || "").toLowerCase().includes(q);
+      if (!match) return false;
+    }
+
+    return true;
+  });
+
   $("#meetings-body").innerHTML = table(rows, [
-    ["Date", r => esc(r.date)],
-    ["Meeting", r => esc(r.title)],
-    ["Type", r => esc(r.kind)],
+    ["Date", r => `<span style="white-space:nowrap;font-variant-numeric:tabular-nums;">${esc(r.date)}</span>`, "105px"],
+    ["Topic / Title", r => {
+      const orig = (r.original_title && r.original_title !== r.title)
+        ? `<div style="font-size:11px;color:var(--muted);margin-top:3px;display:flex;align-items:center;gap:4px">
+             <span class="pill" style="font-size:10px;padding:1px 5px;background:rgba(255, 94, 0, 0.12);color:var(--accent,#ff5e00);border-color:rgba(255,94,0,0.25);margin:0">Source</span>
+             <span>${esc(r.original_title)}</span>
+           </div>`
+        : "";
+      return `<div><strong>${esc(r.title)}</strong>${orig}</div>`;
+    }, "35%"],
+    ["Type", r => `<span style="white-space:nowrap;font-weight:500;">${esc(formatMeetingType(r.kind))}</span>`, "115px"],
+    ["Platform", r => `<span class="pill" style="white-space:nowrap;margin:0">${esc(formatPlatform(r.platform))}</span>`, "130px"],
     ["Summary", r => esc((r.summary || "").slice(0, 90))],
   ], true);
   wire("#meetings-body", rows, openMeeting);
+  restoreTableSort("#meetings-body");
 }
 
 async function openMeeting(m) {
   const dlg = $("#detail");
   $("#d-title").textContent = m.title || "Meeting";
-  $("#d-meta").textContent = `${m.date || ""} · ${m.kind || ""}`;
+  $("#d-meta").textContent = `${m.date || ""} · ${formatMeetingType(m.kind)}`;
   $("#d-body").innerHTML = empty("Loading…");
   dlg.showModal();
   try {
     const d = await get("/graph/meeting/" + encodeURIComponent(m.id));
+    const orig = d.original_title || m.original_title || "";
+    const origBanner = (orig && orig !== d.title)
+      ? `<div style="background:rgba(255, 94, 0, 0.08);border:1px solid rgba(255, 94, 0, 0.25);border-radius:6px;padding:8px 12px;margin:2px 0 14px;display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px;">
+           <div><span style="color:var(--muted);margin-right:6px">📁 Original / Source:</span><strong style="color:var(--text)">${esc(orig)}</strong></div>
+           <span class="pill" style="font-size:11px;margin:0;white-space:nowrap">${esc(formatPlatform(d.platform || m.platform || 'source'))}</span>
+         </div>`
+      : "";
     $("#d-body").innerHTML =
+      origBanner +
       (d.summary ? `<p>${esc(d.summary)}</p>` : "") +
       ((d.topics && d.topics.length) ? `<h3>Topics</h3>` +
         d.topics.map(t => `<span class="pill">${esc(t)}</span>`).join("") : "") +
@@ -929,16 +1546,17 @@ async function openMeeting(m) {
       `<h3>Action items (${(d.action_items || []).length})</h3>` +
       `<div class="scroll">` + table(d.action_items || [], [
         ["Task", r => esc(r.task)],
-        ["Owner", r => esc(r.owner)],
+        ["Owner", r => esc(resolveToFullName(r.owner))],
         ["Due", r => esc(r.due || "—")],
       ]) + `</div>` +
       (() => {
         const resolved = d.attendees || [];
-        const unres = (d.unresolved_attendees || []).filter(u => u && !/unknown\s*speaker/i.test(u));
+        const isJunk = u => !u || /^(unknown(\s*speaker)?|speaker\s*\d*|unidentified(\s*speaker)?|none|nobody|the group|someone|all|everyone|n\/a|na|—|-)$/i.test(u.trim());
+        const unres = (d.unresolved_attendees || []).filter(u => !isJunk(u));
         const total = resolved.length + unres.length;
         if (!total) return `<h3>Who was there (0)</h3>` + empty("No attendees recorded.");
-        let pills = resolved.map(a => `<span class="pill">👤 ${esc(a.name || a.email)}</span>`).join("");
-        pills += unres.map(u => `<span class="pill" style="opacity:0.9" title="Identified from meeting transcript">👤 ${esc(u)}</span>`).join("");
+        let pills = resolved.map(a => `<span class="pill">👤 ${esc(resolveToFullName(a.name || a.email))}</span>`).join("");
+        pills += unres.map(u => `<span class="pill" style="opacity:0.9" title="Identified from meeting transcript">👤 ${esc(resolveToFullName(u))}</span>`).join("");
         return `<h3>Who was there (${total})</h3><div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px">${pills}</div>`;
       })() +
       ((d.facts && d.facts.length) ? `<h3>What this told us</h3>` +
@@ -949,29 +1567,22 @@ async function openMeeting(m) {
 let JIRA_BROWSE_BASE = "";
 
 async function loadActions() {
-  // Read the owner back BEFORE the list is rebuilt. Repopulating the select
-  // resets it to "Everyone", so refreshing while filtered to one person --
-  // which is what Mark Done does -- silently threw the filter away.
-  const owner = $("#afilter") ? $("#afilter").value : "";
+  const owner = GLOBAL_FILTERS.person || ($("#afilter") ? $("#afilter").value : "");
   try {
     const d = await get("/graph/actions?status=all&limit=500");
     const rawActions = d.actions || [];
     const seenActionKeys = new Set();
     ACTIONS = [];
     for (const a of rawActions) {
+      if (a.owner) a.owner = resolveToFullName(a.owner);
       const k = a.id ? a.id : `${a.owner}:${a.task}:${a.jira_key || ''}`;
       if (!seenActionKeys.has(k)) {
         seenActionKeys.add(k);
         ACTIONS.push(a);
       }
     }
-    // Never a literal Atlassian domain: a hardcoded tenant is what stops this
-    // repo moving to the Onix project, and it would point one person's
-    // dashboard at another's Jira. Blank means render the key as plain text.
     JIRA_BROWSE_BASE = d.jira_browse_base || "";
-    const owners = [...new Set(ACTIONS.map(a => a.owner).filter(Boolean))].sort();
-    $("#afilter").innerHTML = `<option value="">Everyone (${ACTIONS.length})</option>` +
-      owners.map(o => `<option value="${esc(o)}"${o === owner ? " selected" : ""}>${esc(o)}</option>`).join("");
+    populatePersonDropdowns();
     renderActions();
   } catch (e) { fail("#actions-body", e); }
 }
@@ -983,10 +1594,26 @@ async function loadActions() {
 function isSharedQueue(a) { return !a.owner_email; }
 
 function renderActions() {
-  const who = $("#afilter") ? $("#afilter").value : "";
+  const who = GLOBAL_FILTERS.person || ($("#afilter") ? $("#afilter").value : "");
   const status = $("#astatus") ? $("#astatus").value : "open";
   const owned = $("#aowned") ? $("#aowned").value : "all";
   const search = $("#asearch") ? $("#asearch").value.toLowerCase().trim() : "";
+
+  const tf = GLOBAL_FILTERS.timeframe;
+
+  let cutoffDate = null;
+  if (tf && tf !== "all") {
+    const days = parseInt(tf, 10);
+    if (!isNaN(days) && days > 0) {
+      const d = new Date();
+      d.setDate(d.getDate() - days);
+      cutoffDate = d.toISOString().slice(0, 10);
+    }
+  }
+
+  const hasFilter = Boolean(who || (tf && tf !== "all") || search);
+  const clearBtn = $("#aclear-filters");
+  if (clearBtn) clearBtn.style.display = hasFilter ? "inline-block" : "none";
 
   const rows = ACTIONS.filter(a => {
     if (who && a.owner !== who) return false;
@@ -995,6 +1622,12 @@ function renderActions() {
     if (status === "subtasks" && !a.parent_jira_key) return false;
     if (owned === "named" && isSharedQueue(a)) return false;
     if (owned === "queue" && !isSharedQueue(a)) return false;
+
+    if (cutoffDate) {
+      const actionDate = a.created_at || a.due;
+      if (actionDate && actionDate < cutoffDate) return false;
+    }
+
     if (search) {
       const haystack = [a.task, a.owner, a.jira_key, a.parent_jira_key]
         .filter(Boolean).join(" ").toLowerCase();
@@ -1011,7 +1644,7 @@ function renderActions() {
       return `<div class="subtask"><span class="pill subtask-of">Sub-task of ` +
              `${esc(r.parent_jira_key)}</span><div style="display:flex;align-items:flex-start;justify-content:space-between;gap:6px">${task}${copyBtn}</div></div>`;
     }, "32%"],
-    ["Owner", r => esc(r.owner), "14%"],
+    ["Owner", r => esc(resolveToFullName(r.owner)), "14%"],
     ["Created", r => esc(r.created_at || "—"), "10%"],
     ["Due", r => esc(r.due || "—"), "10%"],
     ["Priority", r => `<span class="${r.priority === "high" ? "pri-high" : ""}">${esc(r.priority || "—")}</span>`, "8%"],
@@ -1042,6 +1675,7 @@ function renderActions() {
 
   $("#actions-body").querySelectorAll("button.btn-xs").forEach(b =>
     b.onclick = () => setActionDone(b, b.dataset.key, b.dataset.done === "1"));
+  restoreTableSort("#actions-body");
 }
 
 async function setActionDone(button, jiraKey, makeDone) {
@@ -1068,107 +1702,7 @@ async function setActionDone(button, jiraKey, makeDone) {
   await loadActions();
 }
 
-// ─── Cmd+K Command Palette ──────────────────────────────────────────
-function openCmdPalette() {
-  const dlg = $("#cmd-dialog");
-  if (!dlg) return;
-  dlg.showModal();
-  const input = $("#cmd-input");
-  input.value = "";
-  filterCmdPalette("");
-  setTimeout(() => input.focus(), 50);
-}
 
-function filterCmdPalette(q) {
-  const query = (q || "").toLowerCase().trim();
-  const resultsEl = $("#cmd-results");
-  if (!resultsEl) return;
-
-  const items = [];
-
-  const tabs = [
-    { title: "Overview", desc: "View executive metrics & recent activity", panel: "overview" },
-    { title: "Meetings", desc: "Browse transcripts and decisions", panel: "meetings" },
-    { title: "Action Items", desc: "Table view of all commitments", panel: "actions" },
-    { title: "Workstreams", desc: "Community clusters and influential nodes", panel: "workstreams" },
-    { title: "Graph", desc: "Interactive force-directed graph view", panel: "graph" },
-    { title: "Ask Graph", desc: "Historical multi-turn conversational queries", panel: "ask" },
-    { title: "Needs You", desc: "Review queue and blocker triage", panel: "review" },
-  ];
-  tabs.forEach(t => {
-    if (!query || t.title.toLowerCase().includes(query) || t.desc.toLowerCase().includes(query)) {
-      items.push({
-        title: `Go to ${t.title}`,
-        desc: t.desc,
-        badge: "Tab",
-        action: () => {
-          $("#cmd-dialog").close();
-          switchTab(t.panel, true);
-        }
-      });
-    }
-  });
-
-  if (ACTIONS && ACTIONS.length) {
-    ACTIONS.filter(a => !query || (a.task && a.task.toLowerCase().includes(query)) || (a.owner && a.owner.toLowerCase().includes(query)))
-      .slice(0, 4)
-      .forEach(a => {
-        items.push({
-          title: a.task,
-          desc: `${a.owner || "Unassigned"} · ${a.linear_identifier || a.jira_key || "No ticket"}`,
-          badge: "Action",
-          action: () => {
-            $("#cmd-dialog").close();
-            openActionDetail(a.id);
-          }
-        });
-      });
-  }
-
-  if (MEETINGS && MEETINGS.length) {
-    MEETINGS.filter(m => !query || (m.title && m.title.toLowerCase().includes(query)))
-      .slice(0, 4)
-      .forEach(m => {
-        items.push({
-          title: m.title,
-          desc: `${m.date || "Past meeting"}`,
-          badge: "Meeting",
-          action: () => {
-            $("#cmd-dialog").close();
-            openMeetingDetail(m.id);
-          }
-        });
-      });
-  }
-
-  if (!items.length) {
-    resultsEl.innerHTML = `<div style="padding:20px;text-align:center;color:var(--muted);font-size:13px">No results found for "${esc(query)}"</div>`;
-    return;
-  }
-
-  resultsEl.innerHTML = items.map((it, idx) => `
-    <div class="cmd-item${idx === 0 ? " active" : ""}" data-idx="${idx}">
-      <div>
-        <div style="font-weight:500">${esc(it.title)}</div>
-        <div style="font-size:11px;color:var(--muted)">${esc(it.desc)}</div>
-      </div>
-      <span class="cmd-badge">${esc(it.badge)}</span>
-    </div>
-  `).join("");
-
-  resultsEl.querySelectorAll(".cmd-item").forEach((el, idx) => {
-    el.onclick = () => items[idx].action();
-  });
-}
-
-window.addEventListener("keydown", e => {
-  if ((e.metaKey || e.ctrlKey) && e.key === "k") {
-    e.preventDefault();
-    const dlg = $("#cmd-dialog");
-    if (dlg && dlg.open) dlg.close();
-    else openCmdPalette();
-  }
-});
 
 async function loadWorkstreams() {
   try {
@@ -1420,22 +1954,19 @@ function handleChatKeydown(e) {
 
 function onChatFilterChange() {
   const scope = $("#chat-scope");
+  const cp = $("#chat-person");
   const tf = $("#chat-timeframe");
   const clearBtn = $("#chat-clear-filters");
-  const hasFilter = Boolean((scope && scope.value) || (tf && tf.value));
+  const hasFilter = Boolean((scope && scope.value) || (cp && cp.value) || (tf && tf.value));
 
   if (scope) scope.classList.toggle("active-filter", Boolean(scope.value));
+  if (cp) cp.classList.toggle("active-filter", Boolean(cp.value));
   if (tf) tf.classList.toggle("active-filter", Boolean(tf.value));
   if (clearBtn) clearBtn.style.display = hasFilter ? "inline-block" : "none";
 }
 
 function clearChatFilters() {
-  const scope = $("#chat-scope");
-  const tf = $("#chat-timeframe");
-  if (scope) { scope.value = ""; scope.classList.remove("active-filter"); }
-  if (tf) { tf.value = ""; tf.classList.remove("active-filter"); }
-  const clearBtn = $("#chat-clear-filters");
-  if (clearBtn) clearBtn.style.display = "none";
+  clearAllGlobalFilters();
 }
 
 function openChatSettings() {
@@ -1925,6 +2456,7 @@ async function renderChatFeed() {
     const turn = CHAT_TURNS[idx];
     if (turn.role === "user") {
       let filterPills = "";
+      if (turn.person) filterPills += `<span class="pill" style="font-size:10px;margin:0">👤 ${esc(turn.person)}</span>`;
       if (turn.scope) filterPills += `<span class="pill" style="font-size:10px;margin:0">Scope: ${esc(turn.scope)}</span>`;
       if (turn.timeframe) filterPills += `<span class="pill" style="font-size:10px;margin:0">Past ${esc(turn.timeframe)}d</span>`;
 
@@ -1960,9 +2492,11 @@ async function askMemory() {
   if (!question) return;
 
   const scope = $("#chat-scope")?.value || "";
-  const timeframe = $("#chat-timeframe")?.value || "";
+  const person = GLOBAL_FILTERS.person || $("#chat-person")?.value || "";
+  const timeframe = GLOBAL_FILTERS.timeframe || $("#chat-timeframe")?.value || "";
   let payloadQuestion = question;
   const constraints = [];
+  if (person) constraints.push(`Contact: ${person}`);
   if (scope) constraints.push(`Scope: ${scope}`);
   if (timeframe) constraints.push(`Timeframe: past ${timeframe} days`);
   if (constraints.length) {
@@ -1994,6 +2528,7 @@ async function askMemory() {
     role: "user",
     text: question,
     timestamp: timeStr,
+    person,
     scope,
     timeframe,
   };
@@ -2128,6 +2663,79 @@ async function refreshReviewBadge() {
   }
 }
 
+async function deleteReviewPerson(reviewId, personName) {
+  if (!confirm(`Are you sure you want to permanently delete "${personName}" from this meeting for good?`)) return;
+  try {
+    const r = await fetch(`/review/people/${encodeURIComponent(reviewId)}?delete_actions=true`, { method: "DELETE" });
+    if (!r.ok) throw new Error("Delete failed");
+    await loadReview();
+  } catch (e) {
+    alert(e.message);
+  }
+}
+
+function editReviewPerson(reviewId, currentName, meetingId) {
+  const dlg = $("#review-person-dialog");
+  $("#rpd-name").value = currentName || "";
+  $("#rpd-email").value = "";
+  $("#rpd-submit-btn").onclick = async () => {
+    const newName = $("#rpd-name").value.trim();
+    const email = $("#rpd-email").value.trim() || null;
+    if (!newName) { alert("Please enter a name"); return; }
+    try {
+      const r = await fetch(`/review/people/${encodeURIComponent(reviewId)}/resolve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: newName, email }),
+      });
+      if (!r.ok) throw new Error("Resolve failed");
+      dlg.close();
+      await loadReview();
+    } catch (e) {
+      alert(e.message);
+    }
+  };
+  dlg.showModal();
+}
+
+async function openAddAttendeeDialog(defaultMeetingId = null) {
+  const dlg = $("#add-attendee-dialog");
+  const sel = $("#aad-meeting");
+  sel.innerHTML = "<option>Loading meetings…</option>";
+  dlg.showModal();
+  try {
+    const data = await get("/graph/meetings/recent?limit=100");
+    const meetings = data.meetings || [];
+    sel.innerHTML = meetings.map(m =>
+      `<option value="${esc(m.id)}"${m.id === defaultMeetingId ? " selected" : ""}>${esc(m.title)} (${esc(m.date || "—")})</option>`
+    ).join("");
+    $("#aad-name").value = "";
+    $("#aad-email").value = "";
+  } catch (e) {
+    sel.innerHTML = `<option>${esc(e.message)}</option>`;
+  }
+}
+
+async function submitAddAttendee() {
+  const meetingId = $("#aad-meeting").value;
+  const name = $("#aad-name").value.trim();
+  const email = $("#aad-email").value.trim();
+  if (!meetingId) { alert("Please select a meeting"); return; }
+  if (!name || !email) { alert("Please provide both name and email"); return; }
+  try {
+    const r = await fetch(`/review/meeting/${encodeURIComponent(meetingId)}/attendee`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, email }),
+    });
+    if (!r.ok) throw new Error("Failed to add attendee");
+    $("#add-attendee-dialog").close();
+    await loadReview();
+  } catch (e) {
+    alert(e.message);
+  }
+}
+
 async function loadReview() {
   try {
     const res = await refreshReviewBadge();
@@ -2135,21 +2743,55 @@ async function loadReview() {
     const p = res?.p || await get("/review/people");
     const b = res?.b || await get("/review/blockers");
     $("#review-body").innerHTML =
+      `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">` +
+        `<div>` +
+          `<h3 style="margin:0">People we couldn't identify (${p.count})</h3>` +
+          `<p class="hint" style="margin:2px 0 0">Mentioned by name with no email to match on. Click a meeting to inspect details, edit names, or remove incorrect references.</p>` +
+        `</div>` +
+        `<button class="action" onclick="openAddAttendeeDialog()" style="padding:6px 12px;font-size:12px;display:inline-flex;align-items:center;gap:5px">` +
+          `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>` +
+          `Add Person to Meeting` +
+        `</button>` +
+      `</div>` +
+      `<div class="scroll" style="margin-bottom:20px">` + table(p.people, [
+        ["Name", r => `<strong>${esc(r.name)}</strong>`],
+        ["Role", r => `<span class="pill" style="margin:0">${esc(r.role || "attendee")}</span>`],
+        ["Meeting (Click to view)", r => {
+          if (!r.meeting_id) return esc(r.meeting_title || "—");
+          const title = r.meeting_title || "Meeting Detail";
+          const orig = (r.meeting_original_title && r.meeting_original_title !== title)
+            ? `<div style="font-size:11px;color:var(--muted);margin-top:2px">Source: ${esc(r.meeting_original_title)}</div>`
+            : "";
+          return `<div><a href="#" class="review-meeting-link" onclick="event.preventDefault(); openMeeting({id: '${esc(r.meeting_id)}', title: '${esc(title).replace(/'/g, "\\'")}', original_title: '${esc(r.meeting_original_title || '').replace(/'/g, "\\'")}'})" title="Click to view meeting information, when it was held, and who was there">📅 ${esc(title)}</a>${orig}</div>`;
+        }],
+        ["Actions", r =>
+          `<div style="display:flex;gap:6px;justify-content:flex-end">` +
+            `<button class="btn-xs" onclick="editReviewPerson('${esc(r.id)}', '${esc(r.name).replace(/'/g, "\\'")}', '${esc(r.meeting_id)}')">Edit / Resolve</button>` +
+            `<button class="btn-xs undo" onclick="deleteReviewPerson('${esc(r.id)}', '${esc(r.name).replace(/'/g, "\\'")}')" title="Delete name from meeting for good">Delete</button>` +
+          `</div>`
+        , "18%"]
+      ]) + `</div>` +
       `<h3>Low-confidence actions (${a.count})</h3>` +
       `<p class="hint">Extracted, but not confident enough to file automatically.</p>` +
-      `<div class="scroll">` + table(a.actions, [
-        ["Task", r => esc(r.task)], ["Owner", r => esc(r.owner)],
-        ["Confidence", r => esc(r.confidence)], ["Why", r => esc(r.review_reason)]]) + `</div>` +
-      `<h3>People we couldn't identify (${p.count})</h3>` +
-      `<p class="hint">Mentioned by name with no email to match on. They stay attached to their
-       meeting either way — nothing is dropped.</p>` +
-      `<div class="scroll">` + table(p.people, [
-        ["Name", r => esc(r.name)], ["Role", r => esc(r.role)],
-        ["Meeting", r => esc(r.meeting_title)]]) + `</div>` +
+      `<div class="scroll" style="margin-bottom:20px">` + table(a.actions, [
+        ["Task", r => esc(r.task)],
+        ["Owner", r => esc(resolveToFullName(r.owner))],
+        ["Confidence", r => esc(r.confidence)],
+        ["Why", r => esc(r.review_reason)]
+      ]) + `</div>` +
       `<h3>Open blockers (${b.count})</h3>` +
       `<div class="scroll">` + table(b.blockers, [
-        ["Blocker", r => esc(r.text)], ["Raised by", r => esc(r.raised_by)],
-        ["Meeting", r => esc(r.meeting_title)]]) + `</div>`;
+        ["Blocker", r => esc(r.text)],
+        ["Raised by", r => esc(resolveToFullName(r.raised_by))],
+        ["Meeting", r => {
+          if (!r.meeting_id) return esc(r.meeting_title || "—");
+          const title = r.meeting_title || "Meeting Detail";
+          const orig = (r.meeting_original_title && r.meeting_original_title !== title)
+            ? `<div style="font-size:11px;color:var(--muted);margin-top:2px">Source: ${esc(r.meeting_original_title)}</div>`
+            : "";
+          return `<div><a href="#" class="review-meeting-link" onclick="event.preventDefault(); openMeeting({id: '${esc(r.meeting_id)}', title: '${esc(title).replace(/'/g, "\\'")}', original_title: '${esc(r.meeting_original_title || '').replace(/'/g, "\\'")}'})">📅 ${esc(title)}</a>${orig}</div>`;
+        }]
+      ]) + `</div>`;
   } catch (e) { fail("#review-body", e); }
 }
 
@@ -2329,11 +2971,105 @@ const LOADERS = {
   review: loadReview,
 };
 
-// Dismiss modals when clicking their backdrop
-document.querySelectorAll("dialog").forEach(dlg => {
-  dlg.addEventListener("click", e => {
-    if (e.target === dlg) dlg.close();
+function openCmdPalette() {
+  const dlg = $("#cmd-dialog");
+  if (!dlg) return;
+  dlg.showModal();
+  const input = $("#cmd-input");
+  input.value = "";
+  filterCmdPalette("");
+  setTimeout(() => input.focus(), 50);
+}
+
+function filterCmdPalette(q) {
+  const query = (q || "").toLowerCase().trim();
+  const resultsEl = $("#cmd-results");
+  if (!resultsEl) return;
+
+  const items = [];
+
+  const tabs = [
+    { title: "Overview", desc: "View executive metrics & recent activity", panel: "overview" },
+    { title: "Communications", desc: "Browse transcripts and decisions", panel: "meetings" },
+    { title: "Action Items", desc: "Table view of all commitments", panel: "actions" },
+    { title: "Workstreams", desc: "Community clusters and influential nodes", panel: "workstreams" },
+    { title: "Graph", desc: "Interactive force-directed graph view", panel: "graph" },
+    { title: "Ask Graph", desc: "Historical multi-turn conversational queries", panel: "ask" },
+    { title: "Needs You", desc: "Review queue and blocker triage", panel: "review" },
+  ];
+  tabs.forEach(t => {
+    if (!query || t.title.toLowerCase().includes(query) || t.desc.toLowerCase().includes(query)) {
+      items.push({
+        title: t.title,
+        desc: t.desc,
+        badge: "Navigation",
+        action: () => {
+          $("#cmd-dialog").close();
+          switchTab(t.panel, true);
+        }
+      });
+    }
   });
+
+  if (typeof ACTIONS !== "undefined" && ACTIONS && ACTIONS.length) {
+    ACTIONS.filter(a => !query || (a.task && a.task.toLowerCase().includes(query)) || (a.owner && a.owner.toLowerCase().includes(query)))
+      .slice(0, 4)
+      .forEach(a => {
+        items.push({
+          title: a.task,
+          desc: `${a.owner || "Unassigned"} · ${a.linear_identifier || a.jira_key || "No ticket"}`,
+          badge: "Action",
+          action: () => {
+            $("#cmd-dialog").close();
+            openActionDetail(a.id);
+          }
+        });
+      });
+  }
+
+  if (typeof MEETINGS !== "undefined" && MEETINGS && MEETINGS.length) {
+    MEETINGS.filter(m => !query || (m.title && m.title.toLowerCase().includes(query)))
+      .slice(0, 4)
+      .forEach(m => {
+        items.push({
+          title: m.title,
+          desc: `${m.date || "Past meeting"}`,
+          badge: "Meeting",
+          action: () => {
+            $("#cmd-dialog").close();
+            openMeetingDetail(m.id);
+          }
+        });
+      });
+  }
+
+  if (!items.length) {
+    resultsEl.innerHTML = `<div style="padding:20px;text-align:center;color:var(--muted);font-size:13px">No results found for "${esc(query)}"</div>`;
+    return;
+  }
+
+  resultsEl.innerHTML = items.map((it, idx) => `
+    <div class="cmd-item${idx === 0 ? " active" : ""}" data-idx="${idx}">
+      <div>
+        <div style="font-weight:500">${esc(it.title)}</div>
+        <div style="font-size:11px;color:var(--muted)">${esc(it.desc)}</div>
+      </div>
+      <span class="cmd-badge">${esc(it.badge)}</span>
+    </div>
+  `).join("");
+
+  resultsEl.querySelectorAll(".cmd-item").forEach((el, idx) => {
+    el.onclick = () => items[idx].action();
+  });
+}
+
+document.addEventListener("keydown", e => {
+  if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+    e.preventDefault();
+    const dlg = $("#cmd-dialog");
+    if (dlg && dlg.open) dlg.close();
+    else openCmdPalette();
+  }
 });
 
 function getInitialTab() {
@@ -2346,8 +3082,10 @@ function getInitialTab() {
   return "overview";
 }
 
+loadSavedGlobalFilters();
 CHAT_TURNS = loadChatHistory();
 loadHealth();
+loadContacts();
 refreshReviewBadge();
 const initialTab = getInitialTab();
 switchTab(initialTab, true);
