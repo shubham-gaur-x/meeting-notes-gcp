@@ -138,34 +138,34 @@ async def _embed_pending(
 
     now = datetime.now(UTC).isoformat()
 
-    # If a custom scalar embed function was supplied without embed_batch_fn, preserve the per-item path:
-    if embed is not None and embed_batch_fn is None:
-        resolved = settings or get_settings()
-        sem = semaphore or asyncio.Semaphore(max(1, resolved.embedding_concurrency))
+    # When explicit batching is supplied, use high-throughput batch embedding:
+    if embed_batch_fn is not None:
+        texts = [r[text_field] for r in pending]
+        vectors = await embed_batch_texts(texts, settings=settings, embed_batch_fn=embed_batch_fn)
 
-        async def embed_one(row: dict[str, Any]) -> int:
-            async with sem:
-                vector = await embed_text(row[text_field], settings=settings, embed=embed)
-            if vector is None:
-                return 0
-            async with driver.session() as session:
-                await session.run(write_cypher, id=row["id"], embedding=vector, now=now)
-            return 1
+        count = 0
+        async with driver.session() as session:
+            for row, vector in zip(pending, vectors, strict=False):
+                if vector is not None:
+                    await session.run(write_cypher, id=row["id"], embedding=vector, now=now)
+                    count += 1
+        return count
 
-        written = await asyncio.gather(*(embed_one(row) for row in pending))
-        return sum(written)
+    # Default path: retain PR #2 shared semaphore concurrency ceiling across passes
+    resolved = settings or get_settings()
+    sem = semaphore or asyncio.Semaphore(max(1, resolved.embedding_concurrency))
 
-    # Otherwise, use high-throughput batch embedding:
-    texts = [r[text_field] for r in pending]
-    vectors = await embed_batch_texts(texts, settings=settings, embed_batch_fn=embed_batch_fn)
+    async def embed_one(row: dict[str, Any]) -> int:
+        async with sem:
+            vector = await embed_text(row[text_field], settings=settings, embed=embed)
+        if vector is None:
+            return 0
+        async with driver.session() as session:
+            await session.run(write_cypher, id=row["id"], embedding=vector, now=now)
+        return 1
 
-    count = 0
-    async with driver.session() as session:
-        for row, vector in zip(pending, vectors, strict=False):
-            if vector is not None:
-                await session.run(write_cypher, id=row["id"], embedding=vector, now=now)
-                count += 1
-    return count
+    written = await asyncio.gather(*(embed_one(row) for row in pending))
+    return sum(written)
 
 
 async def embed_action_items_for_meeting(
