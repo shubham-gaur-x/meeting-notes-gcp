@@ -1153,6 +1153,30 @@ model, where it can be validated against a real re-embed.
 ## Template
 
 ```
+## ADR-029 — Linear issue tracking alongside Jira, with issue_tracker:"both" deduplication
+
+### Context
+Delivery teams increasingly use Linear for engineering sprint execution while enterprise client
+reporting remains anchored in Jira. To support both ecosystems without forcing an either-or
+compromise, meeting-notes-gcp needs first-class Linear issue creation, status synchronization,
+and issue-to-meeting graph provenance.
+
+### Decision
+1. Add `issue_tracker: Literal["jira", "linear", "both"] = "jira"` to application settings (`config.py`).
+2. When configured as `"linear"`, all action item creation and state sync flows to Linear via the
+   Linear GraphQL API (`linear_client.py`).
+3. When configured as `"both"`, action items are created on both Jira and Linear. In Memgraph,
+   the `ActionItem` node gains two outbound `[:SYNCED_AS]` edges: one pointing to `JiraIssue`
+   and one pointing to `LinearIssue`.
+4. Implement deduplication checks: prior to creating an issue on either platform, verify whether
+   an issue with identical summary or provenance already exists on that tracker.
+
+### Consequences
+- Added `linear_client.py` implementing connection pooling, query batching, and exponential
+  backoff retry for rate limits.
+- Graph schema explicitly supports dual tracker tracking with zero cross-tracker key collisions.
+- Autonomous agent pickup (`dev_agent`) can poll candidates from either Jira or Linear.
+
 ## ADR-NNN — <short imperative title>
 
 **Date:** YYYY-MM-DD · **Status:** Proposed | Accepted | Superseded by ADR-NNN

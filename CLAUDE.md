@@ -492,6 +492,12 @@ anything else until a real token has been held in hand.
 
 ---
 
+### Linear Integration Settings
+- `LINEAR_API_KEY`: API key for Linear GraphQL service.
+- `LINEAR_TEAM_ID`: Default team identifier for created issues.
+- `LINEAR_DEFAULT_PROJECT_ID`: Optional default project ID.
+- `ISSUE_TRACKER`: Target tracker (`"jira"`, `"linear"`, or `"both"`).
+
 ## graphify
 
 This repo is maintained under graphify, same as v5.
