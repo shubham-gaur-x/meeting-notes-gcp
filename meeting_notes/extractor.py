@@ -75,18 +75,21 @@ def _extract_raw_urls(text: str) -> list[str]:
     if not text:
         return []
 
-    # Find candidate http(s) URLs
-    urls = re.findall(r"https?://[^\s<>\")']+", text)
+    # Split on whitespace, commas, semicolons, quotes, and brackets to handle joined links cleanly
+    candidate_tokens = re.split(r'[\s,;<>\"]+', text)
     cleaned: list[str] = []
 
     noise_domains = (
         "schemas.microsoft.com",
         "schemas.openxmlformats.org",
+        "schemas.google.com",
         "w3.org",
         "xmlsoap.org",
         "mail.google.com/mail",
         "gstatic.com",
         "googleusercontent.com",
+        "fonts.googleapis.com",
+        "fonts.gstatic.com",
     )
 
     noise_extensions = (
@@ -99,11 +102,17 @@ def _extract_raw_urls(text: str) -> list[str]:
         ".webp",
         ".css",
         ".js",
+        ".woff",
+        ".woff2",
+        ".ttf",
+        ".otf",
     )
 
-    for u in urls:
-        u = u.rstrip(".,;:)>]")
+    for token in candidate_tokens:
+        u = token.strip().rstrip(".,;:)>]\x27")
         if len(u) < 10:
+            continue
+        if not re.match(r"^https?://[a-zA-Z0-9\-.]+\.[a-zA-Z]{2,}", u, re.IGNORECASE):
             continue
         u_lower = u.lower()
         if any(noise in u_lower for noise in noise_domains):

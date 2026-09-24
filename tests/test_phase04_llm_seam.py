@@ -744,3 +744,24 @@ def test_extract_raw_urls_harvests_ecosystem_platform_links() -> None:
         assert expected_url in urls, f"Missing expected platform link: {expected_url}"
 
 
+def test_extract_raw_urls_comma_separated_and_case_insensitive() -> None:
+    """Verifies comma-separated URLs are split into distinct links, uppercase scheme is matched,
+    and noise domains/extensions are filtered out."""
+    from meeting_notes.extractor import _extract_raw_urls
+
+    sample_text = (
+        "Check these issues: https://linear.app/t/issue/ENG-1,https://linear.app/t/issue/ENG-2; "
+        "and uppercase: HTTPS://LINEAR.APP/ISSUE/ENG-3. "
+        "Noise to reject: https://schemas.google.com/doc, https://fonts.googleapis.com/css, "
+        "and https://example.com/logo.png."
+    )
+    urls = _extract_raw_urls(sample_text)
+    assert "https://linear.app/t/issue/ENG-1" in urls
+    assert "https://linear.app/t/issue/ENG-2" in urls
+    assert "HTTPS://LINEAR.APP/ISSUE/ENG-3" in urls
+    assert not any("schemas.google.com" in u for u in urls)
+    assert not any("fonts.googleapis.com" in u for u in urls)
+    assert not any("logo.png" in u for u in urls)
+
+
+
