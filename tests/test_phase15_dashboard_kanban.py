@@ -39,7 +39,6 @@ def test_linear_ticket_badges_and_deep_links() -> None:
     assert "https://linear.app/issue/" in html or "r.linear_url" in html
     assert 'title="Open in Linear"' in html
 
-
 def test_dashboard_javascript_syntax_validity() -> None:
     """Verifies that all script tags in dashboard.html contain valid JavaScript without syntax errors."""
     import re
@@ -295,3 +294,20 @@ def test_dashboard_js_copy_handlers_execution_in_node() -> None:
     proc = subprocess.run([node, "-e", runner_script], capture_output=True, text=True)
     assert proc.returncode == 0, f"Node verification failed: {proc.stderr}"
     assert "SHIPPED_DASHBOARD_COPY_HANDLERS_VERIFIED_SUCCESSFULLY" in proc.stdout
+
+
+def test_dashboard_chat_common_queries_and_ux_elements() -> None:
+    html = (Path(api.__file__).parent / "static" / "dashboard.html").read_text(encoding="utf-8")
+
+    # Assert common query chips container and buttons exist
+    assert 'id="chat-suggestions"' in html or 'class="common-query-chip"' in html
+    assert "What blockers remain?" in html or "data-query=" in html
+
+    # Assert elastic textarea configuration
+    assert 'id="ask-input"' in html or 'id="q"' in html
+    assert "autoExpandTextarea" in html or "scrollHeight" in html or "autoGrowTextarea" in html
+
+    # Assert settings modal for model tuning
+    assert 'id="ask-settings-modal"' in html or 'id="chat-settings-modal"' in html
+    assert 'id="setting-temperature"' in html or "temperature" in html
+

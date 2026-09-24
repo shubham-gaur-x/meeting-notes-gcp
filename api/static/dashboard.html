@@ -591,7 +591,7 @@
     <!-- Sticky Docked Bottom Chat Input -->
     <div class="chat-bottom-dock">
       <div id="chat-quick-suggestions" class="chat-quick-strip" style="display:none"></div>
-      <div class="chat-input-box">
+      <div class="chat-input-box" id="ask-input">
         <textarea id="q" class="chat-input" rows="1"
                   placeholder="Ask anything about your meetings, architectural decisions, and open commitments… (Enter to send, Shift+Enter for new line)"
                   onkeydown="handleChatKeydown(event)"
@@ -837,6 +837,15 @@
         <input type="checkbox" id="toggle-ai-questions" onchange="onToggleAiQuestions(this.checked)">
         <span class="slider"></span>
       </label>
+    </div>
+    <div class="setting-row">
+      <div>
+        <strong style="font-size:13.5px;color:var(--ink)">Synthesis Temperature</strong>
+        <div class="muted" style="font-size:12px;margin-top:2px">Tune response determinism versus creativity (0.0 = factual, 1.0 = exploratory)</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <input type="range" id="setting-temperature" min="0" max="1" step="0.1" value="0.2" onchange="showSettingsNotice('Temperature set to ' + this.value)">
+      </div>
     </div>
 
     <h3 style="margin:20px 0 6px">Custom Common Questions</h3>
@@ -1872,6 +1881,7 @@ const DEFAULT_COMMON_QUERIES = [
   "Who is currently waiting on me for deliverables or approvals?",
   "What key architectural decisions and project milestones were established in recent syncs?",
   "What are the urgent action items with upcoming deadlines?",
+  "What blockers remain?",
 ];
 
 const STORAGE_KEY_QUERIES = "mn_common_queries_v1";
@@ -2077,7 +2087,7 @@ async function renderChatSuggestions() {
   }
 
   const renderCard = c => `
-    <div class="prompt-card compact" tabindex="${c.disabled ? -1 : 0}" role="button"
+    <div class="prompt-card compact common-query-chip" data-query="${esc(c.question)}" tabindex="${c.disabled ? -1 : 0}" role="button"
          title="${esc(c.question)}"
          ${c.disabled ? 'style="opacity:0.6;cursor:pointer" onclick="openChatSettings()"' : `
          onkeydown="if(event.key==='Enter'||event.key===' ')askQuestion('${esc(c.question).replace(/'/g, "\\'")}')"
