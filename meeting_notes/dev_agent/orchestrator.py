@@ -149,38 +149,35 @@ async def find_sprint_candidates(settings: Settings | None = None) -> list[dict[
 
     # 2. Linear candidates
     if tracker in ("linear", "both") and getattr(settings, "linear_api_key", None):
-        try:
-            from meeting_notes import linear_client
+        from meeting_notes import linear_client
 
-            linear_issues = await linear_client.search_issues(
-                "label:dev-agent",
-                settings=settings,
-            )
-            for issue in linear_issues:
-                try:
-                    key = issue.get("identifier") or issue.get("id", "")
-                    conf = await graph_client.get_action_confidence(key)
-                    if conf is not None and conf < settings.dev_agent_confidence_threshold:
-                        log.info(
-                            "orchestrator.triage.linear_low_confidence_skip",
-                            key=key, confidence=round(conf, 2),
-                        )
-                        continue
-                    eligible.append({
-                        "key": key,
-                        "id": issue.get("id"),
-                        "summary": issue.get("title", ""),
-                        "description": issue.get("description", ""),
-                        "tracker": "linear",
-                    })
-                except Exception as issue_exc:
-                    log.warning(
-                        "orchestrator.linear_issue_eval_failed",
-                        issue_id=issue.get("id"),
-                        error=str(issue_exc),
+        linear_issues = await linear_client.search_issues(
+            "label:dev-agent",
+            settings=settings,
+        )
+        for issue in linear_issues:
+            try:
+                key = issue.get("identifier") or issue.get("id", "")
+                conf = await graph_client.get_action_confidence(key)
+                if conf is not None and conf < settings.dev_agent_confidence_threshold:
+                    log.info(
+                        "orchestrator.triage.linear_low_confidence_skip",
+                        key=key, confidence=round(conf, 2),
                     )
-        except Exception as exc:
-            log.error("orchestrator.linear_candidates_failed", error=str(exc), exc_info=True)
+                    continue
+                eligible.append({
+                    "key": key,
+                    "id": issue.get("id"),
+                    "summary": issue.get("title", ""),
+                    "description": issue.get("description", ""),
+                    "tracker": "linear",
+                })
+            except Exception as issue_exc:
+                log.warning(
+                    "orchestrator.linear_issue_eval_failed",
+                    issue_id=issue.get("id"),
+                    error=str(issue_exc),
+                )
 
     return eligible
 
@@ -233,20 +230,29 @@ class _Dependencies:
     review_pr: Any
 
 
-def _should_use_linear(key: str, settings: Settings) -> bool:
+def _should_use_linear(key: str, settings: Settings, tracker: str | None = None) -> bool:
     """Determine whether to route ticket operations to Linear or Jira.
 
     Precedence:
-    1. If Jira is not enabled and Linear is configured -> Linear (True)
-    2. If Linear is not configured -> Jira (False)
-    3. If configured_tracker == "linear" -> Linear (True)
-    4. If configured_tracker == "jira" -> Jira (False)
-    5. In "both" mode:
+    1. If explicit tracker is provided -> respect it ("linear" -> True, "jira" -> False)
+    2. If Jira is not enabled and Linear is configured -> Linear (True)
+    3. If Linear is not configured -> Jira (False)
+    4. If configured_tracker == "linear" -> Linear (True)
+    5. If configured_tracker == "jira" -> Jira (False)
+    6. In "both" mode:
+       - If key matches Linear UUID pattern -> Linear (True)
        - If Jira is enabled and key matches configured Jira project prefix -> Jira (False)
-       - If key matches Linear UUID or team-key pattern -> Linear (True)
+       - If key matches Linear team-key pattern -> Linear (True)
        - If Jira is not enabled -> Linear (True)
-       - Otherwise, fail-safe to Jira (False) with warning log.
+       - Otherwise, fail-loudly with ValueError on ambiguous key.
     """
+    if tracker is not None:
+        t = tracker.lower()
+        if t == "linear":
+            return True
+        if t == "jira":
+            return False
+
     has_linear_key = bool(getattr(settings, "linear_api_key", None))
     jira_enabled = getattr(settings, "jira_enabled", False)
 
@@ -262,11 +268,16 @@ def _should_use_linear(key: str, settings: Settings) -> bool:
         return False
 
     # In "both" mode:
+    if _UUID_RE.match(key):
+        return True
+
     jira_prefix = (getattr(settings, "jira_project_key", "") or "").upper()
     if jira_enabled and jira_prefix and key.upper().startswith(f"{jira_prefix}-"):
         return False
-    if _UUID_RE.match(key) or _LINEAR_KEY_RE.match(key):
+
+    if _LINEAR_KEY_RE.match(key):
         return True
+
     if not jira_enabled:
         return True
 
@@ -274,9 +285,11 @@ def _should_use_linear(key: str, settings: Settings) -> bool:
     raise ValueError(f"Ambiguous tracker key {key!r}: cannot determine whether to route to Linear or Jira")
 
 
-async def _default_transition_issue(key: str, status: str, *, settings: Settings | None = None) -> bool:
+async def _default_transition_issue(
+    key: str, status: str, *, settings: Settings | None = None, tracker: str | None = None
+) -> bool:
     settings = settings or get_settings()
-    if _should_use_linear(key, settings):
+    if _should_use_linear(key, settings, tracker=tracker):
         from meeting_notes import linear_client
 
         resolved_state = await linear_client.resolve_workflow_state(status, settings=settings)
@@ -294,9 +307,11 @@ async def _default_transition_issue(key: str, status: str, *, settings: Settings
     return await jira_client.transition_issue(key, status, settings=settings)
 
 
-async def _default_add_comment(key: str, body: str, *, settings: Settings | None = None) -> None:
+async def _default_add_comment(
+    key: str, body: str, *, settings: Settings | None = None, tracker: str | None = None
+) -> None:
     settings = settings or get_settings()
-    if _should_use_linear(key, settings):
+    if _should_use_linear(key, settings, tracker=tracker):
         from meeting_notes import linear_client
 
         issue = await linear_client.get_issue(key, settings=settings)
@@ -314,9 +329,11 @@ async def _default_add_comment(key: str, body: str, *, settings: Settings | None
     await jira_client.add_comment(key, body, settings=settings)
 
 
-async def _default_get_issue_detail(key: str, *, settings: Settings | None = None) -> dict[str, Any]:
+async def _default_get_issue_detail(
+    key: str, *, settings: Settings | None = None, tracker: str | None = None
+) -> dict[str, Any]:
     settings = settings or get_settings()
-    if _should_use_linear(key, settings):
+    if _should_use_linear(key, settings, tracker=tracker):
         from meeting_notes import linear_client
 
         issue = await linear_client.get_issue(key, settings=settings)
