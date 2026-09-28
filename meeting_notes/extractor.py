@@ -218,13 +218,8 @@ def _repair_action_items(items: list[Any]) -> None:
             item["confidence"] = 1.0
 
         o = str(item.get("owner", "")).strip()
-        if o:
-            if o != "Unknown" and is_junk_name(o):
-                item["owner"] = "Unassigned"
-            elif o.lower() in ("colin", "coalie", "colie", "coaly"):
-                item["owner"] = "Coley"
-            elif o.lower() in ("lp", "l.p.", "l p"):
-                item["owner"] = "LeePatrick McIntire"
+        if o and o != "Unknown" and is_junk_name(o):
+            item["owner"] = "Unassigned"
 
 
 def _repair_attendees(attendees: list[Any]) -> list[dict[str, Any]]:
@@ -234,12 +229,6 @@ def _repair_attendees(attendees: list[Any]) -> list[dict[str, Any]]:
     for att in attendees:
         if not isinstance(att, dict) or is_junk_name(att.get("name")):
             continue
-        n = str(att.get("name", "")).strip()
-        if n.lower() in ("colin", "coalie", "colie", "coaly"):
-            att["name"] = "Coley"
-        elif n.lower() in ("lp", "l.p.", "l p"):
-            att["name"] = "LeePatrick McIntire"
-            # Invariant: No email is invented
         cleaned.append(att)
     return cleaned
 
@@ -277,9 +266,6 @@ def repair(data: dict[str, Any], context: dict[str, Any] | None = None) -> dict[
 
     if "attendees" in data and isinstance(data["attendees"], list):
         data["attendees"] = _repair_attendees(data["attendees"])
-
-    if isinstance(data.get("summary"), str):
-        data["summary"] = re.sub(r"\bColin\b", "Coley", data["summary"])
 
     return data
 

@@ -2,7 +2,7 @@
 
 Every chunk includes:
 - Meeting title and original/source title
-- All attendee names (e.g. Coley Woyak, Michael Baylard)
+- All attendee names and meeting participants
 - Topics, key decisions, and action item deliverables
 - Clear contextual headers on all chunk segments
 """

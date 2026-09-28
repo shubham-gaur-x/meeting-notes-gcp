@@ -174,13 +174,8 @@ def get_contact_directory_list() -> list[dict[str, Any]]:
             pass
     return [p.to_dict() for p in CONTACT_PROFILES.values()]
 
-# Retained backward compatibility mapping
-COMMON_NAME_ALIASES: dict[str, str] = {
-    "colin": "Coley",
-    "coalie": "Coley",
-    "colie": "Coley",
-    "coaly": "Coley",
-}
+# Optional operator name aliases (populated dynamically from roster or config)
+COMMON_NAME_ALIASES: dict[str, str] = {}
 
 
 def normalize_email(email: str | None) -> str:
@@ -225,13 +220,16 @@ def _initials_matches(
 
     out: list[tuple[str | None, str | None, bool]] = []
     for person in known_people:
-        p_name = _norm_name(person.get("name", ""))
-        parts = p_name.split()
+        raw_name = str(person.get("name", "")).strip()
+        if not raw_name:
+            continue
+        # Split on whitespace, hyphens, and camelCase transitions for compound names
+        parts = [p for p in re.split(r"[\s\-_]+|(?<=[a-z])(?=[A-Z])", raw_name) if p]
         if len(parts) >= 2:
-            initials = "".join(p[0] for p in parts if p)
-            if initials == m:
-                out.append((person.get("email"), person.get("name"), bool(person.get("tracked", False))))
-            elif parts[0].startswith("lee") and "patrick" in parts[0] and m == "lp":
+            initials_all = "".join(p[0].lower() for p in parts)
+            first_two = "".join(p[0].lower() for p in parts[:2])
+            first_last = f"{parts[0][0].lower()}{parts[-1][0].lower()}"
+            if m in (initials_all, first_two, first_last):
                 out.append((person.get("email"), person.get("name"), bool(person.get("tracked", False))))
     return out
 

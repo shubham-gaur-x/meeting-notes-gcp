@@ -805,11 +805,11 @@
       </div>
       <div>
         <label style="font-size:12px;color:var(--muted);display:block;margin-bottom:5px;font-weight:500">Full Name</label>
-        <input type="text" id="aad-name" style="width:100%" placeholder="e.g. Coley Perry">
+        <input type="text" id="aad-name" style="width:100%" placeholder="e.g. Alex Mercer">
       </div>
       <div>
         <label style="font-size:12px;color:var(--muted);display:block;margin-bottom:5px;font-weight:500">Email Address</label>
-        <input type="email" id="aad-email" style="width:100%" placeholder="e.g. coley.perry@onixnet.com">
+        <input type="email" id="aad-email" style="width:100%" placeholder="e.g. alex.mercer@example.com">
       </div>
     </div>
     <div style="display:flex;justify-content:flex-end;gap:8px">
@@ -965,37 +965,8 @@ async function get(path) {
 function fail(sel, err) { $(sel).innerHTML = `<div class="err">${esc(err.message)}</div>`; }
 function empty(msg) { return `<div class="empty">${esc(msg)}</div>`; }
 
-const CONTACT_REGISTRY = {
-  "lp": "LeePatrick McIntire",
-  "l.p.": "LeePatrick McIntire",
-  "l p": "LeePatrick McIntire",
-  "leepatrick": "LeePatrick McIntire",
-  "lee patrick": "LeePatrick McIntire",
-  "lee-patrick": "LeePatrick McIntire",
-  "leepatrick mcintire": "LeePatrick McIntire",
-  "coley": "Coley Woyak",
-  "colin": "Coley Woyak",
-  "coalie": "Coley Woyak",
-  "colie": "Coley Woyak",
-  "coaly": "Coley Woyak",
-  "coley woyak": "Coley Woyak",
-  "coley perry": "Coley Woyak",
-  "matteo": "Matteo Vaiente",
-  "matteo vaiente": "Matteo Vaiente",
-  "michael": "Michael Baylard",
-  "baylard": "Michael Baylard",
-  "michael baylard": "Michael Baylard",
-  "katrisa": "Katrisa Brock",
-  "katrisa brock": "Katrisa Brock",
-  "sanjay": "Sanjay Pradhan",
-  "sanjay pradhan": "Sanjay Pradhan",
-  "mallory": "Mallory Webber",
-  "mallory webber": "Mallory Webber",
-  "natalie": "Natalie Miller",
-  "natalie miller": "Natalie Miller",
-  "gaurav": "Gaurav Bharara",
-  "gaurav bharara": "Gaurav Bharara",
-};
+// Dynamically populated via loadContacts() from /graph/contacts
+const CONTACT_REGISTRY = {};
 
 let CONTACT_PROFILES = [];
 

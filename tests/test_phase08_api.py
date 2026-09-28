@@ -1378,7 +1378,7 @@ async def test_resolve_person_review_endpoint(app: Any, monkeypatch: Any) -> Non
     resp = await _post(
         app,
         "/review/people/rev-123/resolve",
-        json={"name": "Alice Smith", "email": "alice@onixnet.com"},
+        json={"name": "Alice Smith", "email": "alice@example.com"},
     )
     assert resp.status_code == 200
     data = resp.json()
@@ -1386,7 +1386,7 @@ async def test_resolve_person_review_endpoint(app: Any, monkeypatch: Any) -> Non
     assert data["person"]["name"] == "Alice Smith"
     assert captured["review_id"] == "rev-123"
     assert captured["name"] == "Alice Smith"
-    assert captured["email"] == "alice@onixnet.com"
+    assert captured["email"] == "alice@example.com"
 
 
 async def test_delete_person_review_endpoint(app: Any, monkeypatch: Any) -> None:
@@ -1415,15 +1415,15 @@ async def test_add_meeting_attendee_endpoint(app: Any, monkeypatch: Any) -> None
     resp = await _post(
         app,
         "/review/meeting/meet-456/attendee",
-        json={"name": "Bob Builder", "email": "bob@onixnet.com"},
+        json={"name": "Bob Builder", "email": "bob@example.com"},
     )
     assert resp.status_code == 200
     data = resp.json()
     assert data["status"] == "ok"
-    assert data["attendee"]["email"] == "bob@onixnet.com"
+    assert data["attendee"]["email"] == "bob@example.com"
     assert captured["meeting_id"] == "meet-456"
     assert captured["name"] == "Bob Builder"
-    assert captured["email"] == "bob@onixnet.com"
+    assert captured["email"] == "bob@example.com"
 
 
 async def test_contacts_directory_endpoint(app: Any, monkeypatch: Any) -> None:
@@ -1432,11 +1432,87 @@ async def test_contacts_directory_endpoint(app: Any, monkeypatch: Any) -> None:
     monkeypatch.setattr(
         person_resolver,
         "get_contact_directory_list",
-        lambda: [{"name": "Alice Smith", "email": "alice@onixnet.com"}],
+        lambda: [{"name": "Alice Smith", "email": "alice@example.com"}],
     )
     resp = await _get(app, "/graph/contacts")
     assert resp.status_code == 200
     data = resp.json()
     assert data["count"] == 1
     assert data["contacts"][0]["name"] == "Alice Smith"
+
+
+@pytest.mark.asyncio
+async def test_resolve_person_review_no_email_synthesis() -> None:
+    """Invariant: resolve_person_review must NEVER synthesize email, keying by name."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from meeting_notes import graph_client
+    from meeting_notes.utils import uuid5_id
+
+    mock_driver = MagicMock()
+    mock_session = AsyncMock()
+    mock_driver.session.return_value.__aenter__.return_value = mock_session
+
+    find_record = {
+        "review_id": "rev-999",
+        "old_name": "Carol Danvers",
+        "meeting_id": "meet-1",
+        "title": "Review",
+    }
+
+    async def mock_find_iter():
+        yield find_record
+
+    async def mock_pres_iter():
+        return
+        yield
+
+    class FakeResult:
+        def __init__(self, items: list[dict[str, Any]]) -> None:
+            self.items = items
+
+        def __aiter__(self):
+            async def gen():
+                for item in self.items:
+                    yield item
+            return gen()
+
+    expected_person_id = uuid5_id("person", "name:carol danvers")
+    query_params: list[dict[str, Any]] = []
+
+    def record_run(query: str, **kwargs: Any) -> Any:
+        query_params.append(kwargs)
+        if "MERGE (p:Person" in query:
+            return FakeResult([{
+                "person_id": expected_person_id,
+                "name": "Carol Danvers",
+                "email": None,
+                "meeting_id": "meet-1",
+            }])
+        elif "toLower(p.name)" in query:
+            return FakeResult([])
+        else:
+            return FakeResult([{
+                "review_id": "rev-999",
+                "old_name": "Carol Danvers",
+                "meeting_id": "meet-1",
+                "title": "Review",
+            }])
+
+    mock_session.run = AsyncMock(side_effect=record_run)
+
+    result = await graph_client.resolve_person_review(
+        review_id="rev-999",
+        name="Carol Danvers",
+        email=None,
+        driver=mock_driver,
+    )
+
+    assert result["person_id"] == expected_person_id
+    assert result["email"] is None
+
+    merge_params = [p for p in query_params if "person_id" in p][0]
+    assert merge_params["email"] is None
+    assert merge_params["person_id"] == expected_person_id
+
 
