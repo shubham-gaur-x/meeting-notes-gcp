@@ -137,11 +137,14 @@ async def _embed_pending(
         return 0
 
     now = datetime.now(UTC).isoformat()
+    resolved = settings or get_settings()
+    sem = semaphore or asyncio.Semaphore(max(1, resolved.embedding_concurrency))
 
-    # When explicit batching is supplied, use high-throughput batch embedding:
+    # When explicit batching is supplied, use high-throughput batch embedding bounded by semaphore:
     if embed_batch_fn is not None:
         texts = [r[text_field] for r in pending]
-        vectors = await embed_batch_texts(texts, settings=settings, embed_batch_fn=embed_batch_fn)
+        async with sem:
+            vectors = await embed_batch_texts(texts, settings=settings, embed_batch_fn=embed_batch_fn)
 
         count = 0
         async with driver.session() as session:
@@ -150,10 +153,6 @@ async def _embed_pending(
                     await session.run(write_cypher, id=row["id"], embedding=vector, now=now)
                     count += 1
         return count
-
-    # Default path: retain PR #2 shared semaphore concurrency ceiling across passes
-    resolved = settings or get_settings()
-    sem = semaphore or asyncio.Semaphore(max(1, resolved.embedding_concurrency))
 
     async def embed_one(row: dict[str, Any]) -> int:
         async with sem:

@@ -223,26 +223,46 @@ class _Dependencies:
     review_pr: Any
 
 
-async def _default_transition_issue(key: str, status: str, *, settings: Settings | None = None) -> None:
+def _should_use_linear(key: str, settings: Settings) -> bool:
+    """Determine whether to route ticket operations to Linear or Jira."""
+    has_linear_key = bool(getattr(settings, "linear_api_key", None))
+    if not has_linear_key:
+        return False
+    configured_tracker = getattr(settings, "issue_tracker", "jira").lower()
+    if configured_tracker == "linear":
+        return True
+    if configured_tracker == "jira":
+        return False
+    # "both": route to Jira if key matches configured Jira project prefix, else Linear
+    jira_prefix = (getattr(settings, "jira_project_key", "") or "").upper()
+    if jira_prefix and key.upper().startswith(f"{jira_prefix}-"):
+        return False
+    return True
+
+
+async def _default_transition_issue(key: str, status: str, *, settings: Settings | None = None) -> bool:
     settings = settings or get_settings()
-    if "-" in key and not key.startswith("SCRUM") and getattr(settings, "linear_api_key", None):
+    if _should_use_linear(key, settings):
         try:
             from meeting_notes import linear_client
 
             resolved_state = await linear_client.resolve_workflow_state(status, settings=settings)
             if resolved_state:
-                await linear_client.transition_issue(key, resolved_state["id"], settings=settings)
-                return
-        except Exception:
-            pass
+                res = await linear_client.transition_issue(key, resolved_state["id"], settings=settings)
+                return bool(res)
+            log.warning("orchestrator.linear_transition_state_not_found", key=key, status=status)
+            return False
+        except Exception as exc:
+            log.warning("orchestrator.linear_transition_failed", key=key, error=str(exc))
+            return False
     from meeting_notes import jira_client
 
-    await jira_client.transition_issue(key, status, settings=settings)
+    return await jira_client.transition_issue(key, status, settings=settings)
 
 
 async def _default_add_comment(key: str, body: str, *, settings: Settings | None = None) -> None:
     settings = settings or get_settings()
-    if "-" in key and not key.startswith("SCRUM") and getattr(settings, "linear_api_key", None):
+    if _should_use_linear(key, settings):
         try:
             from meeting_notes import linear_client
 
@@ -250,8 +270,11 @@ async def _default_add_comment(key: str, body: str, *, settings: Settings | None
             if issue and issue.get("id"):
                 await linear_client.add_comment(issue["id"], body, settings=settings)
                 return
-        except Exception:
-            pass
+            log.warning("orchestrator.linear_add_comment_issue_not_found", key=key)
+            return
+        except Exception as exc:
+            log.warning("orchestrator.linear_add_comment_failed", key=key, error=str(exc))
+            return
     from meeting_notes import jira_client
 
     await jira_client.add_comment(key, body, settings=settings)
@@ -259,7 +282,7 @@ async def _default_add_comment(key: str, body: str, *, settings: Settings | None
 
 async def _default_get_issue_detail(key: str, *, settings: Settings | None = None) -> dict[str, Any]:
     settings = settings or get_settings()
-    if "-" in key and not key.startswith("SCRUM") and getattr(settings, "linear_api_key", None):
+    if _should_use_linear(key, settings):
         try:
             from meeting_notes import linear_client
 
@@ -272,8 +295,9 @@ async def _default_get_issue_detail(key: str, *, settings: Settings | None = Non
                     "description": issue.get("description", ""),
                     "tracker": "linear",
                 }
-        except Exception:
-            pass
+            log.warning("orchestrator.linear_get_issue_not_found", key=key)
+        except Exception as exc:
+            log.warning("orchestrator.linear_get_issue_failed", key=key, error=str(exc))
     from meeting_notes import jira_client
 
     detail = await jira_client.get_issue_detail(key, settings=settings)

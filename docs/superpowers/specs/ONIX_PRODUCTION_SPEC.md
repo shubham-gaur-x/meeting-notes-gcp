@@ -8,13 +8,13 @@
 
 `meeting-notes-gcp` has achieved a validated, tested v6 implementation across Phases 0–9 and Phase 11. It successfully ingests Workspace data, extracts structured intelligence via Vertex AI Gemini, persists property graph memory in Memgraph, drives Jira/Linear pushers, and operates an autonomous Dev Agent with 7 deterministic guardrails.
 
-However, the current deployment lives in a **personal GCP project** (`meeting-notes-gcp-personal`) reading data from `shubham.gaur@onixnet.com` under strict constraints:
+However, the current deployment lives in a **development GCP project** (`<dev-project-id>`) reading data from `<user>@domain.com` under strict constraints:
 1. **The 7-Day OAuth Expiry Wall**: The OAuth client is configured as "External (Testing)", requiring manual re-consent every 7 days (`docs/GOOGLE_AUTH.md` §3).
 2. **Single-Tenant & Single-User**: The graph schema and database pipelines assume a single user and single graph without tenant isolation or role-based access control (RBAC).
 3. **Single GCE VM Graph SPOF**: Memgraph runs on a single `e2-standard-4` GCE VM without multi-zone high availability or automated failover.
 4. **Data Privacy & Compliance**: No automated Data Loss Prevention (Cloud DLP) layer scrubs PII, PHI, or sensitive client credentials from meeting transcripts prior to LLM extraction.
 
-To make this platform production-grade for Onix across 100+ consultants and executives, it must transition to a hardened, enterprise-grade architecture in an Onix-owned GCP project (`onix-meeting-intelligence-prod`).
+To make this platform production-grade across enterprise teams, it must transition to a hardened, enterprise-grade architecture in an enterprise GCP project (`<prod-project-id>`).
 
 ---
 
@@ -22,12 +22,12 @@ To make this platform production-grade for Onix across 100+ consultants and exec
 
 | Dimension | Tier 1: Current State (Personal v6) | Tier 2: Target Onix Enterprise (Phase 10) | Tier 3: Enterprise Neural Graph & Swarm Hub |
 | :--- | :--- | :--- | :--- |
-| **GCP Project & Hosting** | `meeting-notes-gcp-personal` | `onix-meeting-intelligence-prod` | Multi-region Onix Core with DR failover |
+| **GCP Project & Hosting** | `<dev-project-id>` | `<prod-project-id>` | Multi-region Onix Core with DR failover |
 | **Workspace OAuth** | External (Testing) — 7-day token expiry | **Internal Google Cloud OAuth App** (Permanent refresh) | Zero-trust Workload Identity + Workspace SSO |
 | **Ingestion Mechanism** | 5-minute Cloud Scheduler pull | Cloud Scheduler pull + Pub/Sub webhook triggers | Real-time Meet bot audio stream + `users.watch` push |
 | **Graph Infrastructure** | Memgraph + MAGE on single GCE VM | Memgraph on GKE Autopilot with regional PD | Distributed Memgraph cluster with read replicas |
 | **Data Privacy & DLP** | Raw transcript passed to LLM | **Cloud DLP Inspection & Masking Pipeline** | Contextual encryption with client-managed keys (CMEK) |
-| **Tenancy & Isolation** | Single user (`shubham.gaur@onixnet.com`) | Multi-user, Onix tenant, squad-level ACLs | Multi-tenant (Onix internal + client-facing partitions) |
+| **Tenancy & Isolation** | Single user (`<user>@domain.com`) | Multi-user, Onix tenant, squad-level ACLs | Multi-tenant (Onix internal + client-facing partitions) |
 | **Autonomous Dev Agent** | Single repo, local worktrees, 7 gates | Multi-repo Onix project routing + Linear pickup | Continuous swarm triage, bug synthesis, and hotfixes |
 | **Downstream Dispatch** | Single Jira Cloud board + Linear | Dynamic multi-board Jira/Linear routing by squad | Bidirectional sync across Jira, Linear, Salesforce, Slack |
 | **High Availability & RAS** | Basic Cloud Logging, manual doctor checks | Cloud Monitoring dashboards, SLO/SLA alerts, DLQ auto-replay | 99.99% availability SLA, automated fault self-healing |
@@ -189,13 +189,10 @@ Before storing any text in `raw_meet_transcripts` or passing to Vertex AI:
 | **Cloud Storage & Logging** | Snapshots, metrics, and audit logs | $22.00 |
 | **Total Monthly GCP Spend** | | **$515.00 / month** |
 
-### 6.2 Consultant Hours Recaptured & Net ROI
-- **Active Onix Consultants / Engineers**: 100
-- **Hours saved per week per consultant** (note-taking, ticket drafting, status updates): 3.0 hours
-- **Total billable hours recovered per month**: 100 × 3 × 4 = 1,200 hours
-- **Blended consulting rate**: $150 / hour
-- **Gross Monthly Enterprise Value Generated**: **$180,000 / month**
-- **Net Monthly ROI**: ($180,000 − $515) / $515 = **34,850% ROI**
+### 6.2 Team Time Recovery & Operational Value
+- **Team Size Modeled**: 100 consultants / engineers
+- **Time recovered per engineer** (note-taking, ticket drafting, status updates): ~2-3 hours/week
+- **Primary Value Driver**: Instant structured graph persistence, eliminating manual status sync overhead and orphaned action items.
 
 ---
 
