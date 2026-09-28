@@ -28,7 +28,7 @@ from typing import Any
 import asyncpg
 import structlog
 
-from meeting_notes.config import Settings, get_settings, resolve_max_attempts
+from meeting_notes.config import Settings, get_settings
 from meeting_notes.dev_agent.lifecycle import TERMINAL_STATES
 from meeting_notes.dev_agent.models import DevAgentRun
 from meeting_notes.models import SourceType, StagedRecord
@@ -351,7 +351,7 @@ async def stage_record(
 
 
 async def claim_batch(
-    limit: int, max_attempts: int | None = None, pool: asyncpg.Pool | None = None
+    limit: int, max_attempts: int = 5, pool: asyncpg.Pool | None = None
 ) -> list[StagedRecord]:
     """Claim up to `limit` unprocessed records (ADR-006) with attempts < max_attempts.
 
@@ -362,9 +362,8 @@ async def claim_batch(
     across the whole batch.
     """
     pool = pool or await get_pool()
-    resolved_max = resolve_max_attempts(max_attempts)
     async with pool.acquire() as conn, conn.transaction():
-        rows = await conn.fetch(CLAIM_SQL, limit, resolved_max)
+        rows = await conn.fetch(CLAIM_SQL, limit, max_attempts)
     return [
         StagedRecord(
             id=str(r["id"]),
@@ -440,7 +439,7 @@ async def mark_processed(record_id: str, pool: asyncpg.Pool | None = None) -> No
 async def record_drain_failure(
     record_id: str,
     error: str,
-    max_attempts: int | None = None,
+    max_attempts: int = 5,
     pool: asyncpg.Pool | None = None,
 ) -> tuple[int, bool, str]:
     """Record a drain failure for a staged record, incrementing its attempt counter.
@@ -450,13 +449,12 @@ async def record_drain_failure(
     Returns (attempts, is_processed, status).
     """
     pool = pool or await get_pool()
-    resolved_max = resolve_max_attempts(max_attempts)
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             _RECORD_DRAIN_FAILURE_SQL,
             record_id,
             error[:2000],
-            resolved_max,
+            max_attempts,
         )
     if row:
         return row["attempts"], row["processed"], row["status"]
@@ -500,13 +498,9 @@ async def replay_all_dead_letter_records(pool: asyncpg.Pool | None = None) -> in
     pool = pool or await get_pool()
     async with pool.acquire() as conn:
         status_str = await conn.execute(_REPLAY_ALL_DLQ_SQL)
-    # status_str is e.g. 'UPDATE 3'
     parts = (status_str or "").strip().split()
-    if len(parts) >= 2 and parts[0].upper() == "UPDATE":
-        try:
-            return int(parts[1])
-        except ValueError:
-            pass
+    if len(parts) >= 2 and parts[0].upper() == "UPDATE" and parts[1].isdigit():
+        return int(parts[1])
     raise RuntimeError(f"Unexpected status string from replay_all_dead_letter: {status_str!r}")
 
 

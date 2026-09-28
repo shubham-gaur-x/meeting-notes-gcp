@@ -252,56 +252,56 @@ def validate_tracker_key(key: str, tracker: str | None = None) -> bool:
 
     Raises ValueError if the key format is invalid.
     """
-    if tracker is not None:
-        t = tracker.lower()
-        if t == "linear":
-            if not _is_linear_identifier(key):
-                raise ValueError(f"Invalid Linear issue key or identifier: {key!r}")
-            return True
-        if t == "jira":
-            if not _is_jira_identifier(key):
-                raise ValueError(f"Invalid Jira issue key: {key!r}")
-            return True
+    if tracker == "linear":
+        if not _is_linear_identifier(key):
+            raise ValueError(f"Invalid Linear issue key or identifier: {key!r}")
+        return True
+    if tracker == "jira":
+        if not _is_jira_identifier(key):
+            raise ValueError(f"Invalid Jira issue key: {key!r}")
+        return True
 
     if not (_UUID_RE.match(key) or _LINEAR_KEY_RE.match(key)):
         raise ValueError(f"Invalid issue key format: {key!r}")
     return True
 
 
-def resolve_tracker_routing(key: str, settings: Settings, tracker: str | None = None) -> bool:
-    """Determine whether to route ticket operations to Linear (True) or Jira (False).
+def _should_use_linear(key: str, settings: Settings, tracker: str | None = None) -> bool:
+    """Determine whether to route ticket operations to Linear or Jira.
 
     Precedence:
-    1. Explicit tracker: 'linear' -> True, 'jira' -> False.
-    2. Tracker availability:
-       - Jira disabled and Linear configured -> True (Linear).
-       - Linear not configured -> False (Jira).
-    3. Configured mode:
-       - 'linear' -> True (Linear).
-       - 'jira' -> False (Jira).
-    4. In 'both' mode:
-       - Matches Linear UUID pattern -> True (Linear).
-       - Matches configured Jira project prefix -> False (Jira).
-       - Matches configured Linear team prefix -> True (Linear).
-       - Otherwise -> raises ValueError (ambiguous tracker key).
+    1. If explicit tracker is provided -> validate and respect it ("linear" -> True, "jira" -> False)
+    2. If Jira is not enabled and Linear is configured -> validate and route to Linear (True)
+    3. If Linear is not configured -> Jira (False)
+    4. If configured_tracker == "linear" -> validate and route to Linear (True)
+    5. If configured_tracker == "jira" -> Jira (False)
+    6. In "both" mode:
+       - If key matches Linear UUID pattern -> Linear (True)
+       - If Jira is enabled and key matches configured Jira project prefix -> Jira (False)
+       - If Linear is configured and key matches configured Linear team prefix -> Linear (True)
+       - Otherwise, fail-loudly with ValueError on ambiguous key.
     """
     if tracker is not None:
         t = tracker.lower()
         if t == "linear":
+            validate_tracker_key(key, tracker="linear")
             return True
         if t == "jira":
+            validate_tracker_key(key, tracker="jira")
             return False
 
     has_linear_key = bool(getattr(settings, "linear_api_key", None))
     jira_enabled = getattr(settings, "jira_enabled", False)
 
     if not jira_enabled and has_linear_key:
+        validate_tracker_key(key, tracker="linear")
         return True
     if not has_linear_key:
         return False
 
     configured_tracker = getattr(settings, "issue_tracker", "jira").lower()
     if configured_tracker == "linear":
+        validate_tracker_key(key, tracker="linear")
         return True
     if configured_tracker == "jira":
         return False
@@ -320,13 +320,6 @@ def resolve_tracker_routing(key: str, settings: Settings, tracker: str | None = 
 
     log.error("orchestrator.tracker_routing_ambiguous", key=key)
     raise ValueError(f"Ambiguous tracker key {key!r}: cannot determine whether to route to Linear or Jira")
-
-
-def _should_use_linear(key: str, settings: Settings, tracker: str | None = None) -> bool:
-    """Validate format and determine whether to route ticket operations to Linear or Jira."""
-    use_linear = resolve_tracker_routing(key, settings, tracker=tracker)
-    validate_tracker_key(key, tracker="linear" if use_linear else "jira")
-    return use_linear
 
 
 async def _default_transition_issue(
