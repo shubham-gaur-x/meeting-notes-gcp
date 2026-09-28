@@ -20,8 +20,8 @@ Two governance rules are enforced here rather than assumed:
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
 import re
+from collections.abc import AsyncIterator
 from typing import Any
 from urllib.parse import urlparse
 
