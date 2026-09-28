@@ -894,8 +894,8 @@ def test_push_self_only_strict_identity_matching() -> None:
     )
     assert jira_pusher.is_self_owned("Alex Mercer", settings)
     assert jira_pusher.is_self_owned("alex.mercer@example.com", settings)
-    assert jira_pusher.is_self_owned("alex.mercer", settings)
-    # Must NOT loosely match a different Alex or external domain address
+    # Must NOT match bare local-part, unrelated person, or spoofed external domain
+    assert not jira_pusher.is_self_owned("alex.mercer", settings)
     assert not jira_pusher.is_self_owned("Alex", settings)
     assert not jira_pusher.is_self_owned("Alex Smith", settings)
     assert not jira_pusher.is_self_owned("alex@evil.com", settings)
@@ -952,6 +952,30 @@ async def test_push_self_only_pipeline_fails_closed_when_unconfigured() -> None:
     )
     assert keys == []
     assert created_calls == [], "Unconfigured self-only gate must fail closed and reject issue creation"
+
+    async def fake_sprint(*a, **kw):
+        return None
+
+    async def fake_update(*a, **kw):
+        pass
+
+    # Default opt-in behavior: when push_self_only is False, all tickets are pushed
+    default_settings = _jira_settings(
+        JIRA_ENABLED=True,
+        JIRA_DEDUP_ENABLED=False,
+        JIRA_PUSH_SELF_ONLY=False,
+    )
+    keys_default = await jira_pusher.push_action_items(
+        meeting.action_items,
+        meeting,
+        "src-1",
+        settings=default_settings,
+        create_issue=create_issue,
+        update_jira_key=fake_update,
+        get_active_sprint=fake_sprint,
+    )
+    assert keys_default == ["SCRUM-1"]
+    assert len(created_calls) == 1
 
 
 async def test_get_all_actions_deterministic_join_deduplication() -> None:

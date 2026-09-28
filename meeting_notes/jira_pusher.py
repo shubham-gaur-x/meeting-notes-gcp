@@ -59,11 +59,8 @@ def _get_configured_identities(settings: Settings) -> set[str]:
 
 
 def _matches_identity(owner_clean: str, ident: str) -> bool:
-    if owner_clean == ident:
-        return True
-    if "@" in ident and owner_clean == ident.split("@")[0]:
-        return True
-    return False
+    """Exact match between owner and configured identity to prevent partial or local-part spoofing."""
+    return owner_clean == ident
 
 
 def is_self_owned(owner: str, settings: Settings) -> bool:
