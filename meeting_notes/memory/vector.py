@@ -121,16 +121,11 @@ async def _embed_pending(
     semaphore: asyncio.Semaphore,
     embed_batch_fn: Any = None,
 ) -> int:
-    """Embed rows that have no embedding yet. Idempotent by construction —
-    the fetch filters on `embedding IS NULL`, so a MERGE-matched node from an
-    earlier meeting is embedded once and not re-embedded on every ingestion.
+    """Embed rows that have no embedding yet. Idempotent by construction.
 
-    `semaphore` is shared across all embedding passes (meetings, actions, facts)
-    so total concurrent Vertex API calls stay within `settings.embedding_concurrency`
-    regardless of how many passes run. When `embed_batch_fn` is supplied, `semaphore`
-    bounds concurrent batch-chunk requests (up to `DEFAULT_EMBEDDING_BATCH_CHUNK_SIZE`
-    items per request) to prevent provider throttling. When `embed_batch_fn` is None,
-    `semaphore` bounds individual item embedding calls matching PR #2 semantics.
+    `semaphore` bounds concurrent API calls across all embedding passes.
+    In batch mode, each chunk (sized to DEFAULT_EMBEDDING_BATCH_CHUNK_SIZE)
+    acquires `semaphore`, keeping in-flight batch requests within embedding_concurrency.
     """
     async with driver.session() as session:
         result = await session.run(fetch_cypher, meeting_id=meeting_id)
