@@ -157,12 +157,12 @@ UPDATE dev_agent_runs SET state_payload = $2::jsonb WHERE ticket_key = $1
 
 CLAIM_SQL = """
 SELECT id, source_id, source_type, payload, fetched_at, processed,
-       coalesce(attempts, 0) AS attempts, last_error, coalesce(status, 'pending') AS status
+       attempts, last_error, status
 FROM staged_records
 WHERE processed = FALSE
-  AND coalesce(attempts, 0) < $2
-  AND coalesce(status, 'pending') != 'dead_letter'
-  AND coalesce(status, 'pending') != 'processed'
+  AND attempts < $2
+  AND status != 'dead_letter'
+  AND status != 'processed'
 ORDER BY fetched_at
 FOR UPDATE SKIP LOCKED
 LIMIT $1
@@ -177,7 +177,7 @@ RETURNING id
 
 LIST_BY_TYPE_SQL = """
 SELECT id, source_id, source_type, payload, fetched_at, processed,
-       coalesce(attempts, 0) AS attempts, last_error, coalesce(status, 'pending') AS status
+       attempts, last_error, status
 FROM staged_records
 WHERE source_type = $1
 ORDER BY fetched_at
@@ -193,11 +193,11 @@ WHERE id = $1::uuid
 
 _RECORD_DRAIN_FAILURE_SQL = """
 UPDATE staged_records
-SET attempts = coalesce(attempts, 0) + 1,
+SET attempts = attempts + 1,
     last_error = $2,
     processed = FALSE,
     processed_at = NULL,
-    status = CASE WHEN coalesce(attempts, 0) + 1 >= $3 THEN 'dead_letter' ELSE 'retry' END
+    status = CASE WHEN attempts + 1 >= $3 THEN 'dead_letter' ELSE 'retry' END
 WHERE id = $1::uuid
 RETURNING attempts, processed, status
 """

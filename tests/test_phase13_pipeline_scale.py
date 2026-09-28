@@ -864,7 +864,24 @@ async def test_claim_batch_excludes_dead_letter_in_query() -> None:
     assert records == []
     assert len(executed) == 1
     assert executed[0][1] == (25, 4)
-    assert "coalesce(status, 'pending') != 'dead_letter'" in executed[0][0]
+    assert "status != 'dead_letter'" in executed[0][0]
+
+
+def test_orchestrator_routes_ticket_lacking_tracker_key_by_prefix() -> None:
+    """Verify ticket dictionary lacking 'tracker' key routes correctly by prefix under 'both' mode."""
+    from meeting_notes.dev_agent import orchestrator
+
+    settings_both = Settings(
+        issue_tracker="both",
+        jira_enabled=True,
+        jira_project_key="SCRUM",
+        linear_api_key="linear-secret",
+        linear_team_id="ENG",
+    )
+    # SCRUM-123 lacks tracker key -> routes to Jira (False)
+    assert orchestrator._should_use_linear("SCRUM-123", settings_both) is False
+    # ENG-456 lacks tracker key -> routes to Linear (True)
+    assert orchestrator._should_use_linear("ENG-456", settings_both) is True
 
 
 def test_tracker_routing_with_jira_disabled() -> None:
