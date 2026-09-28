@@ -46,15 +46,24 @@ def is_administrative_task(task: str) -> bool:
 
 def _get_configured_identities(settings: Settings) -> set[str]:
     identities: set[str] = set()
+    excluded_services: set[str] = set()
+    if settings.jira_email:
+        excluded_services.add(settings.jira_email.strip().lower())
+    if settings.google_workspace_user:
+        excluded_services.add(settings.google_workspace_user.strip().lower())
+
     if settings.jira_user_identities:
         for ident in settings.jira_user_identities.split(","):
             ident_clean = ident.strip().lower()
-            if ident_clean:
-                identities.add(ident_clean)
-    # Note: jira_email and google_workspace_user are deliberately excluded.
-    # jira_email is a shared service account; google_workspace_user may be a
-    # shared mailbox or ingest account. Only explicitly configured human identities
-    # in jira_user_identities are trusted.
+            if not ident_clean:
+                continue
+            if ident_clean in excluded_services:
+                log.warning(
+                    "jira_pusher.service_account_excluded_from_self_identity",
+                    excluded=ident_clean,
+                )
+                continue
+            identities.add(ident_clean)
     return identities
 
 

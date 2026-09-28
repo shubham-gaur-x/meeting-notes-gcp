@@ -916,6 +916,20 @@ def test_push_self_only_strict_identity_matching() -> None:
     )
     assert not jira_pusher.is_self_owned("shared-inbox@example.com", gw_settings)
 
+    # Operator misconfiguration: even if service accounts are listed in JIRA_USER_IDENTITIES,
+    # they are actively stripped and excluded
+    misconfig_settings = _jira_settings(
+        JIRA_PUSH_SELF_ONLY=True,
+        JIRA_USER_IDENTITIES=(
+            "alex.mercer@example.com,Alex Mercer,jira-bot@example.com,shared-inbox@example.com"
+        ),
+        JIRA_EMAIL="jira-bot@example.com",
+        GOOGLE_WORKSPACE_USER="shared-inbox@example.com",
+    )
+    assert not jira_pusher.is_self_owned("jira-bot@example.com", misconfig_settings)
+    assert not jira_pusher.is_self_owned("shared-inbox@example.com", misconfig_settings)
+    assert jira_pusher.is_self_owned("alex.mercer@example.com", misconfig_settings)
+
 
 @pytest.mark.parametrize(
     "keyword", ["1:1", "1-1", "one-on-one", "one on one", "catch up", "catchup", "follow-up"]
