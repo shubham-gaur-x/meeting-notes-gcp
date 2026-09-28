@@ -1994,6 +1994,66 @@ def test_expand_contact_mentions() -> None:
     person_resolver.reset_roster_cache()
 
 
+def test_expand_contact_mentions_ambiguity_gating() -> None:
+    """Verify expand_contact_mentions does NOT expand ambiguous mentions across multiple contacts."""
+    from meeting_notes import person_resolver
+    from meeting_notes.person_resolver import ContactProfile
+
+    person_resolver.reset_roster_cache()
+    p1 = ContactProfile(
+        full_name="Alex Mercer",
+        email="alex@example.com",
+        nicknames=["Al"],
+        initials=["AM"],
+    )
+    p2 = ContactProfile(
+        full_name="Alice Miller",
+        email="alice@example.com",
+        nicknames=["Al"],
+        initials=["AM"],
+    )
+    person_resolver.CONTACT_PROFILES["alex@example.com"] = p1
+    person_resolver.CONTACT_PROFILES["alice@example.com"] = p2
+
+    # "Al" is ambiguous across both Alex and Alice -> must NOT expand aliases of either
+    expanded = person_resolver.expand_contact_mentions(["Al"])
+    assert expanded == ["Al"]
+    assert "alex@example.com" not in expanded
+    assert "alice@example.com" not in expanded
+    person_resolver.reset_roster_cache()
+
+
+def test_register_roster_contact_duplicate_email_ignored() -> None:
+    """Verify that registering a second contact with an existing email logs warning and does not clobber."""
+    from meeting_notes import person_resolver
+    from meeting_notes.person_resolver import _register_roster_contact
+
+    person_resolver.reset_roster_cache()
+    _register_roster_contact("Primary Person", "test@example.com", [], {})
+    assert person_resolver.CONTACT_PROFILES["test@example.com"].full_name == "Primary Person"
+
+    # Attempt to register duplicate with differing name
+    _register_roster_contact("Imposter Person", "test@example.com", [], {})
+    assert person_resolver.CONTACT_PROFILES["test@example.com"].full_name == "Primary Person"
+    person_resolver.reset_roster_cache()
+
+
+def test_gitignore_protects_roster_secrets() -> None:
+    """Verify that .gitignore excludes roster json files while preserving example templates."""
+    import subprocess
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parent.parent
+    check_ignored = subprocess.run(
+        ["git", "check-ignore", "roster.json", "company_roster.json"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+    )
+    assert "roster.json" in check_ignored.stdout
+    assert "company_roster.json" in check_ignored.stdout
+
+
 
 
 

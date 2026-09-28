@@ -168,7 +168,12 @@ def resolve_to_full_name(mention: str | None) -> str:
 
 
 def expand_contact_mentions(names: list[str]) -> list[str]:
-    """Expand a list of names/mentions to include full names, emails, and all known aliases."""
+    """Expand a list of names/mentions to include full names, emails, and all known aliases.
+
+    Applies ambiguity gating: if a mention matches aliases across multiple distinct
+    contact profiles, the ambiguous aliases are NOT expanded to avoid cross-contaminating
+    search context.
+    """
     _ensure_roster_loaded()
 
     expanded: set[str] = set()
@@ -177,11 +182,15 @@ def expand_contact_mentions(names: list[str]) -> list[str]:
             continue
         expanded.add(name)
         norm = normalize_name(name)
-        for profile in CONTACT_PROFILES.values():
-            profile_mentions = [normalize_name(m) for m in profile.all_mentions()]
-            if norm in profile_mentions:
-                for m in profile.all_mentions():
-                    expanded.add(m)
+        matching_profiles = [
+            profile
+            for profile in CONTACT_PROFILES.values()
+            if any(norm == normalize_name(m) for m in profile.all_mentions())
+        ]
+        if len(matching_profiles) == 1:
+            for m in matching_profiles[0].all_mentions():
+                expanded.add(m)
+        # If len(matching_profiles) > 1, mention is ambiguous; keep only raw mention.
     return list(expanded)
 
 
@@ -333,6 +342,14 @@ class Roster:
 def _register_roster_contact(
     name: str, email: str, aliases: list[str], d: dict[str, Any]
 ) -> None:
+    if email in CONTACT_PROFILES:
+        log.warning(
+            "person_resolver.roster_duplicate_email_ignored",
+            email=email,
+            existing=CONTACT_PROFILES[email].full_name,
+            duplicate=name,
+        )
+        return
     nicknames = [str(n) for n in d.get("nicknames", [])]
     first_names = [str(f) for f in d.get("first_names", [])] or ([name.split()[0]] if name else [])
     initials = [str(i) for i in d.get("initials", [])]

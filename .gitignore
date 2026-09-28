@@ -8,6 +8,8 @@ token.json
 service-account*.json
 *.pem
 *.key
+*roster*.json
+!*roster*.example.json
 
 # Terraform
 .terraform/
