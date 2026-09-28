@@ -476,6 +476,19 @@ def _format_history_context(history: list[dict[str, Any]]) -> str:
     return "\n".join(turns)
 
 
+def _build_query_prompts(
+    question: str, history: list[dict[str, Any]] | None
+) -> tuple[str, str]:
+    """Build entity extraction search prompt and synthesis user prompt with conversation history."""
+    recent_context = _format_history_context(history) if history else ""
+    if not recent_context:
+        return question, question
+
+    search_prompt = f"Previous conversation:\n{recent_context}\n\nCurrent Question: {question}"
+    synth_user = f"Recent conversation context:\n{recent_context}\n\nQuestion: {question}"
+    return search_prompt, synth_user
+
+
 async def full_memory_query(
     question: str,
     *,
@@ -494,10 +507,7 @@ async def full_memory_query(
     settings = settings or get_settings()
     driver = driver or _driver()
 
-    search_prompt = question
-    recent_context = _format_history_context(history) if history else ""
-    if recent_context:
-        search_prompt = f"Previous conversation:\n{recent_context}\n\nCurrent Question: {question}"
+    search_prompt, synth_user = _build_query_prompts(question, history)
 
     entities = await extract_entities(search_prompt, settings=settings, chat=chat)
     lines, node_ids = await assemble_context(
@@ -510,9 +520,6 @@ async def full_memory_query(
         return {"question": question, "answer": NO_CONTEXT_ANSWER, "node_ids": [], "entities": entities}
 
     context = "\n".join(lines)
-    synth_user = question
-    if recent_context:
-        synth_user = f"Recent conversation context:\n{recent_context}\n\nQuestion: {question}"
 
     try:
         parsed = await _chat(f"{SYNTHESIS_SYSTEM_PREFIX}{context}", synth_user, settings, chat)
@@ -575,10 +582,7 @@ async def stream_memory_query(
     settings = settings or get_settings()
     driver = driver or _driver()
 
-    search_prompt = question
-    recent_context = _format_history_context(history) if history else ""
-    if recent_context:
-        search_prompt = f"Previous conversation:\n{recent_context}\n\nCurrent Question: {question}"
+    search_prompt, synth_user = _build_query_prompts(question, history)
 
     entities = await extract_entities(search_prompt, settings=settings, chat=chat)
     lines, node_ids = await assemble_context(
@@ -593,9 +597,6 @@ async def stream_memory_query(
         return
 
     context = "\n".join(lines)
-    synth_user = question
-    if recent_context:
-        synth_user = f"Recent conversation context:\n{recent_context}\n\nQuestion: {question}"
 
     try:
         parsed = await _chat(f"{SYNTHESIS_SYSTEM_PREFIX}{context}", synth_user, settings, chat)

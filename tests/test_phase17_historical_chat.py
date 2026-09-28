@@ -73,6 +73,19 @@ def test_memory_query_validation_bounds_history_length() -> None:
         MemoryQuery(question="Too long?", history=too_many_turns)
 
 
+def test_memory_query_validation_bounds_turn_payload() -> None:
+    from pydantic import ValidationError
+
+    # Invalid role must fail validation
+    with pytest.raises(ValidationError):
+        MemoryQuery(question="Valid?", history=[{"role": "attacker", "text": "Hello"}])
+
+    # Text exceeding 4000 characters must fail validation
+    long_turn = [{"role": "user", "text": "x" * 4001}]
+    with pytest.raises(ValidationError):
+        MemoryQuery(question="Valid?", history=long_turn)
+
+
 @pytest.fixture
 def app() -> Any:
     return create_app()

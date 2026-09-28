@@ -18,9 +18,14 @@ from meeting_notes.memory import retrieval, vector
 router = APIRouter(prefix="/graph", tags=["memory"])
 
 
+class ChatTurn(BaseModel):
+    role: str = Field(pattern=r"^(user|assistant)$")
+    text: str = Field(min_length=1, max_length=4000)
+
+
 class MemoryQuery(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
-    history: list[dict[str, Any]] | None = Field(default=None, max_length=50)
+    history: list[ChatTurn] | None = Field(default=None, max_length=50)
 
 
 @router.get("/memory/suggested-questions")
@@ -42,11 +47,13 @@ async def memory_query(
     keywords with any meeting still finds it by meaning.
     Supports Server-Sent Events (SSE) streaming when stream=true.
     """
+    history_dicts = [t.model_dump() for t in body.history] if body.history else None
+
     if stream:
         async def event_stream() -> AsyncIterator[str]:
             async for chunk in retrieval.stream_memory_query(
                 body.question,
-                history=body.history,
+                history=history_dicts,
                 search_meetings=vector.search_similar_meetings,
             ):
                 yield f"data: {json.dumps(chunk)}\n\n"
@@ -63,7 +70,7 @@ async def memory_query(
 
     return await retrieval.full_memory_query(
         body.question,
-        history=body.history,
+        history=history_dicts,
         search_meetings=vector.search_similar_meetings,
     )
 

@@ -1876,7 +1876,7 @@ function renderAssistantToolbarHtml(turn) {
   const safeId = esc(turn.id || "");
   const deliverablesText = extractDeliverables(turn.answer || "");
   const copyDeliverablesBtn = deliverablesText ? `
-    <button type="button" class="copy-btn copy-deliverables-btn" onclick="copySpecificDeliverables('${safeId}')" title="Copy action items & deliverables only" aria-label="Copy deliverables">
+    <button type="button" class="copy-btn copy-deliverables-btn" data-turn-id="${safeId}" onclick="copySpecificDeliverables(this.dataset.turnId)" title="Copy action items & deliverables only" aria-label="Copy deliverables">
       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 11 12 14 22 4"></polyline><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg>
       <span>Copy Deliverables</span>
     </button>
@@ -1890,7 +1890,7 @@ function renderAssistantToolbarHtml(turn) {
       </div>
       <div style="display:flex;gap:6px;align-items:center">
         ${copyDeliverablesBtn}
-        <button type="button" class="copy-btn copy-answer-btn" onclick="copySpecificAnswer('${safeId}')" title="Copy full markdown answer to clipboard" aria-label="Copy Answer">
+        <button type="button" class="copy-btn copy-answer-btn" data-turn-id="${safeId}" onclick="copySpecificAnswer(this.dataset.turnId)" title="Copy full markdown answer to clipboard" aria-label="Copy Answer">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
           <span>Copy Answer</span>
         </button>
