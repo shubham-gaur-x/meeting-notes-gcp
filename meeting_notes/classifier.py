@@ -18,7 +18,7 @@ from typing import Any
 _MEETING_KEYWORDS = {
     "meeting", "call", "standup", "sync", "review", "demo", "interview",
     "discussion", "conference", "webinar", "workshop", "session", "agenda",
-    "minutes", "recap", "follow-up", "followup",
+    "minutes", "recap", "followup",
     # additional work meeting terms
     "touchpoint", "touchpoints", "update", "updates", "pilot", "kickoff",
     "onboarding", "training", "debrief", "retrospective", "retro", "planning",
@@ -31,6 +31,7 @@ _MEETING_PHRASE_PATTERNS = [
     re.compile(r"\b1[:\-]1\b"),
     re.compile(r"\bone[- ]on[- ]one\b", re.I),
     re.compile(r"\bcatch[- ]up\b", re.I),
+    re.compile(r"\bfollow[- ]up\b", re.I),
 ]
 
 _ACTION_PATTERNS = [

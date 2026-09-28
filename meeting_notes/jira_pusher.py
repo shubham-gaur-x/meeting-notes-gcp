@@ -51,10 +51,10 @@ def _get_configured_identities(settings: Settings) -> set[str]:
             ident_clean = ident.strip().lower()
             if ident_clean:
                 identities.add(ident_clean)
-    if settings.google_workspace_user:
-        identities.add(settings.google_workspace_user.strip().lower())
-    # Note: jira_email is deliberately excluded; it represents the shared
-    # service account credential for the deployment, not an individual human's identity.
+    # Note: jira_email and google_workspace_user are deliberately excluded.
+    # jira_email is a shared service account; google_workspace_user may be a
+    # shared mailbox or ingest account. Only explicitly configured human identities
+    # in jira_user_identities are trusted.
     return identities
 
 
@@ -64,18 +64,21 @@ def _matches_identity(owner_clean: str, ident: str) -> bool:
 
 
 def is_self_owned(owner: str, settings: Settings) -> bool:
-    """Return True if owner refers to the current user ('me' / configured identities)."""
+    """Return True if owner matches explicitly configured user identities.
+
+    Fails closed: if no identities are configured, returns False for all owners.
+    Does not provide unconditional bypasses for strings like 'me' or 'self' — all
+    matches must resolve against the operator-configured identity set.
+    """
     if not owner:
         return False
-    owner_clean = owner.strip().lower()
-    if owner_clean in {"me", "myself", "self"}:
-        return True
 
     identities = _get_configured_identities(settings)
     if not identities:
         log.warning("jira_pusher.no_identities_configured_for_self_only")
         return False
 
+    owner_clean = owner.strip().lower()
     return any(_matches_identity(owner_clean, ident) for ident in identities)
 
 

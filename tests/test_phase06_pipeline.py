@@ -861,9 +861,8 @@ async def test_push_self_only_fails_closed_when_no_identities_configured() -> No
     )
     # When push_self_only is set but no identities are known, it must fail closed and return False
     assert not jira_pusher.is_self_owned("Alex Mercer", settings)
-    # 'me' or 'self' still recognized
-    assert jira_pusher.is_self_owned("me", settings)
-    assert jira_pusher.is_self_owned("self", settings)
+    assert not jira_pusher.is_self_owned("me", settings)
+    assert not jira_pusher.is_self_owned("self", settings)
 
 
 def test_is_administrative_task_cases() -> None:
@@ -899,6 +898,7 @@ def test_push_self_only_strict_identity_matching() -> None:
     assert not jira_pusher.is_self_owned("Alex", settings)
     assert not jira_pusher.is_self_owned("Alex Smith", settings)
     assert not jira_pusher.is_self_owned("alex@evil.com", settings)
+    assert not jira_pusher.is_self_owned("me", settings)
 
     # Jira service account email must NEVER be conflated with a human self-identity
     svc_settings = _jira_settings(
@@ -908,9 +908,17 @@ def test_push_self_only_strict_identity_matching() -> None:
     )
     assert not jira_pusher.is_self_owned("jira-bot@example.com", svc_settings)
 
+    # Google workspace user email (potentially shared inbox) is not conflated with human self-identity
+    gw_settings = _jira_settings(
+        JIRA_PUSH_SELF_ONLY=True,
+        JIRA_USER_IDENTITIES="alex.mercer@example.com,Alex Mercer",
+        GOOGLE_WORKSPACE_USER="shared-inbox@example.com",
+    )
+    assert not jira_pusher.is_self_owned("shared-inbox@example.com", gw_settings)
+
 
 @pytest.mark.parametrize(
-    "keyword", ["1:1", "1-1", "one-on-one", "one on one", "catch up", "catchup"]
+    "keyword", ["1:1", "1-1", "one-on-one", "one on one", "catch up", "catchup", "follow-up"]
 )
 def test_one_on_one_meeting_classification_keywords(keyword: str) -> None:
     from meeting_notes.classifier import classify
