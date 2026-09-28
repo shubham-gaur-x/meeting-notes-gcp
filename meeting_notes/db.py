@@ -28,7 +28,7 @@ from typing import Any
 import asyncpg
 import structlog
 
-from meeting_notes.config import DEFAULT_PIPELINE_MAX_ATTEMPTS, Settings, get_settings
+from meeting_notes.config import Settings, get_settings, resolve_max_attempts
 from meeting_notes.dev_agent.lifecycle import TERMINAL_STATES
 from meeting_notes.dev_agent.models import DevAgentRun
 from meeting_notes.models import SourceType, StagedRecord
@@ -242,10 +242,10 @@ WHERE status = 'dead_letter'
 _QUEUE_STATS_SQL = """
 SELECT
     count(*) AS total,
-    count(*) FILTER (WHERE coalesce(status, CASE WHEN processed THEN 'processed' ELSE 'pending' END) = 'pending') AS pending,
-    count(*) FILTER (WHERE coalesce(status, CASE WHEN processed THEN 'processed' ELSE 'pending' END) = 'retry') AS retry,
-    count(*) FILTER (WHERE coalesce(status, CASE WHEN processed THEN 'processed' ELSE 'pending' END) = 'dead_letter') AS dead_letter,
-    count(*) FILTER (WHERE coalesce(status, CASE WHEN processed THEN 'processed' ELSE 'pending' END) = 'processed') AS processed
+    count(*) FILTER (WHERE status = 'pending') AS pending,
+    count(*) FILTER (WHERE status = 'retry') AS retry,
+    count(*) FILTER (WHERE status = 'dead_letter') AS dead_letter,
+    count(*) FILTER (WHERE status = 'processed') AS processed
 FROM staged_records
 """
 
@@ -352,7 +352,7 @@ async def stage_record(
 
 
 async def claim_batch(
-    limit: int, max_attempts: int = DEFAULT_PIPELINE_MAX_ATTEMPTS, pool: asyncpg.Pool | None = None
+    limit: int, max_attempts: int | None = None, pool: asyncpg.Pool | None = None
 ) -> list[StagedRecord]:
     """Claim up to `limit` unprocessed records (ADR-006) with attempts < max_attempts.
 
@@ -362,9 +362,10 @@ async def claim_batch(
     marks each one done individually, so a slow record does not hold locks
     across the whole batch.
     """
+    eff_max = resolve_max_attempts(max_attempts)
     pool = pool or await get_pool()
     async with pool.acquire() as conn, conn.transaction():
-        rows = await conn.fetch(CLAIM_SQL, limit, max_attempts)
+        rows = await conn.fetch(CLAIM_SQL, limit, eff_max)
     return [
         StagedRecord(
             id=str(r["id"]),
@@ -440,7 +441,7 @@ async def mark_processed(record_id: str, pool: asyncpg.Pool | None = None) -> No
 async def record_drain_failure(
     record_id: str,
     error: str,
-    max_attempts: int = DEFAULT_PIPELINE_MAX_ATTEMPTS,
+    max_attempts: int | None = None,
     pool: asyncpg.Pool | None = None,
 ) -> tuple[int, bool, str]:
     """Record a drain failure for a staged record, incrementing its attempt counter.
@@ -449,13 +450,14 @@ async def record_drain_failure(
     to prevent poison pills from looping forever.
     Returns (attempts, is_processed, status).
     """
+    eff_max = resolve_max_attempts(max_attempts)
     pool = pool or await get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             _RECORD_DRAIN_FAILURE_SQL,
             record_id,
             error[:2000],
-            max_attempts,
+            eff_max,
         )
     if row:
         return row["attempts"], row["processed"], row["status"]
