@@ -13,26 +13,15 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-import inspect
 from typing import Any
 
 import structlog
 
-from meeting_notes.config import Settings, get_settings
+from meeting_notes.config import Settings, get_settings, resolve_max_attempts
 from meeting_notes.models import StagedRecord
 from meeting_notes.pipeline import adapter_for
 
 log = structlog.get_logger()
-
-
-def _record_failure_takes_max_attempts(fn: Any) -> bool:
-    try:
-        sig = inspect.signature(fn)
-        return "max_attempts" in sig.parameters or any(
-            p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
-        )
-    except (ValueError, TypeError):
-        return True
 
 
 @dataclass
@@ -59,8 +48,7 @@ async def _default_record_failure(
 ) -> tuple[int, bool, str]:
     from meeting_notes import db
 
-    resolved_max = max_attempts if max_attempts is not None else get_settings().pipeline_max_attempts
-    return await db.record_drain_failure(record_id, error, max_attempts=resolved_max)
+    return await db.record_drain_failure(record_id, error, max_attempts=resolve_max_attempts(max_attempts))
 
 
 async def drain_batch(
@@ -101,10 +89,7 @@ async def drain_batch(
                     record_id=record.id, source=record.source_type, error=str(exc), exc_info=True,
                 )
                 try:
-                    if _record_failure_takes_max_attempts(record_failure):
-                        await record_failure(record.id, str(exc), max_attempts=settings.pipeline_max_attempts)
-                    else:
-                        await record_failure(record.id, str(exc))
+                    await record_failure(record.id, str(exc), max_attempts=settings.pipeline_max_attempts)
                 except Exception as rec_exc:
                     log.error(
                         "pipeline_drain.record_failure_failed",

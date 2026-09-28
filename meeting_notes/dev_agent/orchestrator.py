@@ -138,14 +138,21 @@ async def find_sprint_candidates(settings: Settings | None = None) -> list[dict[
             settings=settings,
         )
         for ticket in candidates:
-            conf = await graph_client.get_action_confidence(ticket["key"])
-            if conf is not None and conf < settings.dev_agent_confidence_threshold:
-                log.info(
-                    "orchestrator.triage.low_confidence_skip",
-                    key=ticket["key"], confidence=round(conf, 2),
+            try:
+                conf = await graph_client.get_action_confidence(ticket["key"])
+                if conf is not None and conf < settings.dev_agent_confidence_threshold:
+                    log.info(
+                        "orchestrator.triage.low_confidence_skip",
+                        key=ticket["key"], confidence=round(conf, 2),
+                    )
+                    continue
+                eligible.append({**ticket, "tracker": "jira"})
+            except Exception as ticket_exc:
+                log.warning(
+                    "orchestrator.jira_ticket_eval_failed",
+                    key=ticket.get("key"),
+                    error=str(ticket_exc),
                 )
-                continue
-            eligible.append({**ticket, "tracker": "jira"})
 
     # 2. Linear candidates
     if tracker in ("linear", "both") and getattr(settings, "linear_api_key", None):
