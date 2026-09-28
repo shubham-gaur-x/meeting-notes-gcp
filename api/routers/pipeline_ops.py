@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -9,7 +10,7 @@ from pydantic import BaseModel, Field
 
 from api.deps import principal
 from meeting_notes import db
-from meeting_notes.access_control import Principal
+from meeting_notes.access_control import ADMIN, Principal
 
 router = APIRouter(prefix="/pipeline", tags=["pipeline"])
 
@@ -60,12 +61,26 @@ async def list_dead_letters(
 @router.post("/dlq/replay")
 async def replay_dead_letters(
     body: ReplayRequest | None = None,
-    _: Principal = Depends(principal),
+    user: Principal = Depends(principal),
 ) -> dict[str, Any]:
     """Replay quarantined dead-letter records by resetting attempts to 0 and status to 'pending'."""
+    if user.role != ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail="Forbidden: administrative role required to replay DLQ records",
+        )
+
     record_id = body.record_id if body else None
 
     if record_id:
+        try:
+            uuid.UUID(record_id)
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid record_id {record_id!r}: must be a valid UUID",
+            ) from None
+
         success = await db.replay_dead_letter_record(record_id)
         if not success:
             raise HTTPException(

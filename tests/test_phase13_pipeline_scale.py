@@ -556,10 +556,12 @@ async def test_pipeline_dlq_api_endpoints(monkeypatch: pytest.MonkeyPatch) -> No
     async def mock_stats() -> dict[str, int]:
         return {"total": 5, "pending": 2, "retry": 0, "dead_letter": 1, "processed": 2}
 
+    valid_uuid = "11111111-1111-1111-1111-111111111111"
+
     async def mock_list_dlq(limit: int = 50) -> list[StagedRecord]:
         return [
             StagedRecord(
-                id="test-uuid",
+                id=valid_uuid,
                 source_id="msg-42",
                 source_type="email",
                 payload={"bad": True},
@@ -572,7 +574,7 @@ async def test_pipeline_dlq_api_endpoints(monkeypatch: pytest.MonkeyPatch) -> No
         ]
 
     async def mock_replay_one(rec_id: str) -> bool:
-        return rec_id == "test-uuid"
+        return rec_id == valid_uuid
 
     async def mock_replay_all() -> int:
         return 1
@@ -599,16 +601,31 @@ async def test_pipeline_dlq_api_endpoints(monkeypatch: pytest.MonkeyPatch) -> No
         assert dlq_data["records"][0]["source_id"] == "msg-42"
         assert dlq_data["records"][0]["attempts"] == 3
 
-        # 3. POST /pipeline/dlq/replay (single record)
-        resp = await client.post("/pipeline/dlq/replay", json={"record_id": "test-uuid"})
+        # 3. POST /pipeline/dlq/replay (single record with valid UUID)
+        resp = await client.post("/pipeline/dlq/replay", json={"record_id": valid_uuid})
         assert resp.status_code == 200
         assert resp.json()["status"] == "replayed"
-        assert resp.json()["record_id"] == "test-uuid"
+        assert resp.json()["record_id"] == valid_uuid
 
-        # 4. POST /pipeline/dlq/replay (all)
+        # 4. POST /pipeline/dlq/replay with invalid UUID format -> 400 Bad Request
+        bad_resp = await client.post("/pipeline/dlq/replay", json={"record_id": "not-a-valid-uuid"})
+        assert bad_resp.status_code == 400
+        assert "must be a valid UUID" in bad_resp.json()["detail"]
+
+        # 5. POST /pipeline/dlq/replay (all)
         resp = await client.post("/pipeline/dlq/replay", json={})
         assert resp.status_code == 200
         assert resp.json()["count"] == 1
+
+        # 6. POST /pipeline/dlq/replay with non-admin principal -> 403 Forbidden
+        from meeting_notes.access_control import Principal
+        from api.deps import principal
+        member_principal = Principal(name="test-member", role="member")
+        app.dependency_overrides[principal] = lambda: member_principal
+        forbidden_resp = await client.post("/pipeline/dlq/replay", json={})
+        assert forbidden_resp.status_code == 403
+        assert "administrative role required" in forbidden_resp.json()["detail"]
+        app.dependency_overrides.clear()
 
 
 @pytest.mark.asyncio
@@ -951,6 +968,55 @@ async def test_drain_batch_with_default_record_failure(monkeypatch: pytest.Monke
     assert result.errors == 1
     assert len(db_calls) == 1
     assert db_calls[0] == ("r-default-failure", "Process exploded", 5)
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_process_ticket_ambiguous_key_failure_handling() -> None:
+    """Verify an ambiguous key that raises ValueError in routing is cleanly caught and fails the ticket without crashing batch."""
+    from meeting_notes.dev_agent import orchestrator
+    from meeting_notes.dev_agent import lifecycle as lc
+
+    run_finished = False
+    finished_state = None
+    finished_error = None
+
+    async def mock_claim_run(key: str, state: str, branch: str) -> None:
+        pass
+
+    async def mock_finish_run(key: str, state: str, error: str | None = None) -> None:
+        nonlocal run_finished, finished_state, finished_error
+        run_finished = True
+        finished_state = state
+        finished_error = error
+
+    async def mock_set_state(key: str, state: str) -> None:
+        pass
+
+    async def mock_remove_worktree(repo_dir: str, work_dir: str, branch: str, ignore_errors: bool = True) -> None:
+        pass
+
+    settings = Settings(
+        issue_tracker="both",
+        jira_project_key="SCRUM",
+        linear_api_key="lin-secret",
+        jira_enabled=True,
+    )
+
+    ticket = {"key": "MALFORMED_NO_HYPHEN", "tracker": "ambiguous"}
+
+    await orchestrator.process_ticket(
+        ticket,
+        settings,
+        claim_run=mock_claim_run,
+        finish_run=mock_finish_run,
+        set_state=mock_set_state,
+        remove_worktree=mock_remove_worktree,
+    )
+
+    assert run_finished is True
+    assert finished_state == lc.FAILED
+    assert "Ambiguous tracker key 'MALFORMED_NO_HYPHEN'" in (finished_error or "")
+
 
 
 
