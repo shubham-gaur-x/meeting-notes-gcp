@@ -96,8 +96,8 @@ async def transition(
             await graph_client.update_action_linear_status_by_ref(
                 body.issue_id, linear_state=state_name, done=is_done
             )
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001
+            log.warning("linear_ops.status_sync_failed", issue_id=body.issue_id, error=str(exc))
 
     log.info("linear_ops.transition", issue_id=body.issue_id, state=state_name, is_done=is_done)
     return {"issue_id": body.issue_id, "state": state_name, "is_done": is_done, "updated": bool(updated)}

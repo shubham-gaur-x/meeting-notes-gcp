@@ -1159,7 +1159,7 @@ compromise, meeting-notes-gcp needs first-class Linear issue creation, status sy
 and issue-to-meeting graph provenance.
 
 ### Decision
-1. Add `issue_tracker: Literal["jira", "linear", "both"] = "jira"` to application settings (`config.py`).
+1. Add `issue_tracker: Literal["jira", "linear", "both", "none"] = "jira"` to application settings (`config.py`).
 2. When configured as `"linear"`, all action item creation and state sync flows to Linear via the
    Linear GraphQL API (`linear_client.py`).
 3. When configured as `"both"`, action items are created on both Jira and Linear. In Memgraph,
