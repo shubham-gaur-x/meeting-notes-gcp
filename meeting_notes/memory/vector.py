@@ -65,16 +65,23 @@ async def embed_batch_texts(
 ) -> list[list[float] | None]:
     if not texts:
         return []
+    resolved = settings or get_settings()
+    chunk_size = getattr(resolved, "embedding_batch_size", 50)
     if embed_batch_fn is None:
         from meeting_notes import llm_client
 
         embed_batch_fn = llm_client.embed_batch
-    try:
-        results: list[list[float] | None] = await embed_batch_fn(texts, settings=settings)
-        return results
-    except Exception as exc:  # noqa: BLE001
-        log.warning("vector.embed_batch_failed", error=str(exc))
-        return [None] * len(texts)
+
+    results: list[list[float] | None] = []
+    for i in range(0, len(texts), chunk_size):
+        chunk = texts[i : i + chunk_size]
+        try:
+            chunk_results = await embed_batch_fn(chunk, settings=resolved)
+            results.extend(chunk_results)
+        except Exception as exc:  # noqa: BLE001 - per-chunk resilience
+            log.warning("vector.embed_batch_chunk_failed", chunk_size=len(chunk), error=str(exc))
+            results.extend([None] * len(chunk))
+    return results
 
 
 async def embed_meeting(

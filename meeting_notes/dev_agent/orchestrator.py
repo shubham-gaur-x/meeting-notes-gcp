@@ -247,21 +247,10 @@ def _is_jira_identifier(key: str) -> bool:
     return bool(_LINEAR_KEY_RE.match(key))
 
 
-def _should_use_linear(key: str, settings: Settings, tracker: str | None = None) -> bool:
-    """Determine whether to route ticket operations to Linear or Jira.
+def validate_tracker_key(key: str, tracker: str | None = None) -> bool:
+    """Validate format of ticket/issue key for a tracker.
 
-    Precedence:
-    1. If explicit tracker is provided -> validate and respect it ("linear" -> True, "jira" -> False)
-    2. If Jira is not enabled and Linear is configured -> validate and route to Linear (True)
-    3. If Linear is not configured -> Jira (False)
-    4. If configured_tracker == "linear" -> validate and route to Linear (True)
-    5. If configured_tracker == "jira" -> Jira (False)
-    6. In "both" mode:
-       - If key matches Linear UUID pattern -> Linear (True)
-       - If Jira is enabled and key matches configured Jira project prefix -> Jira (False)
-       - If Linear is configured and key matches configured Linear team prefix -> Linear (True)
-       - If Jira is not enabled -> Linear (True)
-       - Otherwise, fail-loudly with ValueError on ambiguous key.
+    Raises ValueError if the key format is invalid.
     """
     if tracker is not None:
         t = tracker.lower()
@@ -272,22 +261,52 @@ def _should_use_linear(key: str, settings: Settings, tracker: str | None = None)
         if t == "jira":
             if not _is_jira_identifier(key):
                 raise ValueError(f"Invalid Jira issue key: {key!r}")
+            return True
+
+    if not (_UUID_RE.match(key) or _LINEAR_KEY_RE.match(key)):
+        raise ValueError(f"Invalid issue key format: {key!r}")
+    return True
+
+
+def resolve_tracker_routing(key: str, settings: Settings, tracker: str | None = None) -> bool:
+    """Determine whether to route ticket operations to Linear (True) or Jira (False).
+
+    Precedence:
+    1. If explicit tracker is provided -> validate key format and return (Linear -> True, Jira -> False).
+    2. If Jira is disabled and Linear is configured -> validate and route to Linear (True).
+    3. If Linear is not configured -> Jira (False).
+    4. If configured_tracker == "linear" -> validate and route to Linear (True).
+    5. If configured_tracker == "jira" -> Jira (False).
+    6. In "both" mode:
+       - If key matches Linear UUID pattern -> Linear (True).
+       - If Jira is enabled and key matches configured Jira project prefix -> Jira (False).
+       - If Linear is configured and key matches configured Linear team prefix -> Linear (True).
+       - If Jira is not enabled and key matches Linear identifier -> Linear (True).
+       - If Linear is not configured and key matches Jira identifier -> Jira (False).
+       - Otherwise, fail-loudly with ValueError on ambiguous key.
+    """
+    if tracker is not None:
+        t = tracker.lower()
+        if t == "linear":
+            validate_tracker_key(key, tracker="linear")
+            return True
+        if t == "jira":
+            validate_tracker_key(key, tracker="jira")
             return False
+        # If tracker is non-standard (e.g. "ambiguous"), fall through to routing disambiguation
 
     has_linear_key = bool(getattr(settings, "linear_api_key", None))
     jira_enabled = getattr(settings, "jira_enabled", False)
 
     if not jira_enabled and has_linear_key:
-        if not _is_linear_identifier(key):
-            raise ValueError(f"Invalid Linear issue key or identifier: {key!r}")
+        validate_tracker_key(key, tracker="linear")
         return True
     if not has_linear_key:
         return False
 
     configured_tracker = getattr(settings, "issue_tracker", "jira").lower()
     if configured_tracker == "linear":
-        if not _is_linear_identifier(key):
-            raise ValueError(f"Invalid Linear issue key or identifier: {key!r}")
+        validate_tracker_key(key, tracker="linear")
         return True
     if configured_tracker == "jira":
         return False
@@ -304,14 +323,18 @@ def _should_use_linear(key: str, settings: Settings, tracker: str | None = None)
     if has_linear_key and linear_team and key.upper().startswith(f"{linear_team}-"):
         return True
 
-    if _LINEAR_KEY_RE.match(key):
+    if not jira_enabled and _is_linear_identifier(key):
         return True
-
-    if not jira_enabled:
-        return True
+    if not has_linear_key and _is_jira_identifier(key):
+        return False
 
     log.error("orchestrator.tracker_routing_ambiguous", key=key)
     raise ValueError(f"Ambiguous tracker key {key!r}: cannot determine whether to route to Linear or Jira")
+
+
+def _should_use_linear(key: str, settings: Settings, tracker: str | None = None) -> bool:
+    """Determine whether to route ticket operations to Linear or Jira."""
+    return resolve_tracker_routing(key, settings, tracker=tracker)
 
 
 async def _default_transition_issue(
@@ -613,14 +636,31 @@ async def _escalate_to_human(ctx: _Outcome, failed: list[Any], review: Any) -> N
         "orchestrator.review_blocked", failed=[g.name for g in failed],
         review_blocking=bool(review and review.blocking), pr_url=ctx.pr["html_url"],
     )
-    await ctx.deps.add_comment(
-        ctx.key,
-        "Dev agent opened a PR but it did NOT pass review, so it has not been marked "
-        f"shipped.\n\n{_rejection_reason(failed, review)}\n\n"
-        f"PR: {ctx.pr['html_url']}\n\nA human needs to review this before it merges.",
-        settings=ctx.settings,
-    )
-    if not await ctx.deps.transition_issue(ctx.key, "In Review", settings=ctx.settings):
+    tracker = ctx.ticket.get("tracker")
+    tracker_kwargs = {"tracker": tracker} if tracker else {}
+    try:
+        await ctx.deps.add_comment(
+            ctx.key,
+            "Dev agent opened a PR but it did NOT pass review, so it has not been marked "
+            f"shipped.\n\n{_rejection_reason(failed, review)}\n\n"
+            f"PR: {ctx.pr['html_url']}\n\nA human needs to review this before it merges.",
+            settings=ctx.settings,
+            **tracker_kwargs,
+        )
+    except TypeError:
+        await ctx.deps.add_comment(
+            ctx.key,
+            "Dev agent opened a PR but it did NOT pass review, so it has not been marked "
+            f"shipped.\n\n{_rejection_reason(failed, review)}\n\n"
+            f"PR: {ctx.pr['html_url']}\n\nA human needs to review this before it merges.",
+            settings=ctx.settings,
+        )
+
+    try:
+        transition_ok = await ctx.deps.transition_issue(ctx.key, "In Review", settings=ctx.settings, **tracker_kwargs)
+    except TypeError:
+        transition_ok = await ctx.deps.transition_issue(ctx.key, "In Review", settings=ctx.settings)
+    if not transition_ok:
         ctx.logger.warning("orchestrator.review_transition_failed")
     await ctx.deps.finish_run(
         ctx.key, lc.NEEDS_HUMAN, pr_url=ctx.pr["html_url"], pr_number=ctx.pr["number"],
@@ -659,10 +699,22 @@ async def _ship(ctx: _Outcome) -> None:
     """Gates and reviewer both passed. SHIPPED means the PR is open and the
     ticket is in review — CLOSED happens only when a human actually merges,
     via `/webhook/github`."""
-    await ctx.deps.add_comment(
-        ctx.key, _ship_comment(ctx.result, ctx.verdict, ctx.pr), settings=ctx.settings
-    )
-    if not await ctx.deps.transition_issue(ctx.key, "In Review", settings=ctx.settings):
+    tracker = ctx.ticket.get("tracker")
+    tracker_kwargs = {"tracker": tracker} if tracker else {}
+    try:
+        await ctx.deps.add_comment(
+            ctx.key, _ship_comment(ctx.result, ctx.verdict, ctx.pr), settings=ctx.settings, **tracker_kwargs
+        )
+    except TypeError:
+        await ctx.deps.add_comment(
+            ctx.key, _ship_comment(ctx.result, ctx.verdict, ctx.pr), settings=ctx.settings
+        )
+
+    try:
+        transition_ok = await ctx.deps.transition_issue(ctx.key, "In Review", settings=ctx.settings, **tracker_kwargs)
+    except TypeError:
+        transition_ok = await ctx.deps.transition_issue(ctx.key, "In Review", settings=ctx.settings)
+    if not transition_ok:
         ctx.logger.warning("orchestrator.review_transition_failed")
 
     await ctx.deps.finish_run(
@@ -694,6 +746,8 @@ async def process_ticket(
     deps = _resolve_dependencies(overrides)
 
     key = ticket["key"]
+    tracker = ticket.get("tracker")
+    tracker_kwargs = {"tracker": tracker} if tracker else {}
     bound_log = log.bind(ticket_key=key)
     branch_name = f"agent/{key}"
     work_dir = f"{settings.dev_agent_work_root}/{key}"
@@ -702,13 +756,26 @@ async def process_ticket(
     await deps.claim_run(key, lc.TRIAGED, branch_name)
 
     try:
-        if not await deps.transition_issue(key, "In Progress", settings=settings):
+        try:
+            transition_ok = await deps.transition_issue(key, "In Progress", settings=settings, **tracker_kwargs)
+        except TypeError:
+            transition_ok = await deps.transition_issue(key, "In Progress", settings=settings)
+        if not transition_ok:
             bound_log.warning("orchestrator.in_progress_transition_failed")
-        await deps.add_comment(
-            key, f"Picked up by dev_agent (backend={dev_backend}).", settings=settings
-        )
 
-        detail = await deps.get_issue_detail(key, settings=settings)
+        try:
+            await deps.add_comment(
+                key, f"Picked up by dev_agent (backend={dev_backend}).", settings=settings, **tracker_kwargs
+            )
+        except TypeError:
+            await deps.add_comment(
+                key, f"Picked up by dev_agent (backend={dev_backend}).", settings=settings
+            )
+
+        try:
+            detail = await deps.get_issue_detail(key, settings=settings, **tracker_kwargs)
+        except TypeError:
+            detail = await deps.get_issue_detail(key, settings=settings)
         # The ticket names its own repository; the settings are only a fallback.
         repo = repo_for_ticket(detail, settings)
         bound_log = bound_log.bind(repo=f"{repo[0]}/{repo[1]}")
@@ -757,11 +824,18 @@ async def process_ticket(
     except Exception as exc:
         bound_log.error("orchestrator.unexpected_error", exc_info=True)
         error_text = str(exc)
+
+        async def _cleanup_transition() -> None:
+            try:
+                await deps.transition_issue(key, "To Do", settings=settings, **tracker_kwargs)
+            except TypeError:
+                await deps.transition_issue(key, "To Do", settings=settings)
+
         cleanup: list[Any] = [
             lambda: deps.finish_run(key, lc.FAILED, error=error_text),
             lambda: _advance_state(key, lc.FAILED, deps.set_state, deps.get_run),
             lambda: deps.record_session_memory(ticket, outcome="failed", error=error_text),
-            lambda: deps.transition_issue(key, "To Do", settings=settings),
+            _cleanup_transition,
         ]
         for step in cleanup:
             try:
