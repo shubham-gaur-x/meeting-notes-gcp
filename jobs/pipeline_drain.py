@@ -15,7 +15,10 @@ def main() -> int:
     async def run() -> int:
         settings = get_settings()
         try:
-            records = await db.claim_batch(settings.pipeline_batch_size)
+            records = await db.claim_batch(
+                settings.pipeline_batch_size,
+                max_attempts=settings.pipeline_max_attempts,
+            )
             if not records:
                 print("  pipeline_drain: nothing to claim")
                 return 0

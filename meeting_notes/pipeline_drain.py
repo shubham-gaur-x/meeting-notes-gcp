@@ -39,10 +39,12 @@ async def _default_sync_jira(payload: dict[str, Any], *, record_id: str) -> bool
     return await sync_one(payload, record_id=record_id)
 
 
-async def _default_record_failure(record_id: str, error: str) -> tuple[int, bool, str]:
+async def _default_record_failure(
+    record_id: str, error: str, max_attempts: int = 3
+) -> tuple[int, bool, str]:
     from meeting_notes import db
 
-    return await db.record_drain_failure(record_id, error)
+    return await db.record_drain_failure(record_id, error, max_attempts=max_attempts)
 
 
 async def drain_batch(
@@ -83,7 +85,10 @@ async def drain_batch(
                     record_id=record.id, source=record.source_type, error=str(exc), exc_info=True,
                 )
                 try:
-                    await record_failure(record.id, str(exc))
+                    try:
+                        await record_failure(record.id, str(exc), max_attempts=settings.pipeline_max_attempts)
+                    except TypeError:
+                        await record_failure(record.id, str(exc))
                 except Exception as rec_exc:  # noqa: BLE001
                     log.warning(
                         "pipeline_drain.record_failure_failed",

@@ -155,7 +155,9 @@ CLAIM_SQL = """
 SELECT id, source_id, source_type, payload, fetched_at, processed,
        coalesce(attempts, 0) AS attempts, last_error, coalesce(status, 'pending') AS status
 FROM staged_records
-WHERE processed = FALSE AND coalesce(attempts, 0) < $2
+WHERE processed = FALSE
+  AND coalesce(attempts, 0) < $2
+  AND coalesce(status, 'pending') != 'dead_letter'
 ORDER BY fetched_at
 FOR UPDATE SKIP LOCKED
 LIMIT $1
@@ -180,7 +182,7 @@ DELETE_STAGED_SQL = "DELETE FROM staged_records WHERE source_id = ANY($1::text[]
 
 _MARK_PROCESSED_SQL = """
 UPDATE staged_records
-SET processed = TRUE, processed_at = now(), status = 'processed'
+SET processed = TRUE, processed_at = now(), status = 'processed', last_error = NULL
 WHERE id = $1::uuid
 """
 
