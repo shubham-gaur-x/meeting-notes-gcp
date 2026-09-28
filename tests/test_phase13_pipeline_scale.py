@@ -44,6 +44,8 @@ async def test_drain_batch_runs_concurrently_within_semaphore_limit() -> None:
     active = 0
     peak = 0
     lock = asyncio.Lock()
+    barrier_reached = asyncio.Event()
+    release_gate = asyncio.Event()
 
     async def slow_process(record: StagedRecord, adapter: Any) -> None:
         nonlocal active, peak
@@ -51,22 +53,30 @@ async def test_drain_batch_runs_concurrently_within_semaphore_limit() -> None:
             active += 1
             if active > peak:
                 peak = active
-        await asyncio.sleep(0.02)
+            if active == 3:
+                barrier_reached.set()
+        await release_gate.wait()
         async with lock:
             active -= 1
 
     records = [_make_staged(f"r{i}") for i in range(6)]
-    result = await drain_batch(
-        records,
-        process=slow_process,
-        sync_jira=None,
-        concurrency_limit=3,
+    drain_task = asyncio.create_task(
+        drain_batch(
+            records,
+            process=slow_process,
+            sync_jira=None,
+            concurrency_limit=3,
+        )
     )
+
+    await barrier_reached.wait()
+    assert peak == 3
+    assert active == 3
+    release_gate.set()
+    result = await drain_task
 
     assert result.processed == 6
     assert result.errors == 0
-    assert peak <= 3, f"Peak concurrency {peak} exceeded limit of 3"
-    assert peak > 1, f"Expected concurrency > 1, got {peak}"
 
 
 @pytest.mark.asyncio
@@ -237,6 +247,8 @@ async def test_vector_embed_pending_multi_batch_concurrency_ceiling() -> None:
     active = 0
     peak = 0
     lock = asyncio.Lock()
+    barrier_reached = asyncio.Event()
+    release_gate = asyncio.Event()
 
     async def fake_batch_embed(texts: list[str], **kwargs: Any) -> list[list[float] | None]:
         nonlocal active, peak
@@ -244,7 +256,9 @@ async def test_vector_embed_pending_multi_batch_concurrency_ceiling() -> None:
             active += 1
             if active > peak:
                 peak = active
-        await asyncio.sleep(0.02)
+            if active == 2:
+                barrier_reached.set()
+        await release_gate.wait()
         async with lock:
             active -= 1
         return [[0.1] * 768 for _ in texts]
@@ -292,12 +306,18 @@ async def test_vector_embed_pending_multi_batch_concurrency_ceiling() -> None:
         )
         for i in range(6)
     ]
-    results = await asyncio.gather(*tasks)
+    task_future = asyncio.gather(*tasks)
+
+    await barrier_reached.wait()
+    assert peak == 2
+    assert active == 2
+    assert sem.locked() is True
+
+    release_gate.set()
+    results = await task_future
 
     assert len(results) == 6
     assert all(count == 5 for count in results)
-    assert peak <= 2, f"Peak concurrent batch operations ({peak}) exceeded concurrency ceiling of 2"
-    assert peak > 1, f"Expected concurrency of 2, but peak was only {peak}"
 
 
 @pytest.mark.asyncio
@@ -307,6 +327,8 @@ async def test_vector_embed_pending_preserves_pr2_per_item_concurrency_ceiling()
     active = 0
     peak = 0
     lock = asyncio.Lock()
+    barrier_reached = asyncio.Event()
+    release_gate = asyncio.Event()
 
     async def fake_embed_single(text: str, **kwargs: Any) -> list[float]:
         nonlocal active, peak
@@ -314,7 +336,9 @@ async def test_vector_embed_pending_preserves_pr2_per_item_concurrency_ceiling()
             active += 1
             if active > peak:
                 peak = active
-        await asyncio.sleep(0.02)
+            if active == 2:
+                barrier_reached.set()
+        await release_gate.wait()
         async with lock:
             active -= 1
         return [0.1] * 768
@@ -346,21 +370,29 @@ async def test_vector_embed_pending_preserves_pr2_per_item_concurrency_ceiling()
         def session(self) -> _Session:
             return _Session()
 
-    count = await vector._embed_pending(
-        "MATCH ... RETURN a.id AS id, a.task AS task",
-        "MATCH ... SET a.embedding = $embedding",
-        "meet-123",
-        "task",
-        driver=_Driver(),
-        settings=Settings(llm_backend="fake"),
-        embed=fake_embed_single,
-        semaphore=sem,
-        embed_batch_fn=None,
+    embed_task = asyncio.create_task(
+        vector._embed_pending(
+            "MATCH ... RETURN a.id AS id, a.task AS task",
+            "MATCH ... SET a.embedding = $embedding",
+            "meet-123",
+            "task",
+            driver=_Driver(),
+            settings=Settings(llm_backend="fake"),
+            embed=fake_embed_single,
+            semaphore=sem,
+            embed_batch_fn=None,
+        )
     )
 
+    await barrier_reached.wait()
+    assert peak == 2
+    assert active == 2
+    assert sem.locked() is True
+
+    release_gate.set()
+    count = await embed_task
+
     assert count == 6
-    assert peak <= 2, f"Peak per-item concurrency ({peak}) exceeded limit of 2"
-    assert peak > 1, f"Expected concurrency > 1, got {peak}"
 
 
 def test_should_use_linear_fail_safe_routing() -> None:

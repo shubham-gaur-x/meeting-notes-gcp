@@ -1,14 +1,8 @@
 """Drain one claimed batch: route each record to the pipeline or jira_sync with bounded concurrency.
 
-Exists so `jobs/pipeline_drain.py` stays thin (CLAUDE.md). `staged_records`
-holds every source in one table (ADR-018); `jira` rows are status
-sync-back, everything else goes through `pipeline.process`.
-
 Errors are per-record, not per-batch: one exploding record must not silently
 drop every other record queued behind it in the same claim. Bounded concurrency
-via `graph_write_concurrency` ensures high throughput without exceeding database
-or API limits. Poison-pill failures are recorded to dead-letter storage to prevent
-infinite retry loops.
+via drain_concurrency ensures high throughput without exceeding connection limits.
 """
 
 from __future__ import annotations
@@ -66,7 +60,7 @@ async def drain_batch(
     record_failure = record_failure or _default_record_failure
     settings = settings or get_settings()
 
-    limit = concurrency_limit or max(1, settings.drain_concurrency)
+    limit = max(1, concurrency_limit if concurrency_limit is not None else settings.drain_concurrency)
     sem = asyncio.Semaphore(limit)
     result = DrainResult()
     lock = asyncio.Lock()
