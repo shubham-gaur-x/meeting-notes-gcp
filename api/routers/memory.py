@@ -45,7 +45,9 @@ async def memory_query(
     if stream:
         async def event_stream() -> AsyncIterator[str]:
             async for chunk in retrieval.stream_memory_query(
-                body.question, search_meetings=vector.search_similar_meetings
+                body.question,
+                history=body.history,
+                search_meetings=vector.search_similar_meetings,
             ):
                 yield f"data: {json.dumps(chunk)}\n\n"
 

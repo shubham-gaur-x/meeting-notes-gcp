@@ -532,6 +532,19 @@ async def full_memory_query(
             log.warning("retrieval.session_log_failed", error=str(exc))
 
     # Generate progressive follow-up question chips based on retrieved entities and context
+    followups = _generate_followup_questions(entities)
+
+    return {
+        "question": question,
+        "answer": answer,
+        "suggested_followups": followups,
+        "node_ids": node_ids,
+        "entities": entities,
+    }
+
+
+def _generate_followup_questions(entities: dict[str, Any]) -> list[str]:
+    """Generate progressive follow-up question chips based on retrieved entities and context."""
     followups: list[str] = []
     if entities.get("topics"):
         for top in entities["topics"][:2]:
@@ -545,19 +558,13 @@ async def full_memory_query(
             "Who are the main collaborators and owners involved?",
             "What upcoming deadlines are associated with this work?",
         ]
-
-    return {
-        "question": question,
-        "answer": answer,
-        "suggested_followups": followups[:3],
-        "node_ids": node_ids,
-        "entities": entities,
-    }
+    return followups[:3]
 
 
 async def stream_memory_query(
     question: str,
     *,
+    history: list[dict[str, Any]] | None = None,
     driver: Any = None,
     settings: Settings | None = None,
     chat: Any = None,
@@ -568,7 +575,12 @@ async def stream_memory_query(
     settings = settings or get_settings()
     driver = driver or _driver()
 
-    entities = await extract_entities(question, settings=settings, chat=chat)
+    search_prompt = question
+    recent_context = _format_history_context(history) if history else ""
+    if recent_context:
+        search_prompt = f"Previous conversation:\n{recent_context}\n\nCurrent Question: {question}"
+
+    entities = await extract_entities(search_prompt, settings=settings, chat=chat)
     lines, node_ids = await assemble_context(
         entities, question, driver=driver, settings=settings, search_meetings=search_meetings
     )
@@ -581,8 +593,12 @@ async def stream_memory_query(
         return
 
     context = "\n".join(lines)
+    synth_user = question
+    if recent_context:
+        synth_user = f"Recent conversation context:\n{recent_context}\n\nQuestion: {question}"
+
     try:
-        parsed = await _chat(f"{SYNTHESIS_SYSTEM_PREFIX}{context}", question, settings, chat)
+        parsed = await _chat(f"{SYNTHESIS_SYSTEM_PREFIX}{context}", synth_user, settings, chat)
         answer = (
             parsed.get("answer")
             if isinstance(parsed, dict) and parsed.get("answer")
@@ -603,21 +619,7 @@ async def stream_memory_query(
         except Exception as exc:  # noqa: BLE001
             log.warning("retrieval.session_log_failed", error=str(exc))
 
-    followups: list[str] = []
-    if entities.get("topics"):
-        for top in entities["topics"][:2]:
-            followups.append(f"What key decisions and deliverables relate to {top}?")
-    if entities.get("people"):
-        for person in entities["people"][:1]:
-            followups.append(f"What action items or commitments involve {person}?")
-    if not followups:
-        followups = [
-            "What related decisions were established on this topic?",
-            "Who are the main collaborators and owners involved?",
-            "What upcoming deadlines are associated with this work?",
-        ]
-
-    yield {"event": "done", "suggested_followups": followups[:3]}
+    yield {"event": "done", "suggested_followups": _generate_followup_questions(entities)}
 
 
 async def generate_suggested_questions(
