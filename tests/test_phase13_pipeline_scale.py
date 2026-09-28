@@ -414,6 +414,7 @@ def test_should_use_linear_fail_safe_routing() -> None:
     both_settings = Settings(
         issue_tracker="both",
         jira_project_key="SCRUM",
+        linear_team_id="ENG",
         linear_api_key="lin-key",
         jira_enabled=True,
     )
@@ -1084,6 +1085,13 @@ async def test_queue_stats_does_not_double_count_quarantined_records() -> None:
     assert stats["retry"] == 1
     # Mutually exclusive: sum of distinct buckets equals total
     assert stats["pending"] + stats["retry"] + stats["dead_letter"] + stats["processed"] == stats["total"]
+
+    # Verify that the SQL query itself applies coalesce(status, 'pending') across all buckets
+    # ensuring legacy rows with status IS NULL are strictly accounted for without dropping.
+    assert "coalesce(status, 'pending') = 'pending' AND processed = FALSE" in db._QUEUE_STATS_SQL
+    assert "coalesce(status, 'pending') = 'retry' AND processed = FALSE" in db._QUEUE_STATS_SQL
+    assert "coalesce(status, 'pending') = 'dead_letter'" in db._QUEUE_STATS_SQL
+    assert "coalesce(status, 'pending') = 'processed' OR processed = TRUE" in db._QUEUE_STATS_SQL
 
 
 

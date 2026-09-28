@@ -237,40 +237,48 @@ class _Dependencies:
     review_pr: Any
 
 
-def _is_linear_key(key: str) -> bool:
+def _is_linear_identifier(key: str) -> bool:
+    """Strict validation for Linear identifiers (UUID or TEAM-123)."""
     return bool(_UUID_RE.match(key) or _LINEAR_KEY_RE.match(key))
+
+
+def _is_jira_identifier(key: str) -> bool:
+    """Strict validation for Jira identifiers (PROJECT-123)."""
+    return bool(_LINEAR_KEY_RE.match(key))
 
 
 def _should_use_linear(key: str, settings: Settings, tracker: str | None = None) -> bool:
     """Determine whether to route ticket operations to Linear or Jira.
 
     Precedence:
-    1. If explicit tracker is provided -> respect it ("linear" -> True, "jira" -> False)
-    2. If Jira is not enabled and Linear is configured -> Linear (True)
+    1. If explicit tracker is provided -> validate and respect it ("linear" -> True, "jira" -> False)
+    2. If Jira is not enabled and Linear is configured -> validate and route to Linear (True)
     3. If Linear is not configured -> Jira (False)
-    4. If configured_tracker == "linear" -> Linear (True)
+    4. If configured_tracker == "linear" -> validate and route to Linear (True)
     5. If configured_tracker == "jira" -> Jira (False)
     6. In "both" mode:
        - If key matches Linear UUID pattern -> Linear (True)
        - If Jira is enabled and key matches configured Jira project prefix -> Jira (False)
-       - If key matches Linear team-key pattern -> Linear (True)
+       - If Linear is configured and key matches configured Linear team prefix -> Linear (True)
        - If Jira is not enabled -> Linear (True)
        - Otherwise, fail-loudly with ValueError on ambiguous key.
     """
     if tracker is not None:
         t = tracker.lower()
         if t == "linear":
-            if not _is_linear_key(key):
+            if not _is_linear_identifier(key):
                 raise ValueError(f"Invalid Linear issue key or identifier: {key!r}")
             return True
         if t == "jira":
+            if not _is_jira_identifier(key):
+                raise ValueError(f"Invalid Jira issue key: {key!r}")
             return False
 
     has_linear_key = bool(getattr(settings, "linear_api_key", None))
     jira_enabled = getattr(settings, "jira_enabled", False)
 
     if not jira_enabled and has_linear_key:
-        if not _is_linear_key(key):
+        if not _is_linear_identifier(key):
             raise ValueError(f"Invalid Linear issue key or identifier: {key!r}")
         return True
     if not has_linear_key:
@@ -278,7 +286,7 @@ def _should_use_linear(key: str, settings: Settings, tracker: str | None = None)
 
     configured_tracker = getattr(settings, "issue_tracker", "jira").lower()
     if configured_tracker == "linear":
-        if not _is_linear_key(key):
+        if not _is_linear_identifier(key):
             raise ValueError(f"Invalid Linear issue key or identifier: {key!r}")
         return True
     if configured_tracker == "jira":
@@ -292,12 +300,14 @@ def _should_use_linear(key: str, settings: Settings, tracker: str | None = None)
     if jira_enabled and jira_prefix and key.upper().startswith(f"{jira_prefix}-"):
         return False
 
+    linear_team = (getattr(settings, "linear_team_id", "") or "").upper()
+    if has_linear_key and linear_team and key.upper().startswith(f"{linear_team}-"):
+        return True
+
     if _LINEAR_KEY_RE.match(key):
         return True
 
     if not jira_enabled:
-        if not _is_linear_key(key):
-            raise ValueError(f"Invalid Linear issue key or identifier: {key!r}")
         return True
 
     log.error("orchestrator.tracker_routing_ambiguous", key=key)
