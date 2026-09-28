@@ -1006,7 +1006,7 @@ function renderActions() {
   $("#actions-body").innerHTML = table(rows, [
     ["Task", r => {
       const task = `<span class="${r.done ? "struck" : ""}">${esc(r.task)}</span>`;
-      const copyBtn = `<button type="button" class="copy-icon-btn" onclick="copyTaskText(this, '${esc(r.task).replace(/'/g, "\\'")}')" title="Copy deliverable description" aria-label="Copy deliverable"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg></button>`;
+      const copyBtn = `<button type="button" class="copy-icon-btn" onclick="copyTaskText(this)" data-task-text="${esc(r.task)}" title="Copy deliverable description" aria-label="Copy deliverable"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg></button>`;
       if (!r.parent_jira_key) return `<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:6px">${task}${copyBtn}</div>`;
       return `<div class="subtask"><span class="pill subtask-of">Sub-task of ` +
              `${esc(r.parent_jira_key)}</span><div style="display:flex;align-items:flex-start;justify-content:space-between;gap:6px">${task}${copyBtn}</div></div>`;
@@ -1757,7 +1757,9 @@ function copyCode(btn) {
   copyTextToClipboard(pre.textContent, btn, "Copied!");
 }
 
-function copyTaskText(btn, taskText) {
+function copyTaskText(btn) {
+  const taskText = btn?.dataset?.taskText || "";
+  if (!taskText) return;
   copyTextToClipboard(taskText, btn, "Copied!");
 }
 
