@@ -243,3 +243,60 @@ async def test_linear_webhook_bad_json(app) -> None:
         assert resp.json()["detail"] == "bad json"
 
     app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_linear_webhook_dev_mode_no_secret_bypasses_auth(app) -> None:
+    """Verify 3-way guard: dev mode (no secret, no gcp_project_id) logs warning and processes event."""
+    custom_settings = Settings(
+        llm_backend="fake",
+        linear_webhook_secret="",
+        gcp_project_id="",
+    )
+    app.dependency_overrides[settings_dep] = lambda: custom_settings
+
+    payload = {
+        "action": "update",
+        "type": "Issue",
+        "data": {
+            "id": "linear_uuid_local",
+            "identifier": "ENG-101",
+            "title": "Local Dev Issue",
+            "state": {"id": "state_done", "name": "Done", "type": "completed"},
+        },
+    }
+    raw_body = json.dumps(payload).encode("utf-8")
+
+    mock_update = AsyncMock(return_value=True)
+    with patch("meeting_notes.graph_client.update_action_linear_status_by_ref", mock_update):
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.post(
+                "/webhook/linear",
+                content=raw_body,
+                headers={"Content-Type": "application/json"},
+            )
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["status"] == "accepted"
+            assert data["issue"] == "ENG-101"
+            assert data["state"] == "Done"
+            assert data["done"] is True
+
+        mock_update.assert_awaited_once_with("ENG-101", "Done", True)
+
+    app.dependency_overrides.clear()
+
+
+def test_is_linear_state_done_classification() -> None:
+    """Verify state completion / cancellation classification helper."""
+    from api.routers.webhooks import is_linear_state_done
+
+    assert is_linear_state_done("Done", "completed") is True
+    assert is_linear_state_done("Canceled", "canceled") is True
+    assert is_linear_state_done("Cancelled", "cancelled") is True
+    assert is_linear_state_done("Closed") is True
+    assert is_linear_state_done("In Progress", "started") is False
+    assert is_linear_state_done("Backlog", "unstarted") is False
+    assert is_linear_state_done("Triage", "triage") is False
