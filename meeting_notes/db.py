@@ -71,6 +71,11 @@ CREATE TABLE IF NOT EXISTS watermarks (
     value       TEXT NOT NULL,
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Backward-compatibility migrations for existing tables created before DLQ columns
+ALTER TABLE staged_records ADD COLUMN IF NOT EXISTS attempts INT NOT NULL DEFAULT 0;
+ALTER TABLE staged_records ADD COLUMN IF NOT EXISTS last_error TEXT;
+ALTER TABLE staged_records ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending';
 """
 
 # Phase 11 (ADR-020): the dev agent's own run tracking. One `state` column,
@@ -237,12 +242,6 @@ SELECT
 FROM staged_records
 """
 
-_ADD_DLQ_COLUMNS_SQL = """
-ALTER TABLE staged_records ADD COLUMN IF NOT EXISTS attempts INT NOT NULL DEFAULT 0;
-ALTER TABLE staged_records ADD COLUMN IF NOT EXISTS last_error TEXT;
-ALTER TABLE staged_records ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending';
-"""
-
 _LIST_RECENT_DEV_AGENT_RUNS_SQL = "SELECT * FROM dev_agent_runs ORDER BY created_at DESC LIMIT $1"
 
 
@@ -323,7 +322,6 @@ async def apply_migrations(pool: asyncpg.Pool | None = None) -> None:
     pool = pool or await get_pool()
     async with pool.acquire() as conn:
         await conn.execute(SCHEMA_SQL)
-        await conn.execute(_ADD_DLQ_COLUMNS_SQL)
         await conn.execute(DEV_AGENT_SCHEMA_SQL)
     log.info("db.migrations_applied")
 
