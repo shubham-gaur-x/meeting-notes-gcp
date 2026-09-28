@@ -8,21 +8,11 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from api.deps import principal
+from api.deps import principal, require_admin
 from meeting_notes import db
-from meeting_notes.access_control import ADMIN, Principal
+from meeting_notes.access_control import Principal
 
 router = APIRouter(prefix="/pipeline", tags=["pipeline"])
-
-
-async def require_admin(user: Principal = Depends(principal)) -> Principal:
-    """Ensure the caller has administrative role."""
-    if user.role != ADMIN:
-        raise HTTPException(
-            status_code=403,
-            detail="Forbidden: administrative role required",
-        )
-    return user
 
 
 class ReplayRequest(BaseModel):

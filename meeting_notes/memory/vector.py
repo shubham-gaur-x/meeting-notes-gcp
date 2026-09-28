@@ -163,6 +163,7 @@ async def _embed_pending(
             chunk_count = 0
             for row, vector in zip(chunk, vectors, strict=False):
                 if vector is None:
+                    log.warning("vector.row_embedding_skipped", id=row.get("id"))
                     continue
                 try:
                     async with driver.session() as session:
@@ -173,7 +174,16 @@ async def _embed_pending(
             return chunk_count
 
         chunk_counts = await asyncio.gather(*(process_batch_chunk(c) for c in chunks))
-        return sum(chunk_counts)
+        total_embedded = sum(chunk_counts)
+        if total_embedded < len(pending):
+            log.warning(
+                "vector.partial_embeddings_saved",
+                meeting_id=meeting_id,
+                total_pending=len(pending),
+                embedded=total_embedded,
+                failed=len(pending) - total_embedded,
+            )
+        return total_embedded
 
     async def embed_one(row: dict[str, Any]) -> int:
         async with semaphore:
