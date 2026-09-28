@@ -28,7 +28,7 @@ from typing import Any
 import asyncpg
 import structlog
 
-from meeting_notes.config import Settings, get_settings
+from meeting_notes.config import DEFAULT_PIPELINE_MAX_ATTEMPTS, Settings, get_settings
 from meeting_notes.dev_agent.lifecycle import TERMINAL_STATES
 from meeting_notes.dev_agent.models import DevAgentRun
 from meeting_notes.models import SourceType, StagedRecord
@@ -352,7 +352,7 @@ async def stage_record(
 
 
 async def claim_batch(
-    limit: int, max_attempts: int = 3, pool: asyncpg.Pool | None = None
+    limit: int, max_attempts: int = DEFAULT_PIPELINE_MAX_ATTEMPTS, pool: asyncpg.Pool | None = None
 ) -> list[StagedRecord]:
     """Claim up to `limit` unprocessed records (ADR-006) with attempts < max_attempts.
 
@@ -440,7 +440,7 @@ async def mark_processed(record_id: str, pool: asyncpg.Pool | None = None) -> No
 async def record_drain_failure(
     record_id: str,
     error: str,
-    max_attempts: int = 5,
+    max_attempts: int = DEFAULT_PIPELINE_MAX_ATTEMPTS,
     pool: asyncpg.Pool | None = None,
 ) -> tuple[int, bool, str]:
     """Record a drain failure for a staged record, incrementing its attempt counter.

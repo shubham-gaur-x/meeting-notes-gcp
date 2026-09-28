@@ -17,6 +17,7 @@ from typing import Any
 
 import structlog
 
+from meeting_notes.config import DEFAULT_PIPELINE_MAX_ATTEMPTS
 from meeting_notes.models import StagedRecord
 from meeting_notes.pipeline import adapter_for
 
@@ -43,7 +44,7 @@ async def _default_sync_jira(payload: dict[str, Any], *, record_id: str) -> bool
 
 
 async def _default_record_failure(
-    record_id: str, error: str, max_attempts: int = 3
+    record_id: str, error: str, max_attempts: int = DEFAULT_PIPELINE_MAX_ATTEMPTS
 ) -> tuple[int, bool, str]:
     from meeting_notes import db
 
@@ -57,7 +58,7 @@ async def drain_batch(
     sync_jira: Any = None,
     record_failure: Any = None,
     concurrency_limit: int = 5,
-    max_attempts: int = 3,
+    max_attempts: int = DEFAULT_PIPELINE_MAX_ATTEMPTS,
 ) -> DrainResult:
     """Route and process every record in a claimed batch with bounded concurrency."""
     process = process or _default_process
