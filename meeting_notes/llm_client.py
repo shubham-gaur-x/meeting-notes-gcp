@@ -353,6 +353,15 @@ async def chat_json(
     return parsed
 
 
+def _vertex_predict_url(settings: Settings) -> str:
+    model = settings.vertex_embedding_model
+    location, project = settings.vertex_location, settings.gcp_project_id
+    return (
+        f"https://{_vertex_host(location)}/v1/projects/{project}"
+        f"/locations/{location}/publishers/google/models/{model}:predict"
+    )
+
+
 async def embed(
     text: str,
     *,
@@ -388,12 +397,7 @@ async def embed(
             # at any non-native dimension (ADR-027).
             vector = vector[:dimension]
     elif backend == "vertex":
-        model = settings.vertex_embedding_model
-        location, project = settings.vertex_location, settings.gcp_project_id
-        url = (
-            f"https://{_vertex_host(location)}/v1/projects/{project}"
-            f"/locations/{location}/publishers/google/models/{model}:predict"
-        )
+        url = _vertex_predict_url(settings)
         payload = {"instances": [{"content": text}], "parameters": {"outputDimensionality": dimension}}
         headers = _vertex_auth_header() if transport is _default_transport else {}
         body = await _post(url, payload, headers, transport)
@@ -446,12 +450,7 @@ async def embed_batch(
     transport = transport or _default_transport
 
     if backend == "vertex":
-        model = settings.vertex_embedding_model
-        location, project = settings.vertex_location, settings.gcp_project_id
-        url = (
-            f"https://{_vertex_host(location)}/v1/projects/{project}"
-            f"/locations/{location}/publishers/google/models/{model}:predict"
-        )
+        url = _vertex_predict_url(settings)
         results: list[list[float] | None] = []
         chunk_size = DEFAULT_EMBEDDING_BATCH_CHUNK_SIZE
         for i in range(0, len(texts), chunk_size):

@@ -692,21 +692,175 @@ async def test_drain_batch_record_failure_exception_resilience() -> None:
 
 
 @pytest.mark.asyncio
-async def test_mark_processed_clears_last_error_query() -> None:
-    """Verify _MARK_PROCESSED_SQL resets last_error to NULL upon successful processing."""
-    from meeting_notes.db import _MARK_PROCESSED_SQL
+async def test_record_drain_failure_quarantine_boundary() -> None:
+    """Verify db.record_drain_failure transitions to dead_letter at exact max_attempts boundary."""
+    from meeting_notes import db
 
-    assert "last_error = NULL" in _MARK_PROCESSED_SQL
-    assert "status = 'processed'" in _MARK_PROCESSED_SQL
+    class FakeConn:
+        async def fetchrow(self, query: str, *args: Any) -> dict[str, Any]:
+            record_id, err, max_att = args
+            return {"attempts": 3, "processed": True, "status": "dead_letter"}
+
+    class FakePool:
+        def acquire(self) -> Any:
+            class _Ctx:
+                async def __aenter__(self) -> FakeConn:
+                    return FakeConn()
+
+                async def __aexit__(self, *exc: Any) -> bool:
+                    return False
+
+            return _Ctx()
+
+    attempts, processed, status = await db.record_drain_failure(
+        "11111111-1111-1111-1111-111111111111",
+        "Poison pill payload",
+        max_attempts=3,
+        pool=FakePool(),  # type: ignore[arg-type]
+    )
+
+    assert attempts == 3
+    assert processed is True
+    assert status == "dead_letter"
 
 
 @pytest.mark.asyncio
-async def test_claim_batch_excludes_dead_letter_status_query() -> None:
-    """Verify CLAIM_SQL explicitly filters out dead_letter status to decouple from processed flag."""
-    from meeting_notes.db import CLAIM_SQL
+async def test_record_drain_failure_retry_below_boundary() -> None:
+    """Verify db.record_drain_failure keeps status as retry below max_attempts."""
+    from meeting_notes import db
 
-    assert "coalesce(status, 'pending') != 'dead_letter'" in CLAIM_SQL
-    assert "coalesce(attempts, 0) < $2" in CLAIM_SQL
+    class FakeConn:
+        async def fetchrow(self, query: str, *args: Any) -> dict[str, Any]:
+            return {"attempts": 1, "processed": False, "status": "retry"}
+
+    class FakePool:
+        def acquire(self) -> Any:
+            class _Ctx:
+                async def __aenter__(self) -> FakeConn:
+                    return FakeConn()
+
+                async def __aexit__(self, *exc: Any) -> bool:
+                    return False
+
+            return _Ctx()
+
+    attempts, processed, status = await db.record_drain_failure(
+        "11111111-1111-1111-1111-111111111111",
+        "Transient network blip",
+        max_attempts=3,
+        pool=FakePool(),  # type: ignore[arg-type]
+    )
+
+    assert attempts == 1
+    assert processed is False
+    assert status == "retry"
+
+
+@pytest.mark.asyncio
+async def test_mark_processed_db_execution() -> None:
+    """Verify db.mark_processed executes _MARK_PROCESSED_SQL with target record id."""
+    from meeting_notes import db
+
+    executed: list[tuple[str, Any]] = []
+
+    class FakeConn:
+        async def execute(self, query: str, *args: Any) -> str:
+            executed.append((query, args))
+            return "UPDATE 1"
+
+    class FakePool:
+        def acquire(self) -> Any:
+            class _Ctx:
+                async def __aenter__(self) -> FakeConn:
+                    return FakeConn()
+
+                async def __aexit__(self, *exc: Any) -> bool:
+                    return False
+
+            return _Ctx()
+
+    rec_id = "11111111-1111-1111-1111-111111111111"
+    await db.mark_processed(rec_id, pool=FakePool())  # type: ignore[arg-type]
+
+    assert len(executed) == 1
+    assert executed[0][0] == db._MARK_PROCESSED_SQL
+    assert executed[0][1] == (rec_id,)
+    assert "last_error = NULL" in db._MARK_PROCESSED_SQL
+
+
+@pytest.mark.asyncio
+async def test_claim_batch_excludes_dead_letter_in_query() -> None:
+    """Verify claim_batch passes limit and max_attempts to CLAIM_SQL with dead_letter exclusion."""
+    from meeting_notes import db
+
+    executed: list[tuple[str, Any]] = []
+
+    class FakeConn:
+        def transaction(self) -> Any:
+            class _Tx:
+                async def __aenter__(self) -> None:
+                    pass
+
+                async def __aexit__(self, *exc: Any) -> bool:
+                    return False
+
+            return _Tx()
+
+        async def fetch(self, query: str, *args: Any) -> list[dict[str, Any]]:
+            executed.append((query, args))
+            return []
+
+    class FakePool:
+        def acquire(self) -> Any:
+            class _Ctx:
+                async def __aenter__(self) -> FakeConn:
+                    return FakeConn()
+
+                async def __aexit__(self, *exc: Any) -> bool:
+                    return False
+
+            return _Ctx()
+
+    records = await db.claim_batch(limit=25, max_attempts=4, pool=FakePool())  # type: ignore[arg-type]
+    assert records == []
+    assert len(executed) == 1
+    assert executed[0][0] == db.CLAIM_SQL
+    assert executed[0][1] == (25, 4)
+    assert "coalesce(status, 'pending') != 'dead_letter'" in db.CLAIM_SQL
+
+
+def test_tracker_routing_with_jira_disabled() -> None:
+    """Verify tracker routing routes to Linear or raises when Jira is disabled."""
+    from meeting_notes.dev_agent import orchestrator
+
+    settings_linear_only = Settings(
+        issue_tracker="both",
+        linear_api_key="linear-secret",
+        jira_enabled=False,
+    )
+    assert orchestrator._should_use_linear("ENG-101", settings_linear_only) is True
+    assert orchestrator._should_use_linear("ANY-UNKNOWN", settings_linear_only) is True
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_operations_raise_when_jira_disabled_and_no_linear() -> None:
+    """Verify orchestrator operations loudly raise when Jira is disabled and Linear is unavailable."""
+    from meeting_notes.dev_agent import orchestrator
+
+    settings_no_trackers = Settings(
+        issue_tracker="jira",
+        jira_enabled=False,
+        linear_api_key="",
+    )
+
+    with pytest.raises(RuntimeError, match="Jira is disabled and Linear is not configured"):
+        await orchestrator._default_transition_issue("SCRUM-1", "Done", settings=settings_no_trackers)
+
+    with pytest.raises(RuntimeError, match="Jira is disabled and Linear is not configured"):
+        await orchestrator._default_add_comment("SCRUM-1", "Hello", settings=settings_no_trackers)
+
+    with pytest.raises(RuntimeError, match="Jira is disabled and Linear is not configured"):
+        await orchestrator._default_get_issue_detail("SCRUM-1", settings=settings_no_trackers)
 
 
 @pytest.mark.asyncio
