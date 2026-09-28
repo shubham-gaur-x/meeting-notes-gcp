@@ -230,6 +230,76 @@ async def test_vector_embed_pending_bounds_concurrency_with_semaphore_in_batch_m
 
 
 @pytest.mark.asyncio
+async def test_vector_embed_pending_multi_batch_concurrency_ceiling() -> None:
+    """Verify shared semaphore enforces concurrency ceiling across multiple concurrent batch operations."""
+    sem = asyncio.Semaphore(2)
+    active = 0
+    peak = 0
+    lock = asyncio.Lock()
+
+    async def fake_batch_embed(texts: list[str], **kwargs: Any) -> list[list[float] | None]:
+        nonlocal active, peak
+        async with lock:
+            active += 1
+            if active > peak:
+                peak = active
+        await asyncio.sleep(0.02)
+        async with lock:
+            active -= 1
+        return [[0.1] * 768 for _ in texts]
+
+    class _Session:
+        async def run(self, cypher: str, **kwargs: Any) -> Any:
+            class _Result:
+                def __aiter__(self):
+                    self._it = iter([{"id": f"act-{i}", "task": f"Task {i}"} for i in range(5)])
+                    return self
+
+                async def __anext__(self):
+                    try:
+                        return next(self._it)
+                    except StopIteration:
+                        raise StopAsyncIteration from None
+
+            return _Result() if "RETURN" in cypher else None
+
+        async def __aenter__(self) -> _Session:
+            return self
+
+        async def __aexit__(self, *exc: Any) -> bool:
+            return False
+
+    class _Driver:
+        def session(self) -> _Session:
+            return _Session()
+
+    driver = _Driver()
+    settings = Settings(llm_backend="fake", embedding_concurrency=2)
+
+    # Launch 6 concurrent _embed_pending calls sharing the same semaphore of capacity 2
+    tasks = [
+        vector._embed_pending(
+            "MATCH ... RETURN a.id AS id, a.task AS task",
+            "MATCH ... SET a.embedding = $embedding",
+            f"meet-{i}",
+            "task",
+            driver=driver,
+            settings=settings,
+            embed=None,
+            semaphore=sem,
+            embed_batch_fn=fake_batch_embed,
+        )
+        for i in range(6)
+    ]
+    results = await asyncio.gather(*tasks)
+
+    assert len(results) == 6
+    assert all(count == 5 for count in results)
+    assert peak <= 2, f"Peak concurrent batch operations ({peak}) exceeded concurrency ceiling of 2"
+    assert peak > 1, f"Expected concurrency of 2, but peak was only {peak}"
+
+
+@pytest.mark.asyncio
 async def test_find_sprint_candidates_picks_up_linear_tickets(monkeypatch: pytest.MonkeyPatch) -> None:
     from meeting_notes.dev_agent import orchestrator
 
