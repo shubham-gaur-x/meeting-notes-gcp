@@ -701,7 +701,9 @@ async def test_drain_batch_record_failure_exception_resilience() -> None:
     async def failing_process(record: StagedRecord, adapter: Any) -> None:
         raise ValueError("Bad record")
 
-    async def failing_record_failure(record_id: str, error: str) -> tuple[int, bool, str]:
+    async def failing_record_failure(
+        record_id: str, error: str, max_attempts: int = 3
+    ) -> tuple[int, bool, str]:
         raise RuntimeError("Postgres connection dropped")
 
     record = _make_staged("r-crash")

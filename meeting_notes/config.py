@@ -188,3 +188,10 @@ def get_settings() -> Settings:
     so they never depend on the ambient environment or the cache.
     """
     return Settings()
+
+
+def resolve_max_attempts(max_attempts: int | None = None, settings: Settings | None = None) -> int:
+    """Single authoritative resolution for pipeline max attempts."""
+    if max_attempts is not None:
+        return max_attempts
+    return (settings or get_settings()).pipeline_max_attempts
