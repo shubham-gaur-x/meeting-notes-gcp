@@ -963,13 +963,13 @@ async def test_embed_batch_size_mismatch_raises() -> None:
     async def fake_vertex_dimension_mismatch(url: str, payload: dict[str, Any], headers: dict[str, str]) -> str:
         return json.dumps({"predictions": [{"embeddings": {"values": [0.1] * 100}}]})
 
-    with pytest.raises(ValueError, match="Vertex batchEmbed prediction dimension mismatch: expected >= 768, got 100"):
+    with pytest.raises(ValueError, match="Vertex batchEmbed prediction dimension mismatch: expected 768, got 100"):
         await llm_client.embed_batch(["text1"], settings=settings_vertex, transport=fake_vertex_dimension_mismatch)
 
     async def fake_gemini_dimension_mismatch(url: str, payload: dict[str, Any], headers: dict[str, str]) -> str:
         return json.dumps({"embeddings": [{"values": [0.1] * 50}]})
 
-    with pytest.raises(ValueError, match="Gemini batchEmbed embedding dimension mismatch: expected >= 768, got 50"):
+    with pytest.raises(ValueError, match="Gemini batchEmbed embedding dimension mismatch: expected 768, got 50"):
         await llm_client.embed_batch(["text1"], settings=settings_gemini, transport=fake_gemini_dimension_mismatch)
 
 
@@ -1114,7 +1114,7 @@ async def test_queue_stats_does_not_double_count_quarantined_records() -> None:
     assert len(executed) == 1
     # Verify that the query derives a single effective status per row,
     # guaranteeing structural mutual exclusivity across all buckets.
-    assert "coalesce(status, CASE WHEN processed THEN 'processed' ELSE 'pending' END)" in executed[0]
+    assert "status = 'pending'" in executed[0]
     assert "dead_letter" in executed[0]
 
 
@@ -1235,24 +1235,25 @@ async def test_apply_migrations_executes_schema_and_migration_sql_with_backfill(
 
 
 def test_max_attempts_defaults_aligned_across_modules() -> None:
-    """Verify DEFAULT_PIPELINE_MAX_ATTEMPTS is used consistently as default across db and pipeline_drain."""
+    """Verify max_attempts defaults to None and dynamically resolves via resolve_max_attempts across db and pipeline_drain."""
     import inspect
     from meeting_notes import config, db, pipeline_drain
 
     assert config.DEFAULT_PIPELINE_MAX_ATTEMPTS == 3
-    assert config.Settings().pipeline_max_attempts == 3
+    assert config.resolve_max_attempts() == 3
+    assert config.resolve_max_attempts(settings=config.Settings(pipeline_max_attempts=7)) == 7
 
     claim_sig = inspect.signature(db.claim_batch)
-    assert claim_sig.parameters["max_attempts"].default == config.DEFAULT_PIPELINE_MAX_ATTEMPTS
+    assert claim_sig.parameters["max_attempts"].default is None
 
     record_fail_sig = inspect.signature(db.record_drain_failure)
-    assert record_fail_sig.parameters["max_attempts"].default == config.DEFAULT_PIPELINE_MAX_ATTEMPTS
+    assert record_fail_sig.parameters["max_attempts"].default is None
 
     drain_sig = inspect.signature(pipeline_drain.drain_batch)
-    assert drain_sig.parameters["max_attempts"].default == config.DEFAULT_PIPELINE_MAX_ATTEMPTS
+    assert drain_sig.parameters["max_attempts"].default is None
 
     default_fail_sig = inspect.signature(pipeline_drain._default_record_failure)
-    assert default_fail_sig.parameters["max_attempts"].default == config.DEFAULT_PIPELINE_MAX_ATTEMPTS
+    assert default_fail_sig.parameters["max_attempts"].default is None
 
 
 

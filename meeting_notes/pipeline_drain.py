@@ -17,7 +17,7 @@ from typing import Any
 
 import structlog
 
-from meeting_notes.config import DEFAULT_PIPELINE_MAX_ATTEMPTS
+from meeting_notes.config import resolve_max_attempts
 from meeting_notes.models import StagedRecord
 from meeting_notes.pipeline import adapter_for
 
@@ -44,7 +44,7 @@ async def _default_sync_jira(payload: dict[str, Any], *, record_id: str) -> bool
 
 
 async def _default_record_failure(
-    record_id: str, error: str, max_attempts: int = DEFAULT_PIPELINE_MAX_ATTEMPTS
+    record_id: str, error: str, max_attempts: int | None = None
 ) -> tuple[int, bool, str]:
     from meeting_notes import db
 
@@ -58,12 +58,13 @@ async def drain_batch(
     sync_jira: Any = None,
     record_failure: Any = None,
     concurrency_limit: int = 5,
-    max_attempts: int = DEFAULT_PIPELINE_MAX_ATTEMPTS,
+    max_attempts: int | None = None,
 ) -> DrainResult:
     """Route and process every record in a claimed batch with bounded concurrency."""
     process = process or _default_process
     sync_jira = sync_jira or _default_sync_jira
     record_failure = record_failure or _default_record_failure
+    eff_max = resolve_max_attempts(max_attempts)
 
     sem = asyncio.Semaphore(max(1, concurrency_limit))
     result = DrainResult()
@@ -88,7 +89,7 @@ async def drain_batch(
                 )
                 try:
                     await record_failure(
-                        record.id, str(exc), max_attempts=max_attempts
+                        record.id, str(exc), max_attempts=eff_max
                     )
                 except Exception as rec_exc:
                     log.error(

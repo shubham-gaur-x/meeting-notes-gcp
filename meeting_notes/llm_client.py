@@ -469,12 +469,12 @@ async def embed_batch(
                 )
             for pred in preds:
                 v = pred.get("embeddings", {}).get("values", [])
-                if len(v) < dimension:
+                if len(v) != dimension:
                     log.error("llm.vertex_batch_embed_dimension_mismatch", expected=dimension, got=len(v))
                     raise ValueError(
-                        f"Vertex batchEmbed prediction dimension mismatch: expected >= {dimension}, got {len(v)}"
+                        f"Vertex batchEmbed prediction dimension mismatch: expected {dimension}, got {len(v)}"
                     )
-                results.append(list(v[:dimension]))
+                results.append(list(v))
         return results
 
     if backend == "gemini":
@@ -502,12 +502,12 @@ async def embed_batch(
                 )
             for emb in embeddings:
                 v = emb.get("values", [])
-                if len(v) < dimension:
+                if len(v) != dimension:
                     log.error("llm.gemini_batch_embed_dimension_mismatch", expected=dimension, got=len(v))
                     raise ValueError(
-                        f"Gemini batchEmbed embedding dimension mismatch: expected >= {dimension}, got {len(v)}"
+                        f"Gemini batchEmbed embedding dimension mismatch: expected {dimension}, got {len(v)}"
                     )
-                results_gemini.append(list(v[:dimension]))
+                results_gemini.append(list(v))
         return results_gemini
 
     return [await embed(t, settings=settings, transport=transport) for t in texts]
