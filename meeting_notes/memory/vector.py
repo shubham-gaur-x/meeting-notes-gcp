@@ -156,12 +156,16 @@ async def _embed_pending(
                 texts = [r[text_field] for r in chunk]
                 async with semaphore:
                     vectors = await embed_batch_texts(texts, settings=settings, embed_batch_fn=embed_batch_fn)
+                if len(vectors) != len(chunk):
+                    raise RuntimeError(
+                        f"Embedding batch size mismatch: expected {len(chunk)} vectors, got {len(vectors)}"
+                    )
             except Exception as exc:  # noqa: BLE001 - per-chunk embedding resilience
                 log.warning("vector.batch_chunk_failed", chunk_size=len(chunk), error=str(exc))
                 return 0
 
             chunk_count = 0
-            for row, vector in zip(chunk, vectors, strict=False):
+            for row, vector in zip(chunk, vectors, strict=True):
                 if vector is None:
                     log.warning("vector.row_embedding_skipped", id=row.get("id"))
                     continue

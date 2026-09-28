@@ -271,17 +271,20 @@ def _should_use_linear(key: str, settings: Settings, tracker: str | None = None)
 
     Precedence:
     1. If explicit tracker is provided -> validate and respect it ("linear" -> True, "jira" -> False)
-    2. If Jira is not enabled and Linear is configured -> validate and route to Linear (True)
-    3. If Linear is not configured -> Jira (False)
-    4. If configured_tracker == "linear" -> validate and route to Linear (True)
-    5. If configured_tracker == "jira" -> Jira (False)
-    6. In "both" mode:
-       - If key matches Linear UUID pattern -> Linear (True)
-       - If Jira is enabled and key matches configured Jira project prefix -> Jira (False)
-       - If Linear is configured and key matches configured Linear team prefix -> Linear (True)
-       - Otherwise, fail-loudly with ValueError on ambiguous key.
+    2. If configured_tracker == "linear" -> validate Linear key presence and key format (True)
+    3. If configured_tracker == "jira" -> validate Jira enabled status and key format (False)
+    4. In "both" mode or unconfigured:
+       - If Jira disabled and Linear key configured -> Linear (True)
+       - If Linear key missing and Jira enabled -> Jira (False)
+       - If neither configured -> raise RuntimeError
+       - When both configured:
+         - Reject misconfiguration if jira_project_key == linear_team_id
+         - If key matches Linear UUID pattern -> Linear (True)
+         - If key matches configured Jira project prefix -> Jira (False)
+         - If key matches configured Linear team prefix -> Linear (True)
+         - Otherwise, fail-loudly with ValueError on ambiguous key.
     """
-    if tracker is not None:
+    if tracker is not None and tracker.lower() in ("linear", "jira"):
         t = tracker.lower()
         if t == "linear":
             validate_tracker_key(key, tracker="linear")
@@ -292,30 +295,45 @@ def _should_use_linear(key: str, settings: Settings, tracker: str | None = None)
 
     has_linear_key = bool(getattr(settings, "linear_api_key", None))
     jira_enabled = getattr(settings, "jira_enabled", False)
+    configured_tracker = getattr(settings, "issue_tracker", "jira").lower()
 
+    if configured_tracker == "linear":
+        if not has_linear_key:
+            raise RuntimeError("Linear tracker configured but linear_api_key is not set")
+        validate_tracker_key(key, tracker="linear")
+        return True
+
+    if configured_tracker == "jira":
+        if not jira_enabled:
+            raise RuntimeError(f"Cannot route ticket {key}: Jira is disabled and Linear is not configured/applicable")
+        validate_tracker_key(key, tracker="jira")
+        return False
+
+    # In "both" mode or dynamic negotiation:
     if not jira_enabled and has_linear_key:
         validate_tracker_key(key, tracker="linear")
         return True
-    if not has_linear_key:
+    if not has_linear_key and jira_enabled:
+        validate_tracker_key(key, tracker="jira")
         return False
+    if not jira_enabled and not has_linear_key:
+        raise RuntimeError(f"Cannot route ticket {key}: Jira is disabled and Linear is not configured/applicable")
 
-    configured_tracker = getattr(settings, "issue_tracker", "jira").lower()
-    if configured_tracker == "linear":
-        validate_tracker_key(key, tracker="linear")
-        return True
-    if configured_tracker == "jira":
-        return False
+    # Both Jira and Linear are enabled:
+    jira_prefix = (getattr(settings, "jira_project_key", "") or "").upper()
+    linear_team = (getattr(settings, "linear_team_id", "") or "").upper()
+    if jira_prefix and linear_team and jira_prefix == linear_team:
+        raise ValueError(
+            f"Ambiguous tracker configuration: both Jira and Linear share prefix {jira_prefix!r}"
+        )
 
-    # In "both" mode:
     if _UUID_RE.match(key):
         return True
 
-    jira_prefix = (getattr(settings, "jira_project_key", "") or "").upper()
-    if jira_enabled and jira_prefix and key.upper().startswith(f"{jira_prefix}-"):
+    if jira_prefix and key.upper().startswith(f"{jira_prefix}-"):
         return False
 
-    linear_team = (getattr(settings, "linear_team_id", "") or "").upper()
-    if has_linear_key and linear_team and key.upper().startswith(f"{linear_team}-"):
+    if linear_team and key.upper().startswith(f"{linear_team}-"):
         return True
 
     log.error("orchestrator.tracker_routing_ambiguous", key=key)

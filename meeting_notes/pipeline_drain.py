@@ -58,22 +58,13 @@ async def drain_batch(
     record_failure: Any = None,
     concurrency_limit: int = 5,
     max_attempts: int = 3,
-    settings: Any = None,
 ) -> DrainResult:
     """Route and process every record in a claimed batch with bounded concurrency."""
     process = process or _default_process
     sync_jira = sync_jira or _default_sync_jira
     record_failure = record_failure or _default_record_failure
 
-    limit = concurrency_limit
-    eff_max_attempts = max_attempts
-    if settings is not None:
-        if hasattr(settings, "drain_concurrency"):
-            limit = getattr(settings, "drain_concurrency")
-        if hasattr(settings, "pipeline_max_attempts"):
-            eff_max_attempts = getattr(settings, "pipeline_max_attempts")
-
-    sem = asyncio.Semaphore(max(1, limit))
+    sem = asyncio.Semaphore(max(1, concurrency_limit))
     result = DrainResult()
     lock = asyncio.Lock()
 
@@ -96,7 +87,7 @@ async def drain_batch(
                 )
                 try:
                     await record_failure(
-                        record.id, str(exc), max_attempts=eff_max_attempts
+                        record.id, str(exc), max_attempts=max_attempts
                     )
                 except Exception as rec_exc:
                     log.error(
