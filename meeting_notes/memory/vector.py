@@ -145,17 +145,21 @@ async def _embed_pending(
         chunks = [pending[i : i + chunk_size] for i in range(0, len(pending), chunk_size)]
 
         async def process_batch_chunk(chunk: list[dict[str, Any]]) -> int:
-            texts = [r[text_field] for r in chunk]
-            async with semaphore:
-                vectors = await embed_batch_texts(texts, settings=settings, embed_batch_fn=embed_batch_fn)
+            try:
+                texts = [r[text_field] for r in chunk]
+                async with semaphore:
+                    vectors = await embed_batch_texts(texts, settings=settings, embed_batch_fn=embed_batch_fn)
 
-            chunk_count = 0
-            async with driver.session() as session:
-                for row, vector in zip(chunk, vectors, strict=False):
-                    if vector is not None:
-                        await session.run(write_cypher, id=row["id"], embedding=vector, now=now)
-                        chunk_count += 1
-            return chunk_count
+                chunk_count = 0
+                async with driver.session() as session:
+                    for row, vector in zip(chunk, vectors, strict=False):
+                        if vector is not None:
+                            await session.run(write_cypher, id=row["id"], embedding=vector, now=now)
+                            chunk_count += 1
+                return chunk_count
+            except Exception as exc:  # noqa: BLE001 - per-chunk resilience
+                log.warning("vector.batch_chunk_failed", chunk_size=len(chunk), error=str(exc))
+                return 0
 
         chunk_counts = await asyncio.gather(*(process_batch_chunk(c) for c in chunks))
         return sum(chunk_counts)
