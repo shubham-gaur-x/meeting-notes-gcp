@@ -462,6 +462,11 @@ async def embed_batch(
             headers = _vertex_auth_header() if transport is _default_transport else {}
             body = await _post(url, payload, headers, transport)
             preds = json.loads(body).get("predictions", [])
+            if len(preds) != len(chunk):
+                log.error("llm.vertex_batch_embed_size_mismatch", expected=len(chunk), got=len(preds))
+                raise ValueError(
+                    f"Vertex batchEmbed returned {len(preds)} predictions for {len(chunk)} inputs"
+                )
             for pred in preds:
                 v = pred.get("embeddings", {}).get("values", [])
                 results.append(list(v[:dimension]) if len(v) >= dimension else None)
@@ -486,6 +491,11 @@ async def embed_batch(
             }
             body = await _post(url, payload, {"x-goog-api-key": settings.gemini_api_key}, transport)
             embeddings = json.loads(body).get("embeddings", [])
+            if len(embeddings) != len(chunk):
+                log.error("llm.gemini_batch_embed_size_mismatch", expected=len(chunk), got=len(embeddings))
+                raise ValueError(
+                    f"Gemini batchEmbed returned {len(embeddings)} embeddings for {len(chunk)} inputs"
+                )
             for emb in embeddings:
                 v = emb.get("values", [])
                 results_gemini.append(list(v[:dimension]) if len(v) >= dimension else None)
