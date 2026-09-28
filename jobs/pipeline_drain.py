@@ -7,7 +7,7 @@ Thin by design (CLAUDE.md): all logic lives in meeting_notes/pipeline_drain.py.
 import asyncio
 
 from meeting_notes import db
-from meeting_notes.config import get_settings
+from meeting_notes.config import get_settings, resolve_max_attempts
 from meeting_notes.pipeline_drain import drain_batch
 
 
@@ -17,7 +17,7 @@ def main() -> int:
         try:
             records = await db.claim_batch(
                 settings.pipeline_batch_size,
-                max_attempts=settings.pipeline_max_attempts,
+                max_attempts=resolve_max_attempts(settings=settings),
             )
             if not records:
                 print("  pipeline_drain: nothing to claim")
