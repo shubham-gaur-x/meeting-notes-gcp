@@ -920,6 +920,90 @@ def test_one_on_one_meeting_classification_keywords(keyword: str) -> None:
     assert score > baseline_score, f"Expected '{keyword}' to increase score over baseline {baseline_score}"
 
 
+async def test_push_self_only_pipeline_fails_closed_when_unconfigured() -> None:
+    """End-to-end verification that push_action_items rejects tickets when push_self_only is enabled
+    but no user identities are configured."""
+    from meeting_notes import jira_pusher
+
+    created_calls: list[dict] = []
+
+    async def create_issue(**kw):
+        created_calls.append(kw)
+        return "SCRUM-1"
+
+    settings = _jira_settings(
+        JIRA_ENABLED=True,
+        JIRA_PUSH_SELF_ONLY=True,
+        JIRA_USER_IDENTITIES="",
+        GOOGLE_WORKSPACE_USER="",
+        JIRA_EMAIL="",
+    )
+    meeting = _meeting(action_items=[
+        {"owner": "Alex Mercer", "task": "Implement critical core fix", "confidence": 0.95}
+    ])
+    keys = await jira_pusher.push_action_items(
+        meeting.action_items,
+        meeting,
+        "src-1",
+        settings=settings,
+        create_issue=create_issue,
+        get_active_sprint=lambda *a, **kw: None,
+    )
+    assert keys == []
+    assert created_calls == [], "Unconfigured self-only gate must fail closed and reject issue creation"
+
+
+async def test_get_all_actions_deterministic_join_deduplication() -> None:
+    """Verifies that get_all_actions sends deterministic join ordering Cypher and handles results."""
+    from meeting_notes.graph_client import get_all_actions
+
+    executed_queries: list[str] = []
+
+    class FakeSession:
+        async def __aenter__(self) -> FakeSession:
+            return self
+
+        async def __aexit__(self, *args) -> None:
+            pass
+
+        async def run(self, query: str, **params) -> _FakeResult:
+            executed_queries.append(query)
+            return _FakeResult([
+                {
+                    "id": "act-1",
+                    "task": "Deduplicated action item",
+                    "owner": "Alex Mercer",
+                    "due": "2026-10-01",
+                    "created_at": "2026-09-28",
+                    "priority": "high",
+                    "jira_key": "SCRUM-1",
+                    "jira_status": "To Do",
+                    "done": False,
+                    "linear_id": None,
+                    "linear_identifier": None,
+                    "linear_url": None,
+                    "linear_state": None,
+                    "owner_email": "alex@example.com",
+                    "parent_id": None,
+                    "parent_task": None,
+                    "parent_jira_key": None,
+                }
+            ])
+
+    class FakeDriver:
+        def session(self) -> FakeSession:
+            return FakeSession()
+
+    actions = await get_all_actions(driver=FakeDriver())
+    assert len(actions) == 1
+    assert actions[0]["id"] == "act-1"
+    assert len(executed_queries) == 1
+    assert "ORDER BY coalesce(p.name, '') ASC, coalesce(parent.id, '') ASC" in executed_queries[0]
+    assert "head(collect(DISTINCT p)) AS p" in executed_queries[0]
+    assert "head(collect(DISTINCT parent)) AS parent" in executed_queries[0]
+
+
+
 # ─── jira_sync ─────────────────────────────────────────────────────────────────
 
 

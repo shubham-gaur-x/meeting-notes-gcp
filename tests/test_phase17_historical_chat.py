@@ -64,6 +64,15 @@ def test_memory_query_validation() -> None:
     assert len(q2.history or []) == 2
 
 
+def test_memory_query_validation_bounds_history_length() -> None:
+    from pydantic import ValidationError
+
+    # Exceeding max_length of 50 turns must fail validation
+    too_many_turns = [{"role": "user", "text": f"Q{i}"} for i in range(51)]
+    with pytest.raises(ValidationError):
+        MemoryQuery(question="Too long?", history=too_many_turns)
+
+
 @pytest.fixture
 def app() -> Any:
     return create_app()

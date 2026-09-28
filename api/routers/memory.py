@@ -20,7 +20,7 @@ router = APIRouter(prefix="/graph", tags=["memory"])
 
 class MemoryQuery(BaseModel):
     question: str = Field(min_length=1, max_length=4000)
-    history: list[dict[str, Any]] | None = Field(default=None)
+    history: list[dict[str, Any]] | None = Field(default=None, max_length=50)
 
 
 @router.get("/memory/suggested-questions")
