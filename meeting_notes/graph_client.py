@@ -1852,7 +1852,7 @@ async def add_meeting_attendee(
             MATCH (m:Meeting {id: $meeting_id})
             MERGE (p:Person {id: $person_id})
             ON CREATE SET p.name = $name, p.email = $email, p.created_at = datetime()
-            ON MATCH SET p.name = coalesce($name, p.name),
+            ON MATCH SET p.name = coalesce(p.name, $name),
                          p.email = CASE WHEN $email IS NOT NULL THEN $email ELSE p.email END
             MERGE (p)-[:ATTENDED]->(m)
             RETURN p.id AS person_id, p.name AS name, p.email AS email, m.id AS meeting_id

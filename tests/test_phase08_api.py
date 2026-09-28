@@ -2053,6 +2053,67 @@ def test_gitignore_protects_roster_secrets() -> None:
     assert "roster.json" in check_ignored.stdout
     assert "company_roster.json" in check_ignored.stdout
 
+    # Verify negation rule: *roster*.example.json is NOT ignored
+    check_example = subprocess.run(
+        ["git", "check-ignore", "roster.example.json", "company_roster.example.json"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+    )
+    assert check_example.returncode != 0
+    assert "roster.example.json" not in check_example.stdout
+
+
+def test_resolve_attendees_drops_junk_speakers_from_both_queues() -> None:
+    """Verify that resolve_attendees excludes junk placeholder speakers from both resolved and reviews."""
+    from meeting_notes.models import Attendee
+    from meeting_notes.person_resolver import Roster, resolve_attendees
+
+    attendees = [
+        Attendee(name="Speaker 1", role="attendee", email=None),
+        Attendee(name="Unknown", role="attendee", email=None),
+        Attendee(name="Alex Mercer", role="attendee", email="alex@example.com"),
+    ]
+    resolved, reviews = resolve_attendees(attendees, roster=Roster([]))
+    resolved_names = [r.name for r in resolved]
+    review_names = [r.name for r in reviews]
+
+    assert "Alex Mercer" in resolved_names
+    assert "Speaker 1" not in resolved_names
+    assert "Speaker 1" not in review_names
+    assert "Unknown" not in resolved_names
+    assert "Unknown" not in review_names
+
+
+@pytest.mark.asyncio
+async def test_add_meeting_attendee_coalesce_preserves_existing_name() -> None:
+    """Verify that add_meeting_attendee preserves existing Person name via coalesce(p.name, $name)."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from meeting_notes import graph_client
+
+    mock_driver = MagicMock()
+    mock_session = AsyncMock()
+    mock_driver.session.return_value.__aenter__.return_value = mock_session
+
+    executed_queries: list[str] = []
+
+    def record_run(query: str, **kwargs: Any) -> Any:
+        executed_queries.append(query)
+
+        class FakeResult:
+            def __aiter__(self):
+                async def gen():
+                    yield {"person_id": "p-1", "name": "Alex Mercer", "email": None, "meeting_id": "m-1"}
+                return gen()
+
+        return FakeResult()
+
+    mock_session.run = AsyncMock(side_effect=record_run)
+    await graph_client.add_meeting_attendee("m-1", "Al Mercer", None, driver=mock_driver)
+    merge_query = executed_queries[0]
+    assert "ON MATCH SET p.name = coalesce(p.name, $name)" in merge_query
+
 
 
 
