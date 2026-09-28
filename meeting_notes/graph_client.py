@@ -1748,7 +1748,7 @@ async def resolve_person_review(
             MERGE (p:Person {id: $person_id})
             ON CREATE SET p.name = $name, p.email = $email, p.created_at = datetime()
             ON MATCH SET p.name = coalesce(p.name, $name),
-                         p.email = $email
+                         p.email = CASE WHEN $email IS NOT NULL THEN $email ELSE p.email END
             MERGE (p)-[:ATTENDED]->(m)
             SET r.status = 'resolved'
             WITH m, p
@@ -1853,7 +1853,7 @@ async def add_meeting_attendee(
             MERGE (p:Person {id: $person_id})
             ON CREATE SET p.name = $name, p.email = $email, p.created_at = datetime()
             ON MATCH SET p.name = coalesce($name, p.name),
-                         p.email = $email
+                         p.email = CASE WHEN $email IS NOT NULL THEN $email ELSE p.email END
             MERGE (p)-[:ATTENDED]->(m)
             RETURN p.id AS person_id, p.name AS name, p.email AS email, m.id AS meeting_id
             """,

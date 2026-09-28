@@ -1619,10 +1619,10 @@ async def test_add_meeting_attendee_no_email_synthesis() -> None:
     assert result["person_id"] == expected_person_id
     assert result["email"] is None
 
-    # Verify query semantics: p.email = $email, no coalesce borrowing
+    # Verify query semantics: CASE WHEN guard preserves verified emails without borrowing
     assert len(executed_queries) == 1
     q = executed_queries[0]
-    assert "p.email = $email" in q
+    assert "CASE WHEN $email IS NOT NULL THEN $email ELSE p.email END" in q
     assert "coalesce($email, p.email)" not in q
 
     params = query_params[0]
@@ -1710,6 +1710,146 @@ async def test_add_attendee_endpoint_without_email(app: Any, monkeypatch: Any) -
     assert captured["meeting_id"] == "meet-789"
     assert captured["name"] == "Alex Mercer"
     assert captured["email"] is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_person_review_second_call_preserves_verified_email() -> None:
+    """Verify that a second resolve call with email=None preserves a previously verified email."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from meeting_notes import graph_client
+    from meeting_notes.utils import uuid5_id
+
+    mock_driver = MagicMock()
+    mock_session = AsyncMock()
+    mock_driver.session.return_value.__aenter__.return_value = mock_session
+
+    class FakeResult:
+        def __init__(self, items: list[dict[str, Any]]) -> None:
+            self.items = items
+
+        def __aiter__(self):
+            async def gen():
+                for item in self.items:
+                    yield item
+            return gen()
+
+    person_state: dict[str, Any] = {
+        "id": uuid5_id("person", "alex.mercer@example.com"),
+        "name": "Alex Mercer",
+        "email": "alex.mercer@example.com",
+    }
+
+    def record_run(query: str, **kwargs: Any) -> Any:
+        if "MERGE (p:Person" in query:
+            # Emulate Cypher ON MATCH: CASE WHEN $email IS NOT NULL THEN $email ELSE p.email END
+            if kwargs.get("email") is not None:
+                person_state["email"] = kwargs["email"]
+            return FakeResult([{
+                "person_id": person_state["id"],
+                "name": person_state["name"],
+                "email": person_state["email"],
+                "meeting_id": kwargs.get("meeting_id", "m-1"),
+            }])
+        return FakeResult([{
+            "review_id": kwargs.get("review_id", "rev-1"),
+            "old_name": "Alex Mercer",
+            "meeting_id": "m-1",
+            "title": "Planning",
+        }])
+
+    mock_session.run = AsyncMock(side_effect=record_run)
+
+    # First call: resolved with verified email
+    res1 = await graph_client.resolve_person_review(
+        review_id="rev-1",
+        name="Alex Mercer",
+        email="alex.mercer@example.com",
+        driver=mock_driver,
+    )
+    assert res1["email"] == "alex.mercer@example.com"
+
+    # Second call for the same person, but caller provides email=None
+    res2 = await graph_client.resolve_person_review(
+        review_id="rev-2",
+        name="Alex Mercer",
+        email=None,
+        driver=mock_driver,
+    )
+    assert (
+        res2["email"] == "alex.mercer@example.com"
+    ), "Must NOT null out or clobber verified email on re-resolution"
+
+
+@pytest.mark.asyncio
+async def test_add_meeting_attendee_second_call_preserves_verified_email() -> None:
+    """Verify that a second add call with email=None preserves a previously verified email."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from meeting_notes import graph_client
+    from meeting_notes.utils import uuid5_id
+
+    mock_driver = MagicMock()
+    mock_session = AsyncMock()
+    mock_driver.session.return_value.__aenter__.return_value = mock_session
+
+    class FakeResult:
+        def __init__(self, items: list[dict[str, Any]]) -> None:
+            self.items = items
+
+        def __aiter__(self):
+            async def gen():
+                for item in self.items:
+                    yield item
+            return gen()
+
+    person_state: dict[str, Any] = {
+        "id": uuid5_id("person", "alex.mercer@example.com"),
+        "name": "Alex Mercer",
+        "email": "alex.mercer@example.com",
+    }
+
+    def record_run(query: str, **kwargs: Any) -> Any:
+        if kwargs.get("email") is not None:
+            person_state["email"] = kwargs["email"]
+        return FakeResult([{
+            "person_id": person_state["id"],
+            "name": person_state["name"],
+            "email": person_state["email"],
+            "meeting_id": kwargs.get("meeting_id", "m-1"),
+        }])
+
+    mock_session.run = AsyncMock(side_effect=record_run)
+
+    res = await graph_client.add_meeting_attendee(
+        meeting_id="m-2",
+        name="Alex Mercer",
+        email=None,
+        driver=mock_driver,
+    )
+    assert (
+        res["email"] == "alex.mercer@example.com"
+    ), "Must NOT null out verified email when added without email"
+
+
+def test_extractor_repair_date_fallback_preservation() -> None:
+    """Verify that repair() preserves date fallback when ctx date is empty or None."""
+    from datetime import UTC, datetime
+
+    from meeting_notes.extractor import repair
+
+    today = datetime.now(UTC).strftime("%Y-%m-%d")
+
+    # Empty string in context date
+    data1 = {"title": "Sprint Planning", "date": None}
+    repaired1 = repair(data1, context={"date": ""})
+    assert repaired1["date"] == today
+
+    # None in context date
+    data2 = {"title": "Architecture Review", "date": "null"}
+    repaired2 = repair(data2, context={"date": None})
+    assert repaired2["date"] == today
+
 
 
 

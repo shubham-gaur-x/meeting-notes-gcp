@@ -477,12 +477,6 @@ def resolve(
     if is_junk_name(name):
         return Resolution(name, role, None, "dropped", False, "junk-name")
 
-    # 2. Check canonical known person aliases (LP, Coley, Colin, Matteo, etc.)
-    norm_n = _norm_name(name)
-    alias_match = KNOWN_PERSON_ALIASES.get(norm_n)
-    if alias_match and (not email or "@" not in email):
-        c_name, c_email = alias_match
-        return Resolution(c_name, role, c_email, "resolved", False, "known-alias")
 
 
     # Tier 1 — deterministic (email present)
