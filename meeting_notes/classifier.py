@@ -15,6 +15,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+# Pure alphanumeric single-word meeting tokens matched via set intersection
+# with words extracted by re.findall(r"\b\w+\b", text).
 _MEETING_KEYWORDS = {
     "meeting", "call", "standup", "sync", "review", "demo", "interview",
     "discussion", "conference", "webinar", "workshop", "session", "agenda",
@@ -26,7 +28,8 @@ _MEETING_KEYWORDS = {
     "catchup",
 }
 
-# Multi-word or punctuated meeting terms not extractable by \b\w+\b
+# Multi-word or punctuated meeting terms not extractable by \b\w+\b word tokenization.
+# Evaluated via regex word boundaries to prevent false negatives on hyphenated/colon phrases.
 _MEETING_PHRASE_PATTERNS = [
     re.compile(r"\b1[:\-]1\b"),
     re.compile(r"\bone[- ]on[- ]one\b", re.I),
