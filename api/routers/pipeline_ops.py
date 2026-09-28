@@ -8,7 +8,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from api.deps import principal, require_admin
+from api.deps import require_admin
 from meeting_notes import db
 from meeting_notes.access_control import Principal
 
