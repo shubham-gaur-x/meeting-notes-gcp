@@ -474,6 +474,11 @@ async def test_dlq_db_inspection_and_replay() -> None:
     class FakeConn:
         async def fetch(self, query: str, *args: Any) -> list[dict[str, Any]]:
             executed_queries.append(query)
+            if "RETURNING id" in query:
+                return [
+                    {"id": "11111111-1111-1111-1111-111111111111"},
+                    {"id": "22222222-2222-2222-2222-222222222222"},
+                ]
             return [
                 {
                     "id": "11111111-1111-1111-1111-111111111111",
@@ -497,12 +502,6 @@ async def test_dlq_db_inspection_and_replay() -> None:
         async def fetchrow(self, query: str, *args: Any) -> dict[str, Any]:
             executed_queries.append(query)
             return {"total": 10, "pending": 4, "retry": 1, "dead_letter": 2, "processed": 3}
-
-        async def execute(self, query: str, *args: Any) -> str:
-            executed_queries.append(query)
-            if "UPDATE staged_records" in query and "status = 'dead_letter'" in query:
-                return "UPDATE 2"
-            return "UPDATE 0"
 
     fake_conn = FakeConn()
 
@@ -1301,6 +1300,18 @@ def test_max_attempts_defaults_aligned_across_modules() -> None:
 
     default_fail_sig = inspect.signature(pipeline_drain._default_record_failure)
     assert default_fail_sig.parameters["max_attempts"].default is None
+
+
+def test_settings_declares_all_dual_tracker_fields() -> None:
+    """Explicitly verify Settings declares issue_tracker, jira_enabled, and Linear fields."""
+    from meeting_notes.config import Settings
+
+    s = Settings()
+    assert hasattr(s, "issue_tracker")
+    assert hasattr(s, "jira_enabled")
+    assert hasattr(s, "linear_api_key")
+    assert hasattr(s, "linear_team_id")
+    assert s.issue_tracker in ("jira", "linear", "both", "none")
 
 
 

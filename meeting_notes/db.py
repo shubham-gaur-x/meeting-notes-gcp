@@ -236,6 +236,7 @@ SET attempts = 0,
     status = 'pending',
     last_error = NULL
 WHERE status = 'dead_letter'
+RETURNING id
 """
 
 _QUEUE_STATS_SQL = """
@@ -373,9 +374,9 @@ async def claim_batch(
             payload=json.loads(r["payload"]) if isinstance(r["payload"], str) else r["payload"],
             fetched_at=r["fetched_at"].isoformat(),
             processed=r["processed"],
-            attempts=r["attempts"] if "attempts" in r else 0,
-            last_error=r["last_error"] if "last_error" in r else None,
-            status=r["status"] if "status" in r else "pending",
+            attempts=r["attempts"],
+            last_error=r["last_error"],
+            status=r["status"],
         )
         for r in rows
     ]
@@ -477,9 +478,9 @@ async def list_dead_letter_records(
             payload=json.loads(r["payload"]) if isinstance(r["payload"], str) else r["payload"],
             fetched_at=r["fetched_at"].isoformat(),
             processed=r["processed"],
-            attempts=r["attempts"] if "attempts" in r else 0,
-            last_error=r["last_error"] if "last_error" in r else None,
-            status=r["status"] if "status" in r else "dead_letter",
+            attempts=r["attempts"],
+            last_error=r["last_error"],
+            status=r["status"],
         )
         for r in rows
     ]
@@ -501,13 +502,10 @@ async def replay_all_dead_letter_records(pool: asyncpg.Pool | None = None) -> in
     """Reset all quarantined dead-letter records back to 'pending' with 0 attempts."""
     pool = pool or await get_pool()
     async with pool.acquire() as conn:
-        status_str = await conn.execute(_REPLAY_ALL_DLQ_SQL)
-    parts = (status_str or "").strip().split()
-    if len(parts) >= 2 and parts[0].upper() == "UPDATE" and parts[1].isdigit():
-        count = int(parts[1])
-        log.info("dlq.replay_all", replayed_count=count)
-        return count
-    raise RuntimeError(f"Unexpected status string from replay_all_dead_letter: {status_str!r}")
+        rows = await conn.fetch(_REPLAY_ALL_DLQ_SQL)
+    count = len(rows)
+    log.info("dlq.replay_all", replayed_count=count)
+    return count
 
 
 async def get_queue_stats(pool: asyncpg.Pool | None = None) -> dict[str, int]:

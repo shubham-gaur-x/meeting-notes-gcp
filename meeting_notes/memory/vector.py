@@ -147,7 +147,7 @@ async def _embed_pending(
 
     # When explicit batching is supplied, chunk into batches and process with semaphore concurrency:
     if embed_batch_fn is not None:
-        chunk_size = getattr(resolved, "embedding_batch_size", 50)
+        chunk_size = resolved.embedding_batch_size
         chunks = [pending[i : i + chunk_size] for i in range(0, len(pending), chunk_size)]
 
         async def process_batch_chunk(chunk: list[dict[str, Any]]) -> int:
