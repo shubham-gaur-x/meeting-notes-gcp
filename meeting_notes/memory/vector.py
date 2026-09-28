@@ -136,13 +136,12 @@ async def _embed_pending(
     if not pending:
         return 0
 
+    resolved = settings or get_settings()
     now = datetime.now(UTC).isoformat()
 
     # When explicit batching is supplied, chunk into batches and process with semaphore concurrency:
     if embed_batch_fn is not None:
-        from meeting_notes.llm_client import DEFAULT_EMBEDDING_BATCH_CHUNK_SIZE
-
-        chunk_size = DEFAULT_EMBEDDING_BATCH_CHUNK_SIZE
+        chunk_size = getattr(resolved, "embedding_batch_size", 50)
         chunks = [pending[i : i + chunk_size] for i in range(0, len(pending), chunk_size)]
 
         async def process_batch_chunk(chunk: list[dict[str, Any]]) -> int:

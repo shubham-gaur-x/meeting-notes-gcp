@@ -171,6 +171,7 @@ class Settings(BaseSettings):
     # Embeddings are independent calls at ~12s each; issuing them one at a
     # time made a 16-action meeting spend >3 minutes embedding alone.
     embedding_concurrency: int = 8
+    embedding_batch_size: int = 50
 
     # ─── Service ──────────────────────────────────────────────────────────
     log_level: str = "INFO"

@@ -158,6 +158,7 @@ FROM staged_records
 WHERE processed = FALSE
   AND coalesce(attempts, 0) < $2
   AND coalesce(status, 'pending') != 'dead_letter'
+  AND coalesce(status, 'pending') != 'processed'
 ORDER BY fetched_at
 FOR UPDATE SKIP LOCKED
 LIMIT $1
@@ -190,8 +191,8 @@ _RECORD_DRAIN_FAILURE_SQL = """
 UPDATE staged_records
 SET attempts = coalesce(attempts, 0) + 1,
     last_error = $2,
-    processed = CASE WHEN coalesce(attempts, 0) + 1 >= $3 THEN TRUE ELSE FALSE END,
-    processed_at = CASE WHEN coalesce(attempts, 0) + 1 >= $3 THEN now() ELSE NULL END,
+    processed = FALSE,
+    processed_at = NULL,
     status = CASE WHEN coalesce(attempts, 0) + 1 >= $3 THEN 'dead_letter' ELSE 'retry' END
 WHERE id = $1::uuid
 RETURNING attempts, processed, status
@@ -237,10 +238,10 @@ WHERE status = 'dead_letter'
 _QUEUE_STATS_SQL = """
 SELECT
     count(*) AS total,
-    count(*) FILTER (WHERE status = 'pending' AND processed = FALSE) AS pending,
+    count(*) FILTER (WHERE coalesce(status, 'pending') = 'pending' AND processed = FALSE) AS pending,
     count(*) FILTER (WHERE status = 'retry' AND processed = FALSE) AS retry,
     count(*) FILTER (WHERE status = 'dead_letter') AS dead_letter,
-    count(*) FILTER (WHERE status = 'processed' OR processed = TRUE) AS processed
+    count(*) FILTER (WHERE status = 'processed' OR (status IS NULL AND processed = TRUE)) AS processed
 FROM staged_records
 """
 
@@ -346,7 +347,7 @@ async def stage_record(
 
 
 async def claim_batch(
-    limit: int, max_attempts: int = 3, pool: asyncpg.Pool | None = None
+    limit: int, max_attempts: int | None = None, pool: asyncpg.Pool | None = None
 ) -> list[StagedRecord]:
     """Claim up to `limit` unprocessed records (ADR-006) with attempts < max_attempts.
 
@@ -357,8 +358,9 @@ async def claim_batch(
     across the whole batch.
     """
     pool = pool or await get_pool()
+    resolved_max = max_attempts if max_attempts is not None else get_settings().pipeline_max_attempts
     async with pool.acquire() as conn, conn.transaction():
-        rows = await conn.fetch(CLAIM_SQL, limit, max_attempts)
+        rows = await conn.fetch(CLAIM_SQL, limit, resolved_max)
     return [
         StagedRecord(
             id=str(r["id"]),
@@ -434,22 +436,23 @@ async def mark_processed(record_id: str, pool: asyncpg.Pool | None = None) -> No
 async def record_drain_failure(
     record_id: str,
     error: str,
-    max_attempts: int = 3,
+    max_attempts: int | None = None,
     pool: asyncpg.Pool | None = None,
 ) -> tuple[int, bool, str]:
     """Record a drain failure for a staged record, incrementing its attempt counter.
 
-    If attempts >= max_attempts, marks the record processed with status 'dead_letter'
+    If attempts >= max_attempts, marks the record with status 'dead_letter'
     to prevent poison pills from looping forever.
     Returns (attempts, is_processed, status).
     """
     pool = pool or await get_pool()
+    resolved_max = max_attempts if max_attempts is not None else get_settings().pipeline_max_attempts
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             _RECORD_DRAIN_FAILURE_SQL,
             record_id,
             error[:2000],
-            max_attempts,
+            resolved_max,
         )
     if row:
         return row["attempts"], row["processed"], row["status"]

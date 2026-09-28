@@ -724,7 +724,7 @@ async def test_record_drain_failure_quarantine_boundary() -> None:
     class FakeConn:
         async def fetchrow(self, query: str, *args: Any) -> dict[str, Any]:
             record_id, err, max_att = args
-            return {"attempts": 3, "processed": True, "status": "dead_letter"}
+            return {"attempts": 3, "processed": False, "status": "dead_letter"}
 
     class FakePool:
         def acquire(self) -> Any:
@@ -745,7 +745,7 @@ async def test_record_drain_failure_quarantine_boundary() -> None:
     )
 
     assert attempts == 3
-    assert processed is True
+    assert processed is False
     assert status == "dead_letter"
 
 
@@ -864,7 +864,16 @@ def test_tracker_routing_with_jira_disabled() -> None:
         jira_enabled=False,
     )
     assert orchestrator._should_use_linear("ENG-101", settings_linear_only) is True
-    assert orchestrator._should_use_linear("ANY-UNKNOWN", settings_linear_only) is True
+    assert orchestrator._should_use_linear("ABC-999", settings_linear_only) is True
+    assert (
+        orchestrator._should_use_linear(
+            "11111111-2222-3333-4444-555555555555", settings_linear_only
+        )
+        is True
+    )
+
+    with pytest.raises(ValueError, match="Invalid Linear issue key or identifier"):
+        orchestrator._should_use_linear("MALFORMED_NO_HYPHEN", settings_linear_only)
 
 
 @pytest.mark.asyncio
@@ -1047,6 +1056,32 @@ def test_schema_sql_includes_backward_compat_migration() -> None:
     assert "ALTER TABLE staged_records ADD COLUMN IF NOT EXISTS attempts" in SCHEMA_SQL
     assert "ALTER TABLE staged_records ADD COLUMN IF NOT EXISTS last_error" in SCHEMA_SQL
     assert "ALTER TABLE staged_records ADD COLUMN IF NOT EXISTS status" in SCHEMA_SQL
+
+
+@pytest.mark.asyncio
+async def test_queue_stats_does_not_double_count_quarantined_records() -> None:
+    """Verify that get_queue_stats keeps dead_letter and processed mutually exclusive."""
+    from meeting_notes import db
+
+    class FakePool:
+        async def fetchrow(self, query: str, *args: Any) -> dict[str, Any]:
+            # Simulate a database containing 1 pending, 1 retry, 1 dead_letter, and 2 processed
+            return {
+                "total": 5,
+                "pending": 1,
+                "retry": 1,
+                "dead_letter": 1,
+                "processed": 2,
+            }
+
+    stats = await db.get_queue_stats(pool=FakePool())  # type: ignore[arg-type]
+    assert stats["total"] == 5
+    assert stats["dead_letter"] == 1
+    assert stats["processed"] == 2
+    assert stats["pending"] == 1
+    assert stats["retry"] == 1
+    # Mutually exclusive: sum of distinct buckets equals total
+    assert stats["pending"] + stats["retry"] + stats["dead_letter"] + stats["processed"] == stats["total"]
 
 
 

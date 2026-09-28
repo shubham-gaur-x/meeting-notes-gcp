@@ -230,6 +230,10 @@ class _Dependencies:
     review_pr: Any
 
 
+def _is_linear_key(key: str) -> bool:
+    return bool(_UUID_RE.match(key) or _LINEAR_KEY_RE.match(key))
+
+
 def _should_use_linear(key: str, settings: Settings, tracker: str | None = None) -> bool:
     """Determine whether to route ticket operations to Linear or Jira.
 
@@ -249,6 +253,8 @@ def _should_use_linear(key: str, settings: Settings, tracker: str | None = None)
     if tracker is not None:
         t = tracker.lower()
         if t == "linear":
+            if not _is_linear_key(key):
+                raise ValueError(f"Invalid Linear issue key or identifier: {key!r}")
             return True
         if t == "jira":
             return False
@@ -257,12 +263,16 @@ def _should_use_linear(key: str, settings: Settings, tracker: str | None = None)
     jira_enabled = getattr(settings, "jira_enabled", False)
 
     if not jira_enabled and has_linear_key:
+        if not _is_linear_key(key):
+            raise ValueError(f"Invalid Linear issue key or identifier: {key!r}")
         return True
     if not has_linear_key:
         return False
 
     configured_tracker = getattr(settings, "issue_tracker", "jira").lower()
     if configured_tracker == "linear":
+        if not _is_linear_key(key):
+            raise ValueError(f"Invalid Linear issue key or identifier: {key!r}")
         return True
     if configured_tracker == "jira":
         return False
@@ -279,6 +289,8 @@ def _should_use_linear(key: str, settings: Settings, tracker: str | None = None)
         return True
 
     if not jira_enabled:
+        if not _is_linear_key(key):
+            raise ValueError(f"Invalid Linear issue key or identifier: {key!r}")
         return True
 
     log.error("orchestrator.tracker_routing_ambiguous", key=key)
