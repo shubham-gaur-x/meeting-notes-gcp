@@ -44,6 +44,10 @@ def is_administrative_task(task: str) -> bool:
     return bool(_ADMINISTRATIVE_REGEX.search(task))
 
 
+_warned_service_accounts: set[str] = set()
+_warned_no_identities: bool = False
+
+
 def _get_configured_identities(settings: Settings) -> set[str]:
     identities: set[str] = set()
     excluded_services: set[str] = set()
@@ -58,10 +62,12 @@ def _get_configured_identities(settings: Settings) -> set[str]:
             if not ident_clean:
                 continue
             if ident_clean in excluded_services:
-                log.warning(
-                    "jira_pusher.service_account_excluded_from_self_identity",
-                    excluded=ident_clean,
-                )
+                if ident_clean not in _warned_service_accounts:
+                    _warned_service_accounts.add(ident_clean)
+                    log.warning(
+                        "jira_pusher.service_account_excluded_from_self_identity",
+                        excluded=ident_clean,
+                    )
                 continue
             identities.add(ident_clean)
     return identities
@@ -79,12 +85,15 @@ def is_self_owned(owner: str, settings: Settings) -> bool:
     Does not provide unconditional bypasses for strings like 'me' or 'self' — all
     matches must resolve against the operator-configured identity set.
     """
+    global _warned_no_identities
     if not owner:
         return False
 
     identities = _get_configured_identities(settings)
     if not identities:
-        log.warning("jira_pusher.no_identities_configured_for_self_only")
+        if not _warned_no_identities:
+            _warned_no_identities = True
+            log.warning("jira_pusher.no_identities_configured_for_self_only")
         return False
 
     owner_clean = owner.strip().lower()
