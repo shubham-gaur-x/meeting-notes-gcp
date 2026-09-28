@@ -48,6 +48,13 @@ _warned_service_accounts: set[str] = set()
 _warned_no_identities: bool = False
 
 
+def reset_jira_identity_warning_guards() -> None:
+    """Reset single-fire warning caches (useful for testing or config reloads)."""
+    global _warned_no_identities
+    _warned_service_accounts.clear()
+    _warned_no_identities = False
+
+
 def _get_configured_identities(settings: Settings) -> set[str]:
     identities: set[str] = set()
     excluded_services: set[str] = set()

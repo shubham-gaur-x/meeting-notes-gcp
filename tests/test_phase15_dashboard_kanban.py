@@ -97,70 +97,201 @@ def test_is_self_owned_exact_matching_and_service_account_exclusion() -> None:
     assert is_self_owned("valid-user@example.com", s_colliding)
 
 
-def test_dashboard_js_copy_and_tab_logic_in_node() -> None:
-    """Execute dashboard copy handlers and tab logic inside Node to verify behavior."""
+def test_jira_identity_warning_single_fire_and_reset() -> None:
+    from unittest.mock import patch
+
+    from meeting_notes.config import Settings
+    from meeting_notes.jira_pusher import (
+        is_self_owned,
+        reset_jira_identity_warning_guards,
+    )
+
+    reset_jira_identity_warning_guards()
+
+    # 1. No identities configured: warning should fire exactly once across multiple calls
+    s_empty = Settings(jira_user_identities="", jira_email="service@company.com")
+    with patch("meeting_notes.jira_pusher.log.warning") as mock_warn:
+        assert not is_self_owned("anyone", s_empty)
+        assert not is_self_owned("anyone_else", s_empty)
+        assert mock_warn.call_count == 1
+        assert mock_warn.call_args[0][0] == "jira_pusher.no_identities_configured_for_self_only"
+
+        # Calling again continues to suppress log spam
+        assert not is_self_owned("third_person", s_empty)
+        assert mock_warn.call_count == 1
+
+        # Resetting allows the warning to fire again on fresh configuration/run
+        reset_jira_identity_warning_guards()
+        assert not is_self_owned("anyone", s_empty)
+        assert mock_warn.call_count == 2
+
+    # 2. Service account collision: warning should fire once per service account and suppress duplicates
+    reset_jira_identity_warning_guards()
+    s_collision = Settings(
+        jira_user_identities="svc@company.com, user@company.com",
+        jira_email="svc@company.com",
+    )
+    with patch("meeting_notes.jira_pusher.log.warning") as mock_warn:
+        assert not is_self_owned("svc@company.com", s_collision)
+        assert is_self_owned("user@company.com", s_collision)
+        assert not is_self_owned("svc@company.com", s_collision)
+        assert mock_warn.call_count == 1
+        assert mock_warn.call_args[0][0] == "jira_pusher.service_account_excluded_from_self_identity"
+
+        reset_jira_identity_warning_guards()
+        assert not is_self_owned("svc@company.com", s_collision)
+        assert mock_warn.call_count == 2
+
+
+def test_dashboard_js_copy_handlers_execution_in_node() -> None:
+    """Execute actual shipped copy handlers and toolbar logic from dashboard.html inside Node."""
+    import re
     import shutil
     import subprocess
+    from pathlib import Path
 
     node = shutil.which("node")
     if not node:
         return
 
-    js_test_script = """
-    let clipboardText = null;
-    global.navigator = {
-        clipboard: {
-            writeText: async (t) => { clipboardText = t; }
-        }
-    };
+    html = (Path(api.__file__).parent / "static" / "dashboard.html").read_text(encoding="utf-8")
+    script_match = re.search(r"<script>([\s\S]*?)</script>", html)
+    assert script_match, "dashboard.html must contain a main <script> tag"
+    dashboard_js = script_match.group(1)
 
-    function copyTextToClipboard(text, btn, successLabel = "Copied!") {
-        if (!text) return;
-        clipboardText = text;
-        if (btn) btn.textContent = successLabel;
-    }
+    runner_script = f"""
+    const vm = require("vm");
 
-    function copySpecificAnswer(btn) {
-        const turnId = btn?.dataset?.turnId;
-        if (!turnId) return;
-        const turn = CHAT_TURNS.find(t => t.id === turnId);
-        if (!turn || !turn.answer) return;
-        copyTextToClipboard(turn.answer, btn, "Copied Answer!");
-    }
+    const fakeEl = () => ({{
+      style: {{}},
+      dataset: {{}},
+      classList: {{ add(){{}}, remove(){{}}, toggle(){{}}, contains(){{ return false; }} }},
+      appendChild(){{}},
+      removeChild(){{}},
+      addEventListener(){{}},
+      querySelector(){{ return null; }},
+      querySelectorAll(){{ return []; }},
+      focus(){{}},
+      select(){{}}
+    }});
 
-    function copyTaskText(btn) {
-        const taskText = btn?.dataset?.taskText || "";
-        if (!taskText) return;
-        copyTextToClipboard(taskText, btn, "Copied!");
-    }
+    let copiedText = null;
+    Object.defineProperty(navigator, "clipboard", {{
+      value: {{ writeText: async (t) => {{ copiedText = t; }} }},
+      configurable: true,
+      writable: true
+    }});
 
-    const CHAT_TURNS = [
-        { id: "turn-1", answer: "Actionable summary for project roadmap." },
-        { id: "turn-2", answer: "Second turn answer." }
-    ];
+    global.window = {{
+      location: {{ hash: "" }},
+      addEventListener(){{}},
+      matchMedia: () => ({{ matches: false, addEventListener(){{}} }}),
+      navigator: navigator
+    }};
+    global.history = {{ replaceState(){{}} }};
+    global.document = {{
+      querySelector: () => fakeEl(),
+      querySelectorAll: () => [],
+      createElement: () => fakeEl(),
+      body: fakeEl(),
+      execCommand: () => true,
+      addEventListener(){{}}
+    }};
+    global.localStorage = {{
+      getItem: () => null,
+      setItem: () => {{}},
+      removeItem: () => {{}}
+    }};
+    global.fetch = async () => ({{ ok: true, status: 200, json: async () => ({{}}) }});
 
-    const mockBtn1 = { dataset: { turnId: "turn-1" }, textContent: "Copy" };
-    copySpecificAnswer(mockBtn1);
-    if (clipboardText !== "Actionable summary for project roadmap.") {
-        throw new Error("copySpecificAnswer failed to extract from turn-1: " + clipboardText);
-    }
-    if (mockBtn1.textContent !== "Copied Answer!") {
-        throw new Error("mockBtn1 label not updated");
-    }
+    // Evaluate shipped dashboard script in context
+    vm.runInThisContext({repr(dashboard_js)});
 
-    const mockBtnTask = { dataset: { taskText: "Ship Phase 15 deliverables" }, textContent: "Copy" };
-    copyTaskText(mockBtnTask);
-    if (clipboardText !== "Ship Phase 15 deliverables") {
-        throw new Error("copyTaskText failed: " + clipboardText);
-    }
-    if (mockBtnTask.textContent !== "Copied!") {
-        throw new Error("mockBtnTask label not updated");
-    }
+    async function runVerifications() {{
+      // Setup turn fixture in real CHAT_TURNS
+      CHAT_TURNS.length = 0;
+      CHAT_TURNS.push({{
+        id: "turn-test-1",
+        answer: "### Summary\\nHere is the answer.\\n\\n" +
+                "- [ ] Task 1: Complete rollout\\n- [ ] Task 2: Audit code"
+      }});
 
-    console.log("ALL_DASHBOARD_NODE_TESTS_PASSED");
+      // 1. copySpecificAnswer
+      copiedText = null;
+      const btnAns = {{
+        dataset: {{ turnId: "turn-test-1" }},
+        textContent: "Copy Answer",
+        querySelector: () => null,
+        classList: {{ add(){{}}, remove(){{}} }}
+      }};
+      copySpecificAnswer(btnAns);
+      await new Promise(r => setTimeout(r, 20));
+      if (!copiedText || !copiedText.includes("### Summary")) {{
+        throw new Error("copySpecificAnswer failed: " + copiedText);
+      }}
+      if (btnAns.textContent !== "Copied Answer!") {{
+        throw new Error("copySpecificAnswer label failed");
+      }}
+
+      // 2. copySpecificDeliverables
+      copiedText = null;
+      const btnDeliv = {{
+        dataset: {{ turnId: "turn-test-1" }},
+        textContent: "Copy Deliverables",
+        querySelector: () => null,
+        classList: {{ add(){{}}, remove(){{}} }}
+      }};
+      copySpecificDeliverables(btnDeliv);
+      await new Promise(r => setTimeout(r, 20));
+      if (!copiedText || !copiedText.includes("Task 1: Complete rollout")) {{
+        throw new Error("copySpecificDeliverables failed: " + copiedText);
+      }}
+      if (btnDeliv.textContent !== "Copied Deliverables!") {{
+        throw new Error("copySpecificDeliverables label failed");
+      }}
+
+      // 3. copyTaskText
+      copiedText = null;
+      const btnTask = {{
+        dataset: {{ taskText: "Fix production memory issue" }},
+        textContent: "Copy",
+        querySelector: () => null,
+        classList: {{ add(){{}}, remove(){{}} }}
+      }};
+      copyTaskText(btnTask);
+      await new Promise(r => setTimeout(r, 20));
+      if (copiedText !== "Fix production memory issue") {{
+        throw new Error("copyTaskText failed: " + copiedText);
+      }}
+      if (btnTask.textContent !== "Copied!") {{
+        throw new Error("copyTaskText label failed");
+      }}
+
+      // 4. copyCode
+      copiedText = null;
+      const codeEl = {{ textContent: "const x = 42;" }};
+      const wrapEl = {{ querySelector: (s) => s === "pre code" ? codeEl : null }};
+      const btnCode = {{
+        closest: (s) => s === ".code-block-wrap" ? wrapEl : null,
+        textContent: "Copy Code",
+        querySelector: () => null,
+        classList: {{ add(){{}}, remove(){{}} }}
+      }};
+      copyCode(btnCode);
+      await new Promise(r => setTimeout(r, 20));
+      if (copiedText !== "const x = 42;") {{
+        throw new Error("copyCode failed: " + copiedText);
+      }}
+      if (btnCode.textContent !== "Copied!") {{
+        throw new Error("copyCode label failed");
+      }}
+
+      console.log("SHIPPED_DASHBOARD_COPY_HANDLERS_VERIFIED_SUCCESSFULLY");
+    }}
+
+    runVerifications();
     """
 
-    proc = subprocess.run([node, "-e", js_test_script], capture_output=True, text=True)
-    assert proc.returncode == 0, f"Node test failed: {proc.stderr}"
-    assert "ALL_DASHBOARD_NODE_TESTS_PASSED" in proc.stdout
-
+    proc = subprocess.run([node, "-e", runner_script], capture_output=True, text=True)
+    assert proc.returncode == 0, f"Node verification failed: {proc.stderr}"
+    assert "SHIPPED_DASHBOARD_COPY_HANDLERS_VERIFIED_SUCCESSFULLY" in proc.stdout

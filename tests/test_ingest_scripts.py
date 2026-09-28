@@ -169,17 +169,47 @@ async def test_ingest_meet_history_main_success_and_drain() -> None:
 
 
 def test_adr018_sql_encapsulation_in_scripts() -> None:
-    """ADR-018: Ingestion scripts must NOT contain raw inline SQL."""
+    """ADR-018: Ingestion scripts must NOT contain raw inline SQL, verified via AST analysis."""
+    import ast
     import re
     from pathlib import Path
 
-    sql_regex = re.compile(r"\b(SELECT\s+.*FROM|INSERT\s+INTO|UPDATE\s+.*SET|DELETE\s+FROM)\b", re.IGNORECASE)
-
     scripts_dir = Path("scripts")
+    sql_pattern = re.compile(
+        r"\b(SELECT\s+.*FROM|INSERT\s+INTO|UPDATE\s+.*SET|DELETE\s+FROM)\b",
+        re.IGNORECASE,
+    )
+
     for script_name in ["ingest_meet_history.py", "ingest_transcript.py"]:
         path = scripts_dir / script_name
         assert path.exists(), f"{script_name} must exist"
-        content = path.read_text(encoding="utf-8")
-        matches = sql_regex.findall(content)
-        assert len(matches) == 0, f"{script_name} violates ADR-018 with inline SQL: {matches}"
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+
+        # Collect docstrings to ignore documentation text
+        docstrings: set[str] = set()
+        mod_doc = ast.get_docstring(tree)
+        if mod_doc:
+            docstrings.add(mod_doc)
+        func_types = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+        for fn in [n for n in ast.walk(tree) if isinstance(n, func_types)]:
+            fn_doc = ast.get_docstring(fn)
+            if fn_doc:
+                docstrings.add(fn_doc)
+
+        # 1. Walk AST to ensure no non-docstring string literal contains raw inline SQL
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                if node.value in docstrings:
+                    continue
+                match = sql_pattern.search(node.value)
+                assert not match, f"{script_name} contains raw inline SQL in AST literal: {node.value!r}"
+
+        # 2. Verify that script calls db.stage_record for data persistence
+        called_attrs = [
+            n.func.attr
+            for n in ast.walk(tree)
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+        ]
+        assert "stage_record" in called_attrs, f"{script_name} must route staging through db.stage_record"
+
 
