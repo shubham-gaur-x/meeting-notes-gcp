@@ -39,6 +39,7 @@ def test_linear_ticket_badges_and_deep_links() -> None:
     assert "https://linear.app/issue/" in html or "r.linear_url" in html
     assert 'title="Open in Linear"' in html
 
+
 def test_dashboard_javascript_syntax_validity() -> None:
     """Verifies that all script tags in dashboard.html contain valid JavaScript without syntax errors."""
     import re
@@ -302,7 +303,7 @@ def test_dashboard_chat_common_queries_and_ux_elements() -> None:
     # 1. Assert common query chips container, card class, data-query attribute, and new query exist
     assert 'class="chat-quick-strip"' in html
     assert 'class="prompt-card compact common-query-chip"' in html
-    assert 'data-query=' in html
+    assert "data-query=" in html
     assert '"What blockers remain?"' in html
 
     # 2. Assert elastic textarea container, input IDs, and keydown/grow bindings
@@ -320,48 +321,93 @@ def test_dashboard_chat_common_queries_and_ux_elements() -> None:
 
 
 def test_handle_chat_keydown_enter_and_shift_enter_in_node() -> None:
-    """Verifies in Node.js that handleChatKeydown submits on Enter and preserves newline on Shift+Enter."""
+    """Verifies that shipped handleChatKeydown and autoGrowTextarea execute correctly in Node.js."""
+    import re
     import shutil
     import subprocess
+    from pathlib import Path
 
     node = shutil.which("node")
     if not node:
         return
 
-    runner_script = """
+    html = (Path(api.__file__).parent / "static" / "dashboard.html").read_text(encoding="utf-8")
+    script_match = re.search(r"<script>([\s\S]*?)</script>", html)
+    assert script_match, "dashboard.html must contain a main <script> tag"
+    dashboard_js = script_match.group(1)
+
+    runner_script = f"""
+    const vm = require("vm");
+
+    const fakeEl = () => ({{
+      style: {{}},
+      dataset: {{}},
+      classList: {{ add(){{}}, remove(){{}}, toggle(){{}}, contains(){{ return false; }} }},
+      appendChild(){{}},
+      removeChild(){{}},
+      addEventListener(){{}},
+      querySelector(){{ return null; }},
+      querySelectorAll(){{ return []; }},
+      focus(){{}},
+      select(){{}}
+    }});
+
+    global.window = {{
+      location: {{ hash: "" }},
+      addEventListener(){{}},
+      matchMedia: () => ({{ matches: false, addEventListener(){{}} }}),
+    }};
+    global.history = {{ replaceState(){{}} }};
+    global.document = {{
+      querySelector: () => fakeEl(),
+      querySelectorAll: () => [],
+      createElement: () => fakeEl(),
+      body: fakeEl(),
+      addEventListener(){{}}
+    }};
+    global.localStorage = {{
+      getItem: () => null,
+      setItem: () => {{}},
+      removeItem: () => {{}}
+    }};
+    global.fetch = async () => ({{ ok: true, status: 200, json: async () => ({{}}) }});
+
+    // Evaluate shipped dashboard script in context
+    vm.runInThisContext({repr(dashboard_js)});
+
     let asked = false;
+    global.askMemory = () => {{ asked = true; }};
+
+    // 1. Enter without Shift: submits and prevents default
     let prevented = false;
-    function askMemory() { asked = true; }
+    let enterEvt = {{ key: "Enter", shiftKey: false, preventDefault: () => {{ prevented = true; }} }};
+    handleChatKeydown(enterEvt);
+    if (!asked || !prevented) {{
+      throw new Error("Enter must trigger askMemory and preventDefault");
+    }}
 
-    function handleChatKeydown(e) {
-      if (e.isComposing || e.keyCode === 229) return;
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        askMemory();
-      }
-    }
-
-    // 1. Enter without Shift submits and prevents default
-    let enterEvent = { key: "Enter", shiftKey: false, preventDefault: () => { prevented = true; } };
-    handleChatKeydown(enterEvent);
-    if (!asked || !prevented) {
-      throw new Error("Enter without Shift must trigger askMemory and preventDefault");
-    }
-
-    // 2. Shift+Enter does NOT submit and does NOT prevent default (allowing newline)
+    // 2. Shift+Enter: does NOT submit and does NOT prevent default
     asked = false;
     prevented = false;
-    let shiftEnterEvent = { key: "Enter", shiftKey: true, preventDefault: () => { prevented = true; } };
-    handleChatKeydown(shiftEnterEvent);
-    if (asked || prevented) {
-      throw new Error("Shift+Enter must not trigger askMemory or prevent default");
-    }
+    let shiftEnterEvt = {{ key: "Enter", shiftKey: true, preventDefault: () => {{ prevented = true; }} }};
+    handleChatKeydown(shiftEnterEvt);
+    if (asked || prevented) {{
+      throw new Error("Shift+Enter must not submit or preventDefault");
+    }}
 
-    console.log("KEYDOWN_ENTER_AND_SHIFT_ENTER_VERIFIED_SUCCESSFULLY");
+    // 3. autoGrowTextarea: grows height based on scrollHeight
+    const mockTextarea = {{
+      style: {{}},
+      scrollHeight: 80
+    }};
+    autoGrowTextarea(mockTextarea);
+    if (mockTextarea.style.height !== "80px" || mockTextarea.style.overflowY !== "hidden") {{
+      throw new Error("autoGrowTextarea failed: " + mockTextarea.style.height);
+    }}
+
+    console.log("SHIPPED_CHAT_KEYDOWN_AND_AUTOGROW_VERIFIED_SUCCESSFULLY");
     """
 
     proc = subprocess.run([node, "-e", runner_script], capture_output=True, text=True)
     assert proc.returncode == 0, f"Node verification failed: {proc.stderr}"
-    assert "KEYDOWN_ENTER_AND_SHIFT_ENTER_VERIFIED_SUCCESSFULLY" in proc.stdout
-
-
+    assert "SHIPPED_CHAT_KEYDOWN_AND_AUTOGROW_VERIFIED_SUCCESSFULLY" in proc.stdout
