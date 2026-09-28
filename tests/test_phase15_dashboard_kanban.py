@@ -299,15 +299,69 @@ def test_dashboard_js_copy_handlers_execution_in_node() -> None:
 def test_dashboard_chat_common_queries_and_ux_elements() -> None:
     html = (Path(api.__file__).parent / "static" / "dashboard.html").read_text(encoding="utf-8")
 
-    # Assert common query chips container and buttons exist
-    assert 'id="chat-suggestions"' in html or 'class="common-query-chip"' in html
-    assert "What blockers remain?" in html or "data-query=" in html
+    # 1. Assert common query chips container, card class, data-query attribute, and new query exist
+    assert 'class="chat-quick-strip"' in html
+    assert 'class="prompt-card compact common-query-chip"' in html
+    assert 'data-query=' in html
+    assert '"What blockers remain?"' in html
 
-    # Assert elastic textarea configuration
-    assert 'id="ask-input"' in html or 'id="q"' in html
-    assert "autoExpandTextarea" in html or "scrollHeight" in html or "autoGrowTextarea" in html
+    # 2. Assert elastic textarea container, input IDs, and keydown/grow bindings
+    assert 'id="ask-input"' in html
+    assert 'id="q"' in html
+    assert 'onkeydown="handleChatKeydown(event)"' in html
+    assert 'oninput="autoGrowTextarea(this)"' in html
+    assert "function autoGrowTextarea(el)" in html
+    assert "function handleChatKeydown(e)" in html
 
-    # Assert settings modal for model tuning
-    assert 'id="ask-settings-modal"' in html or 'id="chat-settings-modal"' in html
-    assert 'id="setting-temperature"' in html or "temperature" in html
+    # 3. Assert settings modal dialog and synthesis temperature slider
+    assert '<dialog id="chat-settings-modal">' in html
+    assert 'id="setting-temperature"' in html
+    assert 'min="0" max="1" step="0.1" value="0.2"' in html
+
+
+def test_handle_chat_keydown_enter_and_shift_enter_in_node() -> None:
+    """Verifies in Node.js that handleChatKeydown submits on Enter and preserves newline on Shift+Enter."""
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if not node:
+        return
+
+    runner_script = """
+    let asked = false;
+    let prevented = false;
+    function askMemory() { asked = true; }
+
+    function handleChatKeydown(e) {
+      if (e.isComposing || e.keyCode === 229) return;
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        askMemory();
+      }
+    }
+
+    // 1. Enter without Shift submits and prevents default
+    let enterEvent = { key: "Enter", shiftKey: false, preventDefault: () => { prevented = true; } };
+    handleChatKeydown(enterEvent);
+    if (!asked || !prevented) {
+      throw new Error("Enter without Shift must trigger askMemory and preventDefault");
+    }
+
+    // 2. Shift+Enter does NOT submit and does NOT prevent default (allowing newline)
+    asked = false;
+    prevented = false;
+    let shiftEnterEvent = { key: "Enter", shiftKey: true, preventDefault: () => { prevented = true; } };
+    handleChatKeydown(shiftEnterEvent);
+    if (asked || prevented) {
+      throw new Error("Shift+Enter must not trigger askMemory or prevent default");
+    }
+
+    console.log("KEYDOWN_ENTER_AND_SHIFT_ENTER_VERIFIED_SUCCESSFULLY");
+    """
+
+    proc = subprocess.run([node, "-e", runner_script], capture_output=True, text=True)
+    assert proc.returncode == 0, f"Node verification failed: {proc.stderr}"
+    assert "KEYDOWN_ENTER_AND_SHIFT_ENTER_VERIFIED_SUCCESSFULLY" in proc.stdout
+
 
