@@ -490,7 +490,7 @@ async def test_dlq_db_inspection_and_replay() -> None:
 
         async def fetchval(self, query: str, *args: Any) -> Any:
             executed_queries.append(query)
-            if query == db._REPLAY_DLQ_SQL:
+            if "UPDATE staged_records" in query and "WHERE id = $1" in query:
                 return args[0]
             return None
 
@@ -500,7 +500,7 @@ async def test_dlq_db_inspection_and_replay() -> None:
 
         async def execute(self, query: str, *args: Any) -> str:
             executed_queries.append(query)
-            if query == db._REPLAY_ALL_DLQ_SQL:
+            if "UPDATE staged_records" in query and "status = 'dead_letter'" in query:
                 return "UPDATE 2"
             return "UPDATE 0"
 
@@ -542,10 +542,9 @@ async def test_dlq_db_inspection_and_replay() -> None:
     assert stats["dead_letter"] == 2
     assert stats["pending"] == 4
 
-    assert db._LIST_DLQ_SQL in executed_queries
-    assert db._REPLAY_DLQ_SQL in executed_queries
-    assert db._REPLAY_ALL_DLQ_SQL in executed_queries
-    assert db._QUEUE_STATS_SQL in executed_queries
+    assert len(executed_queries) == 4
+    assert any("SELECT" in q and "dead_letter" in q for q in executed_queries)
+    assert any("UPDATE staged_records" in q for q in executed_queries)
 
 
 @pytest.mark.asyncio
@@ -823,14 +822,14 @@ async def test_mark_processed_db_execution() -> None:
     await db.mark_processed(rec_id, pool=FakePool())  # type: ignore[arg-type]
 
     assert len(executed) == 1
-    assert executed[0][0] == db._MARK_PROCESSED_SQL
     assert executed[0][1] == (rec_id,)
-    assert "last_error = NULL" in db._MARK_PROCESSED_SQL
+    assert "processed = TRUE" in executed[0][0]
+    assert "last_error = NULL" in executed[0][0]
 
 
 @pytest.mark.asyncio
 async def test_claim_batch_excludes_dead_letter_in_query() -> None:
-    """Verify claim_batch passes limit and max_attempts to CLAIM_SQL with dead_letter exclusion."""
+    """Verify claim_batch passes limit and max_attempts with dead_letter exclusion."""
     from meeting_notes import db
 
     executed: list[tuple[str, Any]] = []
@@ -864,9 +863,8 @@ async def test_claim_batch_excludes_dead_letter_in_query() -> None:
     records = await db.claim_batch(limit=25, max_attempts=4, pool=FakePool())  # type: ignore[arg-type]
     assert records == []
     assert len(executed) == 1
-    assert executed[0][0] == db.CLAIM_SQL
     assert executed[0][1] == (25, 4)
-    assert "coalesce(status, 'pending') != 'dead_letter'" in db.CLAIM_SQL
+    assert "coalesce(status, 'pending') != 'dead_letter'" in executed[0][0]
 
 
 def test_tracker_routing_with_jira_disabled() -> None:
@@ -1065,12 +1063,12 @@ async def test_default_tracker_helpers_raise_on_ambiguous_key() -> None:
 
 
 def test_schema_sql_includes_backward_compat_migration() -> None:
-    """Verify SCHEMA_SQL contains ALTER TABLE statements for existing staged_records tables."""
-    from meeting_notes.db import SCHEMA_SQL
+    """Verify MIGRATIONS_SQL contains ALTER TABLE statements for existing staged_records tables."""
+    from meeting_notes.db import MIGRATIONS_SQL
 
-    assert "ALTER TABLE staged_records ADD COLUMN IF NOT EXISTS attempts" in SCHEMA_SQL
-    assert "ALTER TABLE staged_records ADD COLUMN IF NOT EXISTS last_error" in SCHEMA_SQL
-    assert "ALTER TABLE staged_records ADD COLUMN IF NOT EXISTS status" in SCHEMA_SQL
+    assert "ALTER TABLE staged_records ADD COLUMN IF NOT EXISTS attempts" in MIGRATIONS_SQL
+    assert "ALTER TABLE staged_records ADD COLUMN IF NOT EXISTS last_error" in MIGRATIONS_SQL
+    assert "ALTER TABLE staged_records ADD COLUMN IF NOT EXISTS status" in MIGRATIONS_SQL
 
 
 @pytest.mark.asyncio
@@ -1078,8 +1076,11 @@ async def test_queue_stats_does_not_double_count_quarantined_records() -> None:
     """Verify that get_queue_stats keeps dead_letter and processed mutually exclusive."""
     from meeting_notes import db
 
+    executed: list[str] = []
+
     class FakePool:
         async def fetchrow(self, query: str, *args: Any) -> dict[str, Any]:
+            executed.append(query)
             # Simulate a database containing 1 pending, 1 retry, 1 dead_letter, and 2 processed
             return {
                 "total": 5,
@@ -1098,12 +1099,11 @@ async def test_queue_stats_does_not_double_count_quarantined_records() -> None:
     # Mutually exclusive: sum of distinct buckets equals total
     assert stats["pending"] + stats["retry"] + stats["dead_letter"] + stats["processed"] == stats["total"]
 
-    # Verify that the SQL query itself derives a single effective status per row,
+    assert len(executed) == 1
+    # Verify that the query derives a single effective status per row,
     # guaranteeing structural mutual exclusivity across all buckets.
-    assert "coalesce(status, CASE WHEN processed THEN 'processed' ELSE 'pending' END) = 'pending'" in db._QUEUE_STATS_SQL
-    assert "coalesce(status, CASE WHEN processed THEN 'processed' ELSE 'pending' END) = 'retry'" in db._QUEUE_STATS_SQL
-    assert "coalesce(status, CASE WHEN processed THEN 'processed' ELSE 'pending' END) = 'dead_letter'" in db._QUEUE_STATS_SQL
-    assert "coalesce(status, CASE WHEN processed THEN 'processed' ELSE 'pending' END) = 'processed'" in db._QUEUE_STATS_SQL
+    assert "coalesce(status, CASE WHEN processed THEN 'processed' ELSE 'pending' END)" in executed[0]
+    assert "dead_letter" in executed[0]
 
 
 

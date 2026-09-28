@@ -156,17 +156,21 @@ async def _embed_pending(
                 texts = [r[text_field] for r in chunk]
                 async with semaphore:
                     vectors = await embed_batch_texts(texts, settings=settings, embed_batch_fn=embed_batch_fn)
-
-                chunk_count = 0
-                async with driver.session() as session:
-                    for row, vector in zip(chunk, vectors, strict=False):
-                        if vector is not None:
-                            await session.run(write_cypher, id=row["id"], embedding=vector, now=now)
-                            chunk_count += 1
-                return chunk_count
-            except Exception as exc:  # noqa: BLE001 - per-chunk resilience
+            except Exception as exc:  # noqa: BLE001 - per-chunk embedding resilience
                 log.warning("vector.batch_chunk_failed", chunk_size=len(chunk), error=str(exc))
                 return 0
+
+            chunk_count = 0
+            for row, vector in zip(chunk, vectors, strict=False):
+                if vector is None:
+                    continue
+                try:
+                    async with driver.session() as session:
+                        await session.run(write_cypher, id=row["id"], embedding=vector, now=now)
+                    chunk_count += 1
+                except Exception as row_exc:  # noqa: BLE001 - per-record write resilience
+                    log.warning("vector.batch_row_write_failed", id=row.get("id"), error=str(row_exc))
+            return chunk_count
 
         chunk_counts = await asyncio.gather(*(process_batch_chunk(c) for c in chunks))
         return sum(chunk_counts)

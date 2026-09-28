@@ -71,8 +71,11 @@ CREATE TABLE IF NOT EXISTS watermarks (
     value       TEXT NOT NULL,
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+"""
 
--- Backward-compatibility migration for pre-existing staged_records tables (Phase 13 DLQ columns)
+# Backward-compatibility migrations for pre-existing tables across phases.
+MIGRATIONS_SQL = """
+-- Phase 13 DLQ columns for pre-existing staged_records tables
 ALTER TABLE staged_records ADD COLUMN IF NOT EXISTS attempts INT NOT NULL DEFAULT 0;
 ALTER TABLE staged_records ADD COLUMN IF NOT EXISTS last_error TEXT;
 ALTER TABLE staged_records ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending';
@@ -326,6 +329,7 @@ async def apply_migrations(pool: asyncpg.Pool | None = None) -> None:
     async with pool.acquire() as conn:
         await conn.execute(SCHEMA_SQL)
         await conn.execute(DEV_AGENT_SCHEMA_SQL)
+        await conn.execute(MIGRATIONS_SQL)
     log.info("db.migrations_applied")
 
 
