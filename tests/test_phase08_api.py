@@ -1851,6 +1851,60 @@ def test_extractor_repair_date_fallback_preservation() -> None:
     assert repaired2["date"] == today
 
 
+def test_initials_matching_single_and_ambiguous() -> None:
+    """Verify that unique initials resolve, while ambiguous multi-person initials route to review."""
+    from meeting_notes.person_resolver import Roster, resolve
+
+    known_single = [
+        {"name": "Alex Mercer", "email": "alex@example.com", "tracked": False},
+        {"name": "Diana Prince", "email": "diana@example.com", "tracked": False},
+    ]
+
+    # Single match resolves
+    r_single = resolve({"name": "AM", "email": None}, roster=Roster([]), known_people=known_single)
+    assert r_single.status == "resolved"
+    assert r_single.name == "Alex Mercer"
+    assert r_single.email == "alex@example.com"
+    assert r_single.reason == "person-initials"
+
+    # Ambiguous initials (Alex Mercer and Alice Miller both have initials "AM") route to review
+    known_ambiguous = [
+        {"name": "Alex Mercer", "email": "alex@example.com", "tracked": False},
+        {"name": "Alice Miller", "email": "alice@example.com", "tracked": False},
+    ]
+    r_ambiguous = resolve({"name": "AM", "email": None}, roster=Roster([]), known_people=known_ambiguous)
+    assert r_ambiguous.status == "review"
+    assert r_ambiguous.reason == "ambiguous-initials"
+
+
+def test_person_resolver_roster_load_failure_logs_warning(monkeypatch: Any) -> None:
+    """Verify that an invalid roster path logs structured warning instead of silent swallow."""
+    from meeting_notes import person_resolver
+
+    warnings: list[str] = []
+
+    def mock_warning(event: str, **kwargs: Any) -> None:
+        warnings.append(event)
+
+    monkeypatch.setattr(person_resolver.log, "warning", mock_warning)
+    monkeypatch.setattr(person_resolver, "CONTACT_PROFILES", {})
+
+    def bad_load(path: Any) -> Any:
+        raise OSError("Permission denied on roster file")
+
+    monkeypatch.setattr(person_resolver, "load_roster", bad_load)
+
+    class FakeSettings:
+        person_roster_path = "/bad/roster.json"
+
+    monkeypatch.setattr("meeting_notes.config.get_settings", lambda: FakeSettings())
+
+    res = person_resolver.resolve_to_full_name("Unknown Colleague")
+    assert res == "Unknown Colleague"
+    assert "person_resolver.roster_load_failed" in warnings
+
+
+
 
 
 

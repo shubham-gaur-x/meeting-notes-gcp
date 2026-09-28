@@ -109,6 +109,19 @@ KNOWN_PERSON_ALIASES: dict[str, tuple[str, str]] = {}
 EMAIL_ALIASES: dict[str, str] = {}
 
 
+def _ensure_roster_loaded() -> None:
+    """Ensure contact profiles are loaded from configured roster path with structured logging on failure."""
+    if not CONTACT_PROFILES:
+        try:
+            from meeting_notes.config import get_settings
+
+            path = get_settings().person_roster_path
+            if path:
+                load_roster(path)
+        except Exception as exc:
+            log.warning("person_resolver.roster_load_failed", error=str(exc))
+
+
 def resolve_to_full_name(mention: str | None) -> str:
     """Resolve any first name, nickname, initials, or email to the canonical contact full name."""
     if not mention:
@@ -118,13 +131,7 @@ def resolve_to_full_name(mention: str | None) -> str:
     if not norm or is_junk_name(norm):
         return raw
 
-    if not CONTACT_PROFILES:
-        try:
-            from meeting_notes.config import get_settings
-
-            load_roster(get_settings().person_roster_path)
-        except Exception:
-            pass
+    _ensure_roster_loaded()
 
     # 1. Match against contact profiles
     for profile in CONTACT_PROFILES.values():
@@ -141,13 +148,7 @@ def resolve_to_full_name(mention: str | None) -> str:
 
 def expand_contact_mentions(names: list[str]) -> list[str]:
     """Expand a list of names/mentions to include full names, emails, and all known aliases."""
-    if not CONTACT_PROFILES:
-        try:
-            from meeting_notes.config import get_settings
-
-            load_roster(get_settings().person_roster_path)
-        except Exception:
-            pass
+    _ensure_roster_loaded()
 
     expanded: set[str] = set()
     for name in names:
@@ -165,13 +166,7 @@ def expand_contact_mentions(names: list[str]) -> list[str]:
 
 def get_contact_directory_list() -> list[dict[str, Any]]:
     """Return all known contact profiles as serializable dictionaries."""
-    if not CONTACT_PROFILES:
-        try:
-            from meeting_notes.config import get_settings
-
-            load_roster(get_settings().person_roster_path)
-        except Exception:
-            pass
+    _ensure_roster_loaded()
     return [p.to_dict() for p in CONTACT_PROFILES.values()]
 
 
@@ -433,11 +428,13 @@ def _resolve_tier2_probabilistic(
             best[1] or name, role, best[0], "resolved", best[3], f"person-name:{best[2]:.2f}"
         )
 
-    # Initials match (e.g. "LP" matching "LeePatrick McIntire")
+    # Initials match (e.g. "LP" matching compound name)
     initials_candidates = _initials_matches(name, known_people)
     if len(initials_candidates) == 1:
         c_email, full, tracked = initials_candidates[0]
         return Resolution(full or name, role, c_email, "resolved", tracked, "person-initials")
+    if len(initials_candidates) > 1:
+        return Resolution(name, role, None, "review", False, "ambiguous-initials")
 
     # Unambiguous first-name match.
     given = _given_name_matches(name, known_people)
