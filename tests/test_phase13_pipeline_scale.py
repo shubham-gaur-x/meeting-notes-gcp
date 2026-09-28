@@ -569,3 +569,93 @@ async def test_pipeline_dlq_api_endpoints(monkeypatch: pytest.MonkeyPatch) -> No
         assert resp.status_code == 200
         assert resp.json()["count"] == 1
 
+
+@pytest.mark.asyncio
+async def test_find_sprint_candidates_resilient_to_individual_linear_issue_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify one failing Linear issue evaluation does not discard remaining valid issues."""
+    from meeting_notes.dev_agent import orchestrator
+
+    fake_issues = [
+        {"id": "lin-fail", "identifier": "ENG-1", "title": "Broken", "description": "Fails"},
+        {"id": "lin-ok", "identifier": "ENG-2", "title": "Working", "description": "Succeeds"},
+    ]
+
+    async def mock_search_issues(query: str, **kwargs: Any) -> list[dict[str, Any]]:
+        return fake_issues
+
+    async def mock_confidence(key: str) -> float:
+        if key == "ENG-1":
+            raise RuntimeError("Corrupted graph node")
+        return 0.95
+
+    monkeypatch.setattr("meeting_notes.linear_client.search_issues", mock_search_issues)
+    monkeypatch.setattr("meeting_notes.graph_client.get_action_confidence", mock_confidence)
+
+    settings = Settings(
+        issue_tracker="linear",
+        linear_api_key="test-key",
+        dev_agent_confidence_threshold=0.8,
+    )
+
+    candidates = await orchestrator.find_sprint_candidates(settings=settings)
+    assert len(candidates) == 1
+    assert candidates[0]["key"] == "ENG-2"
+    assert candidates[0]["tracker"] == "linear"
+
+
+@pytest.mark.asyncio
+async def test_default_get_issue_detail_linear_does_not_fall_through_to_jira(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify Linear API failures return a safe fallback and NEVER attempt Jira."""
+    from meeting_notes.dev_agent import orchestrator
+
+    async def mock_linear_fail(key: str, **kwargs: Any) -> Any:
+        raise RuntimeError("Linear connection timeout")
+
+    jira_called = False
+
+    async def mock_jira_detail(key: str, **kwargs: Any) -> Any:
+        nonlocal jira_called
+        jira_called = True
+        return {"key": key, "summary": "Jira ticket"}
+
+    monkeypatch.setattr("meeting_notes.linear_client.get_issue", mock_linear_fail)
+    monkeypatch.setattr("meeting_notes.jira_client.get_issue_detail", mock_jira_detail)
+
+    settings = Settings(
+        issue_tracker="both",
+        jira_project_key="SCRUM",
+        linear_api_key="test-key",
+    )
+
+    detail = await orchestrator._default_get_issue_detail("ENG-42", settings=settings)
+
+    assert detail["key"] == "ENG-42"
+    assert detail["tracker"] == "linear"
+    assert jira_called is False, "Expected Linear failure to NOT fall through to Jira"
+
+
+@pytest.mark.asyncio
+async def test_drain_batch_record_failure_exception_resilience() -> None:
+    """Verify drain_batch survives even if record_failure itself raises."""
+    async def failing_process(record: StagedRecord, adapter: Any) -> None:
+        raise ValueError("Bad record")
+
+    async def failing_record_failure(record_id: str, error: str) -> tuple[int, bool, str]:
+        raise RuntimeError("Postgres connection dropped")
+
+    record = _make_staged("r-crash")
+    result = await drain_batch(
+        [record],
+        process=failing_process,
+        sync_jira=None,
+        record_failure=failing_record_failure,
+    )
+
+    assert result.errors == 1
+    assert result.processed == 0
+
+

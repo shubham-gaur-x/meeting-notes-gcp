@@ -420,6 +420,9 @@ async def embed(
     return list(vector)
 
 
+DEFAULT_EMBEDDING_BATCH_CHUNK_SIZE: int = 50
+
+
 async def embed_batch(
     texts: list[str],
     *,
@@ -450,7 +453,7 @@ async def embed_batch(
             f"/locations/{location}/publishers/google/models/{model}:predict"
         )
         results: list[list[float] | None] = []
-        chunk_size = 50
+        chunk_size = DEFAULT_EMBEDDING_BATCH_CHUNK_SIZE
         for i in range(0, len(texts), chunk_size):
             chunk = texts[i : i + chunk_size]
             payload = {
@@ -473,7 +476,7 @@ async def embed_batch(
         model = settings.gemini_embedding_model
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:batchEmbedContents"
         results_gemini: list[list[float] | None] = []
-        chunk_size = 50
+        chunk_size = DEFAULT_EMBEDDING_BATCH_CHUNK_SIZE
         for i in range(0, len(texts), chunk_size):
             chunk = texts[i : i + chunk_size]
             payload = {

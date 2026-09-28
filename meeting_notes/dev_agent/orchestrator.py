@@ -33,6 +33,9 @@ _REPO_PATTERNS = (
     re.compile(r"\brepo(?:sitory)?\s*[:=]\s*([\w.-]+)/([\w.-]+)", re.I),
 )
 
+_LINEAR_KEY_RE = re.compile(r"^[A-Za-z]{1,10}-\d+$")
+_UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+
 
 def repo_dir_for(owner: str, repo: str, settings: Settings) -> str:
     """Checkout directory for one repository.
@@ -154,21 +157,28 @@ async def find_sprint_candidates(settings: Settings | None = None) -> list[dict[
                 settings=settings,
             )
             for issue in linear_issues:
-                key = issue.get("identifier") or issue.get("id", "")
-                conf = await graph_client.get_action_confidence(key)
-                if conf is not None and conf < settings.dev_agent_confidence_threshold:
-                    log.info(
-                        "orchestrator.triage.linear_low_confidence_skip",
-                        key=key, confidence=round(conf, 2),
+                try:
+                    key = issue.get("identifier") or issue.get("id", "")
+                    conf = await graph_client.get_action_confidence(key)
+                    if conf is not None and conf < settings.dev_agent_confidence_threshold:
+                        log.info(
+                            "orchestrator.triage.linear_low_confidence_skip",
+                            key=key, confidence=round(conf, 2),
+                        )
+                        continue
+                    eligible.append({
+                        "key": key,
+                        "id": issue.get("id"),
+                        "summary": issue.get("title", ""),
+                        "description": issue.get("description", ""),
+                        "tracker": "linear",
+                    })
+                except Exception as issue_exc:
+                    log.warning(
+                        "orchestrator.linear_issue_eval_failed",
+                        issue_id=issue.get("id"),
+                        error=str(issue_exc),
                     )
-                    continue
-                eligible.append({
-                    "key": key,
-                    "id": issue.get("id"),
-                    "summary": issue.get("title", ""),
-                    "description": issue.get("description", ""),
-                    "tracker": "linear",
-                })
         except Exception as exc:
             log.error("orchestrator.linear_candidates_failed", error=str(exc), exc_info=True)
 
@@ -223,14 +233,14 @@ class _Dependencies:
     review_pr: Any
 
 
-import re
-
-_LINEAR_KEY_RE = re.compile(r"^[A-Za-z]{1,10}-\d+$")
-_UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
-
-
 def _should_use_linear(key: str, settings: Settings) -> bool:
-    """Determine whether to route ticket operations to Linear or Jira."""
+    """Determine whether to route ticket operations to Linear or Jira.
+
+    Precedence in 'both' mode:
+    1. If key matches configured Jira project prefix -> Jira (False)
+    2. If key matches Linear UUID or team-key pattern -> Linear (True)
+    3. Malformed / ambiguous key -> fails safe to Jira (False) with warning log.
+    """
     has_linear_key = bool(getattr(settings, "linear_api_key", None))
     if not has_linear_key:
         return False
@@ -307,8 +317,11 @@ async def _default_get_issue_detail(key: str, *, settings: Settings | None = Non
                     "tracker": "linear",
                 }
             log.warning("orchestrator.linear_get_issue_not_found", key=key)
+            return {"key": key, "summary": "", "description": "", "tracker": "linear"}
         except Exception as exc:
             log.warning("orchestrator.linear_get_issue_failed", key=key, error=str(exc))
+            return {"key": key, "summary": "", "description": "", "tracker": "linear"}
+
     from meeting_notes import jira_client
 
     detail = await jira_client.get_issue_detail(key, settings=settings)
