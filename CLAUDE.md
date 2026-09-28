@@ -496,7 +496,10 @@ anything else until a real token has been held in hand.
 - `LINEAR_API_KEY`: API key for Linear GraphQL service.
 - `LINEAR_TEAM_ID`: Default team identifier for created issues.
 - `LINEAR_DEFAULT_PROJECT_ID`: Optional default project ID.
-- `ISSUE_TRACKER`: Target tracker (`"jira"`, `"linear"`, or `"both"`).
+- `LINEAR_CONFIDENCE_THRESHOLD`: Minimum extraction confidence (default 0.6) required to push an action item.
+- `LINEAR_DEDUP_ENABLED`: Boolean gate for vector dedup checks prior to issue push (default true).
+- `LINEAR_DEDUP_THRESHOLD`: Cosine similarity ceiling for Linear issue deduplication (default 0.90).
+- `ISSUE_TRACKER`: Target tracker (`"jira"`, `"linear"`, `"both"`, or `"none"`).
 
 ## graphify
 
