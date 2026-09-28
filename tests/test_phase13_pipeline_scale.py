@@ -300,6 +300,90 @@ async def test_vector_embed_pending_multi_batch_concurrency_ceiling() -> None:
 
 
 @pytest.mark.asyncio
+async def test_vector_embed_pending_preserves_pr2_per_item_concurrency_ceiling() -> None:
+    """Verify PR #2 per-item concurrency ceiling is preserved when embed_batch_fn is None."""
+    sem = asyncio.Semaphore(2)
+    active = 0
+    peak = 0
+    lock = asyncio.Lock()
+
+    async def fake_embed_single(text: str, **kwargs: Any) -> list[float]:
+        nonlocal active, peak
+        async with lock:
+            active += 1
+            if active > peak:
+                peak = active
+        await asyncio.sleep(0.02)
+        async with lock:
+            active -= 1
+        return [0.1] * 768
+
+    rows = [{"id": f"act-{i}", "task": f"Task {i}"} for i in range(6)]
+
+    class _Session:
+        async def run(self, cypher: str, **kwargs: Any) -> Any:
+            class _Result:
+                def __aiter__(self):
+                    self._it = iter(rows)
+                    return self
+
+                async def __anext__(self):
+                    try:
+                        return next(self._it)
+                    except StopIteration:
+                        raise StopAsyncIteration from None
+
+            return _Result() if "RETURN" in cypher else None
+
+        async def __aenter__(self) -> _Session:
+            return self
+
+        async def __aexit__(self, *exc: Any) -> bool:
+            return False
+
+    class _Driver:
+        def session(self) -> _Session:
+            return _Session()
+
+    count = await vector._embed_pending(
+        "MATCH ... RETURN a.id AS id, a.task AS task",
+        "MATCH ... SET a.embedding = $embedding",
+        "meet-123",
+        "task",
+        driver=_Driver(),
+        settings=Settings(llm_backend="fake"),
+        embed=fake_embed_single,
+        semaphore=sem,
+        embed_batch_fn=None,
+    )
+
+    assert count == 6
+    assert peak <= 2, f"Peak per-item concurrency ({peak}) exceeded limit of 2"
+    assert peak > 1, f"Expected concurrency > 1, got {peak}"
+
+
+def test_should_use_linear_fail_safe_routing() -> None:
+    from meeting_notes.dev_agent.orchestrator import _should_use_linear
+
+    # 1. Jira only mode
+    jira_settings = Settings(issue_tracker="jira", jira_project_key="SCRUM", linear_api_key="lin-key")
+    assert _should_use_linear("SCRUM-12", jira_settings) is False
+    assert _should_use_linear("ENG-42", jira_settings) is False
+
+    # 2. Linear only mode
+    linear_settings = Settings(issue_tracker="linear", linear_api_key="lin-key")
+    assert _should_use_linear("ENG-42", linear_settings) is True
+    assert _should_use_linear("SCRUM-12", linear_settings) is True
+
+    # 3. Both mode: Jira prefix matches -> Jira, Linear format -> Linear, Malformed -> Jira fail-safe
+    both_settings = Settings(issue_tracker="both", jira_project_key="SCRUM", linear_api_key="lin-key")
+    assert _should_use_linear("SCRUM-12", both_settings) is False
+    assert _should_use_linear("ENG-42", both_settings) is True
+    assert _should_use_linear("11111111-2222-3333-4444-555555555555", both_settings) is True
+    assert _should_use_linear("MALFORMED_NO_HYPHEN", both_settings) is False
+
+
+@pytest.mark.asyncio
 async def test_find_sprint_candidates_picks_up_linear_tickets(monkeypatch: pytest.MonkeyPatch) -> None:
     from meeting_notes.dev_agent import orchestrator
 

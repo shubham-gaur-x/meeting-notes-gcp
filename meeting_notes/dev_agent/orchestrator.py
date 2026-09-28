@@ -170,7 +170,7 @@ async def find_sprint_candidates(settings: Settings | None = None) -> list[dict[
                     "tracker": "linear",
                 })
         except Exception as exc:
-            log.warning("orchestrator.linear_candidates_failed", error=str(exc))
+            log.error("orchestrator.linear_candidates_failed", error=str(exc), exc_info=True)
 
     return eligible
 
@@ -223,6 +223,12 @@ class _Dependencies:
     review_pr: Any
 
 
+import re
+
+_LINEAR_KEY_RE = re.compile(r"^[A-Za-z]{1,10}-\d+$")
+_UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+
+
 def _should_use_linear(key: str, settings: Settings) -> bool:
     """Determine whether to route ticket operations to Linear or Jira."""
     has_linear_key = bool(getattr(settings, "linear_api_key", None))
@@ -233,11 +239,16 @@ def _should_use_linear(key: str, settings: Settings) -> bool:
         return True
     if configured_tracker == "jira":
         return False
-    # "both": route to Jira if key matches configured Jira project prefix, else Linear
+    # "both": route to Jira if key matches configured Jira project prefix
     jira_prefix = (getattr(settings, "jira_project_key", "") or "").upper()
     if jira_prefix and key.upper().startswith(f"{jira_prefix}-"):
         return False
-    return True
+    # In "both" mode, only route to Linear if key matches valid Linear identifier or UUID pattern
+    if _UUID_RE.match(key) or _LINEAR_KEY_RE.match(key):
+        return True
+    # Fail-safe: malformed or unknown key routes to Jira rather than misrouting to Linear
+    log.warning("orchestrator.tracker_routing_ambiguous", key=key, default="jira")
+    return False
 
 
 async def _default_transition_issue(key: str, status: str, *, settings: Settings | None = None) -> bool:

@@ -140,19 +140,26 @@ async def _embed_pending(
     resolved = settings or get_settings()
     sem = semaphore or asyncio.Semaphore(max(1, resolved.embedding_concurrency))
 
-    # When explicit batching is supplied, use high-throughput batch embedding bounded by semaphore:
+    # When explicit batching is supplied, chunk into batches of 50 and process with semaphore concurrency:
     if embed_batch_fn is not None:
-        texts = [r[text_field] for r in pending]
-        async with sem:
-            vectors = await embed_batch_texts(texts, settings=settings, embed_batch_fn=embed_batch_fn)
+        chunk_size = 50
+        chunks = [pending[i : i + chunk_size] for i in range(0, len(pending), chunk_size)]
 
-        count = 0
-        async with driver.session() as session:
-            for row, vector in zip(pending, vectors, strict=False):
-                if vector is not None:
-                    await session.run(write_cypher, id=row["id"], embedding=vector, now=now)
-                    count += 1
-        return count
+        async def process_batch_chunk(chunk: list[dict[str, Any]]) -> int:
+            texts = [r[text_field] for r in chunk]
+            async with sem:
+                vectors = await embed_batch_texts(texts, settings=settings, embed_batch_fn=embed_batch_fn)
+
+            chunk_count = 0
+            async with driver.session() as session:
+                for row, vector in zip(chunk, vectors, strict=False):
+                    if vector is not None:
+                        await session.run(write_cypher, id=row["id"], embedding=vector, now=now)
+                        chunk_count += 1
+            return chunk_count
+
+        chunk_counts = await asyncio.gather(*(process_batch_chunk(c) for c in chunks))
+        return sum(chunk_counts)
 
     async def embed_one(row: dict[str, Any]) -> int:
         async with sem:
