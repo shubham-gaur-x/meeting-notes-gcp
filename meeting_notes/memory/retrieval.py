@@ -464,9 +464,9 @@ async def assemble_context(
 
 
 def _format_history_context(history: list[dict[str, Any]]) -> str:
-    """Format recent turns into conversational memory context."""
+    """Format recent turns into conversational memory context (sliding window of last 4 turns)."""
     turns: list[str] = []
-    for turn in history[-4:]:  # last 2 exchanges
+    for turn in history[-4:]:
         role = "User" if turn.get("role") == "user" else "Assistant"
         text = str(turn.get("text") or turn.get("answer") or "").strip()
         if text:

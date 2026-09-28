@@ -895,9 +895,10 @@ def test_push_self_only_strict_identity_matching() -> None:
     assert jira_pusher.is_self_owned("Alex Mercer", settings)
     assert jira_pusher.is_self_owned("alex.mercer@example.com", settings)
     assert jira_pusher.is_self_owned("alex.mercer", settings)
-    # Must NOT loosely match a different Alex
+    # Must NOT loosely match a different Alex or external domain address
     assert not jira_pusher.is_self_owned("Alex", settings)
     assert not jira_pusher.is_self_owned("Alex Smith", settings)
+    assert not jira_pusher.is_self_owned("alex@evil.com", settings)
 
 
 @pytest.mark.parametrize(
@@ -998,9 +999,9 @@ async def test_get_all_actions_deterministic_join_deduplication() -> None:
     assert len(actions) == 1
     assert actions[0]["id"] == "act-1"
     assert len(executed_queries) == 1
-    assert "ORDER BY coalesce(p.name, '') ASC, coalesce(parent.id, '') ASC" in executed_queries[0]
-    assert "head(collect(DISTINCT p)) AS p" in executed_queries[0]
-    assert "head(collect(DISTINCT parent)) AS parent" in executed_queries[0]
+    assert "WITH a, min(m.date) AS meeting_date" in executed_queries[0]
+    assert "WITH a, meeting_date, head(collect(p)) AS p" in executed_queries[0]
+    assert "WITH a, meeting_date, p, head(collect(parent)) AS parent" in executed_queries[0]
 
 
 

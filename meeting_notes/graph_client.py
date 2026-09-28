@@ -1007,16 +1007,11 @@ async def get_all_actions(
             MATCH (a:ActionItem)
             {where_clause}
             OPTIONAL MATCH (m:Meeting)-[:FOLLOWS_UP]->(a)
+            WITH a, min(m.date) AS meeting_date
             OPTIONAL MATCH (a)-[:ASSIGNED_TO]->(p:Person)
+            WITH a, meeting_date, head(collect(p)) AS p
             OPTIONAL MATCH (parent:ActionItem)-[:PARENT_OF]->(a)
-            WITH a, m, p, parent
-            ORDER BY coalesce(p.name, '') ASC, coalesce(parent.id, '') ASC
-            // Deterministically select earliest meeting date and primary assignee/parent
-            // to prevent Cartesian row fanout across tabular dashboard views.
-            WITH a,
-                 min(m.date) AS meeting_date,
-                 head(collect(DISTINCT p)) AS p,
-                 head(collect(DISTINCT parent)) AS parent
+            WITH a, meeting_date, p, head(collect(parent)) AS parent
             RETURN a.id AS id, a.task AS task, coalesce(p.name, a.owner) AS owner,
                    a.due AS due,
                    coalesce(substring(a.created_at, 0, 10), meeting_date, '') AS created_at,

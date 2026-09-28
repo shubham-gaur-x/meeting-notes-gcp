@@ -63,8 +63,6 @@ def _matches_identity(owner_clean: str, ident: str) -> bool:
         return True
     if "@" in ident and owner_clean == ident.split("@")[0]:
         return True
-    if "@" in owner_clean and ident == owner_clean.split("@")[0]:
-        return True
     return False
 
 
