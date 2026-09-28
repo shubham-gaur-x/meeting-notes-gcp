@@ -23,7 +23,7 @@ class ResolvePersonRequest(BaseModel):
 class AddAttendeeRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
     name: str = Field(min_length=1)
-    email: str = Field(min_length=3)
+    email: str | None = None
 
 
 @router.get("/actions")

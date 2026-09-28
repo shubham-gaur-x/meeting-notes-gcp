@@ -174,8 +174,6 @@ def get_contact_directory_list() -> list[dict[str, Any]]:
             pass
     return [p.to_dict() for p in CONTACT_PROFILES.values()]
 
-# Optional operator name aliases (populated dynamically from roster or config)
-COMMON_NAME_ALIASES: dict[str, str] = {}
 
 
 def normalize_email(email: str | None) -> str:
@@ -486,10 +484,6 @@ def resolve(
         c_name, c_email = alias_match
         return Resolution(c_name, role, c_email, "resolved", False, "known-alias")
 
-    # Retained backward compatibility mapping
-    alias = COMMON_NAME_ALIASES.get(norm_n)
-    if alias:
-        name = alias
 
     # Tier 1 — deterministic (email present)
     if email and "@" in email:

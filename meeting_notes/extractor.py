@@ -246,7 +246,7 @@ def repair(data: dict[str, Any], context: dict[str, Any] | None = None) -> dict[
     if _is_null_like(data.get("platform")):
         data["platform"] = ctx.get("platform", "unknown")
     if _is_null_like(data.get("date")):
-        data["date"] = ctx.get("date", datetime.now(UTC).strftime("%Y-%m-%d"))
+        data["date"] = ctx.get("date") or datetime.now(UTC).strftime("%Y-%m-%d")
     if _is_null_like(data.get("summary")):
         data["summary"] = data.get("title") or "No summary available"
 

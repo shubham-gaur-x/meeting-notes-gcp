@@ -1748,7 +1748,7 @@ async def resolve_person_review(
             MERGE (p:Person {id: $person_id})
             ON CREATE SET p.name = $name, p.email = $email, p.created_at = datetime()
             ON MATCH SET p.name = coalesce(p.name, $name),
-                         p.email = coalesce($email, p.email)
+                         p.email = $email
             MERGE (p)-[:ATTENDED]->(m)
             SET r.status = 'resolved'
             WITH m, p
@@ -1775,7 +1775,7 @@ async def resolve_person_review(
             "review_id": review_id,
             "status": "resolved",
             "name": norm_name,
-            "email": norm_email or "",
+            "email": norm_email,
         }
 
 
@@ -1829,9 +1829,15 @@ async def delete_person_review(
 
 
 async def add_meeting_attendee(
-    meeting_id: str, name: str, email: str, driver: Any | None = None
+    meeting_id: str, name: str, email: str | None = None, driver: Any | None = None
 ) -> dict[str, Any]:
-    """Add an attendee to a meeting directly."""
+    """Add an attendee to a meeting directly.
+
+    Invariant:
+    Never synthesize or guess email addresses. If no verified email is provided by the
+    caller, key the Person node deterministically by canonical name:
+    `uuid5_id("person", f"name:{norm_name.lower()}")`, leaving `p.email = NULL`.
+    """
     driver = driver or get_driver()
     norm_email = email.strip().lower() if email and email.strip() else None
     norm_name = name.strip()
@@ -1847,7 +1853,7 @@ async def add_meeting_attendee(
             MERGE (p:Person {id: $person_id})
             ON CREATE SET p.name = $name, p.email = $email, p.created_at = datetime()
             ON MATCH SET p.name = coalesce($name, p.name),
-                         p.email = coalesce($email, p.email)
+                         p.email = $email
             MERGE (p)-[:ATTENDED]->(m)
             RETURN p.id AS person_id, p.name AS name, p.email AS email, m.id AS meeting_id
             """,
@@ -1860,4 +1866,9 @@ async def add_meeting_attendee(
         async for r in res:
             rec = dict(r)
             break
-        return rec or {}
+        return rec or {
+            "person_id": person_id,
+            "name": norm_name,
+            "email": norm_email,
+            "meeting_id": meeting_id,
+        }

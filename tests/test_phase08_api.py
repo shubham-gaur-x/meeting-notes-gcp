@@ -1568,6 +1568,149 @@ async def test_resolve_person_review_does_not_borrow_existing_person_email() -> 
     # No query should search for existing persons to copy their email
     for q in executed_queries:
         assert "p.email IS NOT NULL" not in q
+        assert "coalesce($email, p.email)" not in q
+
+
+@pytest.mark.asyncio
+async def test_add_meeting_attendee_no_email_synthesis() -> None:
+    """Invariant: add_meeting_attendee must NEVER synthesize email, keying by name."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from meeting_notes import graph_client
+    from meeting_notes.utils import uuid5_id
+
+    mock_driver = MagicMock()
+    mock_session = AsyncMock()
+    mock_driver.session.return_value.__aenter__.return_value = mock_session
+
+    class FakeResult:
+        def __init__(self, items: list[dict[str, Any]]) -> None:
+            self.items = items
+
+        def __aiter__(self):
+            async def gen():
+                for item in self.items:
+                    yield item
+            return gen()
+
+    expected_person_id = uuid5_id("person", "name:alex mercer")
+    executed_queries: list[str] = []
+    query_params: list[dict[str, Any]] = []
+
+    def record_run(query: str, **kwargs: Any) -> Any:
+        executed_queries.append(query)
+        query_params.append(kwargs)
+        return FakeResult([{
+            "person_id": expected_person_id,
+            "name": "Alex Mercer",
+            "email": None,
+            "meeting_id": "meet-123",
+        }])
+
+    mock_session.run = AsyncMock(side_effect=record_run)
+
+    result = await graph_client.add_meeting_attendee(
+        meeting_id="meet-123",
+        name="Alex Mercer",
+        email=None,
+        driver=mock_driver,
+    )
+
+    assert result["person_id"] == expected_person_id
+    assert result["email"] is None
+
+    # Verify query semantics: p.email = $email, no coalesce borrowing
+    assert len(executed_queries) == 1
+    q = executed_queries[0]
+    assert "p.email = $email" in q
+    assert "coalesce($email, p.email)" not in q
+
+    params = query_params[0]
+    assert params["email"] is None
+    assert params["person_id"] == expected_person_id
+
+
+@pytest.mark.asyncio
+async def test_add_meeting_attendee_with_verified_email() -> None:
+    """Verify add_meeting_attendee when explicit verified email is provided."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from meeting_notes import graph_client
+    from meeting_notes.utils import uuid5_id
+
+    mock_driver = MagicMock()
+    mock_session = AsyncMock()
+    mock_driver.session.return_value.__aenter__.return_value = mock_session
+
+    class FakeResult:
+        def __init__(self, items: list[dict[str, Any]]) -> None:
+            self.items = items
+
+        def __aiter__(self):
+            async def gen():
+                for item in self.items:
+                    yield item
+            return gen()
+
+    expected_person_id = uuid5_id("person", "alex.mercer@example.com")
+    query_params: list[dict[str, Any]] = []
+
+    def record_run(query: str, **kwargs: Any) -> Any:
+        query_params.append(kwargs)
+        return FakeResult([{
+            "person_id": expected_person_id,
+            "name": "Alex Mercer",
+            "email": "alex.mercer@example.com",
+            "meeting_id": "meet-123",
+        }])
+
+    mock_session.run = AsyncMock(side_effect=record_run)
+
+    result = await graph_client.add_meeting_attendee(
+        meeting_id="meet-123",
+        name="Alex Mercer",
+        email="alex.mercer@example.com",
+        driver=mock_driver,
+    )
+
+    assert result["person_id"] == expected_person_id
+    assert result["email"] == "alex.mercer@example.com"
+    assert query_params[0]["email"] == "alex.mercer@example.com"
+    assert query_params[0]["person_id"] == expected_person_id
+
+
+async def test_add_attendee_endpoint_without_email(app: Any, monkeypatch: Any) -> None:
+    """Verify POST /review/meeting/{meeting_id}/attendee succeeds when email is omitted."""
+    from meeting_notes import graph_client
+    from meeting_notes.utils import uuid5_id
+
+    captured: dict[str, Any] = {}
+
+    async def mock_add(
+        meeting_id: str, name: str, email: str | None = None, driver: Any = None
+    ) -> dict[str, Any]:
+        captured.update({"meeting_id": meeting_id, "name": name, "email": email})
+        return {
+            "person_id": uuid5_id("person", f"name:{name.lower()}"),
+            "name": name,
+            "email": email,
+            "meeting_id": meeting_id,
+        }
+
+    monkeypatch.setattr(graph_client, "add_meeting_attendee", mock_add)
+    resp = await _post(
+        app,
+        "/review/meeting/meet-789/attendee",
+        json={"name": "Alex Mercer"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "ok"
+    assert data["attendee"]["email"] is None
+    assert captured["meeting_id"] == "meet-789"
+    assert captured["name"] == "Alex Mercer"
+    assert captured["email"] is None
+
 
 
 

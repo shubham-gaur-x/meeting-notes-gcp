@@ -1175,8 +1175,6 @@ a future phase requires:
 Workspace Events API delivers transcripts only; in-meeting chat logs are stored separately
 and cannot be reliably fetched with the current `meetings.space.readonly` scope.
 
-**Retrieval & Vector Degradation Resilience:** Hybrid RAG retrieval combines Memgraph structured Cypher traversals with opportunistic chunk-level vector similarity (`vector.py`). In line with high-availability search design, vector chunk search treats remote embedding timeouts or uninitialized vector indices as opportunistic enrichments that degrade gracefully (`chunk_search_failed` warning log) to keyword/semantic meeting search and deterministic Cypher graph provenance, ensuring chat endpoints never hard-crash when external embedding services experience transient latency. In contrast, structural graph queries fail loudly.
-
 ---
 
 ## ADR-029 — Linear issue tracking alongside Jira, with issue_tracker:"both" deduplication
@@ -1202,6 +1200,26 @@ and issue-to-meeting graph provenance.
   backoff retry for rate limits.
 - Graph schema explicitly supports dual tracker tracking with zero cross-tracker key collisions.
 - Lays the foundation for autonomous agent task pickup in Phase 14 (`dev_agent`).
+
+---
+
+## ADR-030 — Opportunistic vector chunk retrieval with fail-soft degradation to graph context
+
+**Date:** 2026-09-24 · **Status:** Accepted
+
+**Context.** The Ask RAG conversational endpoint combines Memgraph Cypher traversals with chunk-level
+vector similarity search over meeting transcripts and discussions. External vector embedding calls
+(e.g. Vertex AI text-embedding-004) or local vector indexes may experience cold starts, transient
+timeouts, or uninitialized vector tables during initial boot.
+
+**Decision.** Hybrid RAG retrieval treats chunk-level vector search as an opportunistic enrichment layer:
+1. Vector similarity search (`search_similar_chunks`) is bounded (`limit=4`) and executes within a protected block.
+2. If vector search encounters an uninitialized index, timeout, or external provider error, it logs a structured warning (`retrieval.chunk_search_failed`) and degrades gracefully to deterministic Cypher graph traversals and keyword/semantic meeting search.
+3. In contrast, Cypher graph query syntax and database connection errors fail loudly to avoid silent data corruption.
+
+**Consequences.** Chat answers remain available with verified meeting metadata, decisions, and action items even during transient vector API latency or before background chunk embedding completes.
+
+**Rejected:** *Hard failure on missing vector index.* Would cause the primary chat interface to return 500 errors on cold start or when external embedding APIs hit rate limits.
 
 ---
 
