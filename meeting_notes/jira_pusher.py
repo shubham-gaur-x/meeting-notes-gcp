@@ -29,12 +29,9 @@ from meeting_notes.utils import gmail_thread_url, uuid5_id
 log = structlog.get_logger()
 
 _ADMINISTRATIVE_PATTERNS = [
-    r"\b(timecard|timesheet|time[- ]entry|time[- ]entries)\b",
-    r"\bsalesforce\b",
-    r"\bpsa\b",
+    r"\b(timecards?|timesheets?|time[- ]entry|time[- ]entries)\b",
     r"\bskills?\s+profile\b",
-    r"\b(optum|optum\s*bank)\b",
-    r"\bsocial\s+security\b",
+    r"\bexpense[- ]report\b",
     r"\b(benefits?|enrollment|401k|healthcare|hsa|fsa)\b",
 ]
 
@@ -83,7 +80,8 @@ def is_self_owned(owner: str, settings: Settings) -> bool:
 
     identities = _get_configured_identities(settings)
     if not identities:
-        return True
+        log.warning("jira_pusher.no_identities_configured_for_self_only")
+        return False
 
     return any(_matches_identity(owner_clean, ident) for ident in identities)
 

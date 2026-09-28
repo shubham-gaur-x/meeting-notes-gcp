@@ -71,7 +71,7 @@ async def main() -> int:
         print(f"✓ Staged record '{record_id}' (source_id: {source_id})")
 
         staged_record = StagedRecord(
-            id=record_id,
+            id=str(record_id),
             source_id=source_id,
             source_type="meet",
             payload=payload,
@@ -81,7 +81,6 @@ async def main() -> int:
 
         print("Processing transcript through entity & action item extraction...")
         drain_result = await drain_batch([staged_record])
-        await db.mark_processed(record_id)
 
         if drain_result.errors:
             print(f"⚠ Finished with {drain_result.errors} processing error(s):")

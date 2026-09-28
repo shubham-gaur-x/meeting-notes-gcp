@@ -793,7 +793,7 @@ async def test_administrative_task_is_skipped_and_not_sent_to_review() -> None:
         JIRA_SKIP_ADMINISTRATIVE=True,
     )
     meeting = _meeting(action_items=[
-        {"owner": "Michael Baylard", "task": "Submit Salesforce timecards by Friday", "confidence": 0.95}
+        {"owner": "Alex Mercer", "task": "Submit weekly timesheets by Friday", "confidence": 0.95}
     ])
     keys = await jira_pusher.push_action_items(
         meeting.action_items, meeting, "src-1", settings=settings,
@@ -826,11 +826,11 @@ async def test_push_self_only_skips_tasks_owned_by_others() -> None:
         JIRA_ENABLED=True,
         JIRA_DEDUP_ENABLED=False,
         JIRA_PUSH_SELF_ONLY=True,
-        JIRA_USER_IDENTITIES="michael.baylard@onixnet.com,Michael Baylard,Michael",
+        JIRA_USER_IDENTITIES="alex.mercer@example.com,Alex Mercer,Alex",
     )
     meeting = _meeting(action_items=[
-        {"owner": "Coley Woyak", "task": "Grant Michael access to BigQuery console", "confidence": 0.95},
-        {"owner": "Michael Baylard", "task": "Implement data pipeline connector", "confidence": 0.95},
+        {"owner": "Jordan Hayes", "task": "Grant Alex access to cloud console", "confidence": 0.95},
+        {"owner": "Alex Mercer", "task": "Implement data pipeline connector", "confidence": 0.95},
     ])
     updated_keys: list[tuple] = []
 
@@ -847,6 +847,22 @@ async def test_push_self_only_skips_tasks_owned_by_others() -> None:
     assert len(created_calls) == 1
     assert keys == ["SCRUM-1"]
     assert reviewed == [], "non-self task must not pollute review queue"
+
+
+async def test_push_self_only_fails_closed_when_no_identities_configured() -> None:
+    from meeting_notes import jira_pusher
+
+    settings = _jira_settings(
+        JIRA_ENABLED=True,
+        JIRA_PUSH_SELF_ONLY=True,
+        JIRA_USER_IDENTITIES="",
+    )
+    # When push_self_only is set but no identities are known, it must fail closed and return False
+    assert not jira_pusher.is_self_owned("Alex Mercer", settings)
+    # 'me' or 'self' still recognized
+    assert jira_pusher.is_self_owned("me", settings)
+    assert jira_pusher.is_self_owned("self", settings)
+
 
 
 # ─── jira_sync ─────────────────────────────────────────────────────────────────

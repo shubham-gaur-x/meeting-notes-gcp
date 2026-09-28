@@ -1009,6 +1009,8 @@ async def get_all_actions(
             OPTIONAL MATCH (m:Meeting)-[:FOLLOWS_UP]->(a)
             OPTIONAL MATCH (a)-[:ASSIGNED_TO]->(p:Person)
             OPTIONAL MATCH (parent:ActionItem)-[:PARENT_OF]->(a)
+            // Deduplicate optional joins: aggregate to earliest meeting date and primary
+            // assignee/parent to prevent row fanout in tabular dashboard views.
             WITH a,
                  min(m.date) AS meeting_date,
                  head(collect(DISTINCT p)) AS p,

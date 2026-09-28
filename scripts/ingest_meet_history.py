@@ -104,7 +104,7 @@ async def main() -> int:
         rec_id = await db.stage_record(item["source_id"], "meet", payload)
         if rec_id:
             staged_records.append(StagedRecord(
-                id=rec_id,
+                id=str(rec_id),
                 source_id=item["source_id"],
                 source_type="meet",
                 payload=payload,
