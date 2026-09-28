@@ -274,8 +274,8 @@ def validate_tracker_key(key: str, tracker: str | None = None) -> bool:
 
 def _resolve_dual_tracker_key(key: str, settings: Settings) -> bool:
     """Disambiguate key between Jira and Linear when both trackers are enabled."""
-    jira_prefix = (getattr(settings, "jira_project_key", "") or "").upper()
-    linear_team = (getattr(settings, "linear_team_id", "") or "").upper()
+    jira_prefix = (settings.jira_project_key or "").upper()
+    linear_team = (settings.linear_team_id or "").upper()
     if jira_prefix and linear_team and jira_prefix == linear_team:
         raise ValueError(
             f"Ambiguous tracker configuration: both Jira and Linear share prefix {jira_prefix!r}"
@@ -308,9 +308,9 @@ def _should_use_linear(key: str, settings: Settings, tracker: str | None = None)
         validate_tracker_key(key, tracker="linear" if is_linear else "jira")
         return is_linear
 
-    has_linear_key = bool(getattr(settings, "linear_api_key", None))
-    jira_enabled = getattr(settings, "jira_enabled", False)
-    configured_tracker = getattr(settings, "issue_tracker", "jira").lower()
+    has_linear_key = bool(settings.linear_api_key)
+    jira_enabled = settings.jira_enabled
+    configured_tracker = settings.issue_tracker.lower()
 
     if configured_tracker == "linear":
         if not has_linear_key:
@@ -355,7 +355,7 @@ async def _default_transition_issue(
         log.warning("orchestrator.linear_transition_state_not_found", key=key, status=status)
         return False
 
-    if not getattr(settings, "jira_enabled", False):
+    if not settings.jira_enabled:
         raise RuntimeError(
             f"Cannot route ticket {key}: Jira is disabled and Linear is not configured/applicable"
         )
@@ -379,7 +379,7 @@ async def _default_add_comment(
         await linear_client.add_comment(issue["id"], body, settings=settings)
         return
 
-    if not getattr(settings, "jira_enabled", False):
+    if not settings.jira_enabled:
         raise RuntimeError(
             f"Cannot route ticket {key}: Jira is disabled and Linear is not configured/applicable"
         )
@@ -408,7 +408,7 @@ async def _default_get_issue_detail(
         log.warning("orchestrator.linear_get_issue_not_found", key=key)
         raise RuntimeError(f"Linear issue {key} not found")
 
-    if not getattr(settings, "jira_enabled", False):
+    if not settings.jira_enabled:
         raise RuntimeError(
             f"Cannot route ticket {key}: Jira is disabled and Linear is not configured/applicable"
         )
