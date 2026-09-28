@@ -30,8 +30,7 @@ log = structlog.get_logger()
 
 _ADMINISTRATIVE_PATTERNS = [
     r"\b(timecards?|timesheets?|time[- ]entry|time[- ]entries)\b",
-    r"\bskills?\s+profile\b",
-    r"\bexpense[- ]report\b",
+    r"\bexpense[- ]reports?\b",
     r"\b(benefits?|enrollment|401k|healthcare|hsa|fsa)\b",
 ]
 
@@ -66,8 +65,7 @@ def _matches_identity(owner_clean: str, ident: str) -> bool:
         return True
     if "@" in owner_clean and ident == owner_clean.split("@")[0]:
         return True
-    tokens = ident.split()
-    return len(tokens) > 1 and owner_clean == tokens[0]
+    return False
 
 
 def is_self_owned(owner: str, settings: Settings) -> bool:

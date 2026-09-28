@@ -6,6 +6,8 @@ of the plan and run by hand.
 
 from __future__ import annotations
 
+import pytest
+
 from meeting_notes.graph_client import get_open_actions_for_owner, update_action_jira_status
 
 # ─── graph_client fixes (Task 1) ───────────────────────────────────────────────
@@ -864,9 +866,61 @@ async def test_push_self_only_fails_closed_when_no_identities_configured() -> No
     assert jira_pusher.is_self_owned("self", settings)
 
 
+def test_is_administrative_task_cases() -> None:
+    from meeting_notes.jira_pusher import is_administrative_task
+
+    # Positive matches: generic payroll, corporate benefits, expense reports
+    assert is_administrative_task("Submit timesheet by 5pm")
+    assert is_administrative_task("Submit weekly timesheets")
+    assert is_administrative_task("Log timecards for previous week")
+    assert is_administrative_task("Complete expense report for offsite")
+    assert is_administrative_task("Review 401k benefits enrollment options")
+    assert is_administrative_task("HSA and healthcare plan selections")
+
+    # Negative matches: legitimate engineering, product, or organizational tasks
+    assert not is_administrative_task("Build data pipeline for analytics")
+    assert not is_administrative_task("Schedule architecture review for promo packet")
+    assert not is_administrative_task("Grant Alex access to cloud console")
+    assert not is_administrative_task("Prepare sprint retrospective slides")
+
+
+def test_push_self_only_strict_identity_matching() -> None:
+    from meeting_notes import jira_pusher
+
+    # Configured with full name and email: does NOT match unrelated person with same first name
+    settings = _jira_settings(
+        JIRA_PUSH_SELF_ONLY=True,
+        JIRA_USER_IDENTITIES="alex.mercer@example.com,Alex Mercer",
+    )
+    assert jira_pusher.is_self_owned("Alex Mercer", settings)
+    assert jira_pusher.is_self_owned("alex.mercer@example.com", settings)
+    assert jira_pusher.is_self_owned("alex.mercer", settings)
+    # Must NOT loosely match a different Alex
+    assert not jira_pusher.is_self_owned("Alex", settings)
+    assert not jira_pusher.is_self_owned("Alex Smith", settings)
+
+
+@pytest.mark.parametrize(
+    "keyword", ["1:1", "1-1", "one-on-one", "one on one", "catch up", "catchup"]
+)
+def test_one_on_one_meeting_classification_keywords(keyword: str) -> None:
+    from meeting_notes.classifier import classify
+
+    metadata = {
+        "attendees": ["alex@example.com", "jordan@example.com"],
+        "start_time": "2026-09-28T10:00:00Z",
+    }
+    baseline_text = "Weekly notes. Action item: finalize the release checklist by Monday."
+    test_text = f"Weekly {keyword} notes. Action item: finalize the release checklist by Monday."
+
+    baseline_score = classify(baseline_text, metadata)
+    score = classify(test_text, metadata)
+
+    assert score >= 0.40, f"Expected keyword '{keyword}' to score >= 0.40, got {score}"
+    assert score > baseline_score, f"Expected '{keyword}' to increase score over baseline {baseline_score}"
+
 
 # ─── jira_sync ─────────────────────────────────────────────────────────────────
-
 
 
 async def test_jira_sync_marks_the_record_processed_whether_or_not_it_matched() -> None:

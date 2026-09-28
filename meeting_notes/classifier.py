@@ -26,6 +26,13 @@ _MEETING_KEYWORDS = {
     "1:1", "1-1", "one-on-one", "one on one", "catch up", "catchup",
 }
 
+# Multi-word or punctuated meeting terms not extractable by \b\w+\b
+_MEETING_PHRASE_PATTERNS = [
+    re.compile(r"\b1[:\-]1\b"),
+    re.compile(r"\bone[- ]on[- ]one\b", re.I),
+    re.compile(r"\bcatch[- ]up\b", re.I),
+]
+
 _ACTION_PATTERNS = [
     re.compile(r"\baction item\b", re.I),
     re.compile(r"\btodo\b", re.I),
@@ -155,7 +162,8 @@ def classify(text: str, metadata: dict[str, Any]) -> float:
 
     # Signal 1: meeting keywords in subject/title (strong signal)
     keyword_hits = len(words & _MEETING_KEYWORDS)
-    score += min(keyword_hits * 0.12, 0.35)
+    phrase_hits = sum(1 for p in _MEETING_PHRASE_PATTERNS if p.search(text))
+    score += min((keyword_hits + phrase_hits) * 0.12, 0.35)
 
     # Signal 2: has attendees metadata
     if metadata.get("attendees") or metadata.get("attendees_count", 0) > 0:
