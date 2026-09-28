@@ -107,19 +107,32 @@ class ContactProfile:
 CONTACT_PROFILES: dict[str, ContactProfile] = {}
 KNOWN_PERSON_ALIASES: dict[str, tuple[str, str]] = {}
 EMAIL_ALIASES: dict[str, str] = {}
+_ROSTER_LOADED: bool = False
+
+
+def reset_roster_cache() -> None:
+    """Reset cached contact profiles and load state (primarily for test isolation)."""
+    global _ROSTER_LOADED
+    CONTACT_PROFILES.clear()
+    KNOWN_PERSON_ALIASES.clear()
+    EMAIL_ALIASES.clear()
+    _ROSTER_LOADED = False
 
 
 def _ensure_roster_loaded() -> None:
-    """Ensure contact profiles are loaded from configured roster path with structured logging on failure."""
-    if not CONTACT_PROFILES:
-        try:
-            from meeting_notes.config import get_settings
+    """Ensure contact profiles are loaded once from roster path with structured logging."""
+    global _ROSTER_LOADED
+    if _ROSTER_LOADED:
+        return
+    _ROSTER_LOADED = True
+    try:
+        from meeting_notes.config import get_settings
 
-            path = get_settings().person_roster_path
-            if path:
-                load_roster(path)
-        except Exception as exc:
-            log.warning("person_resolver.roster_load_failed", error=str(exc))
+        path = get_settings().person_roster_path
+        if path:
+            load_roster(path)
+    except Exception as exc:
+        log.warning("person_resolver.roster_load_failed", error=str(exc))
 
 
 def resolve_to_full_name(mention: str | None) -> str:
@@ -133,10 +146,18 @@ def resolve_to_full_name(mention: str | None) -> str:
 
     _ensure_roster_loaded()
 
-    # 1. Match against contact profiles
-    for profile in CONTACT_PROFILES.values():
-        if any(norm == normalize_name(m) for m in profile.all_mentions()):
-            return profile.full_name
+    # 1. Match against contact profiles with ambiguity gating
+    matches = [
+        profile.full_name
+        for profile in CONTACT_PROFILES.values()
+        if any(norm == normalize_name(m) for m in profile.all_mentions())
+    ]
+    unique_matches = list(dict.fromkeys(matches))
+    if len(unique_matches) == 1:
+        return unique_matches[0]
+    if len(unique_matches) > 1:
+        # Ambiguous across multiple contact profiles -> do not guess, preserve raw mention
+        return raw
 
     # 2. Check alias map
     alias_match = KNOWN_PERSON_ALIASES.get(norm)
@@ -412,6 +433,15 @@ def _resolve_tier2_probabilistic(
     threshold: float,
     email: str | None,
 ) -> Resolution:
+    norm_clean = _norm_name(name).replace(".", "").replace(" ", "")
+    if 2 <= len(norm_clean) <= 3 and norm_clean.isalpha():
+        initials_candidates = _initials_matches(name, known_people)
+        if len(initials_candidates) == 1:
+            c_email, full, tracked = initials_candidates[0]
+            return Resolution(full or name, role, c_email, "resolved", tracked, "person-initials")
+        if len(initials_candidates) > 1:
+            return Resolution(name, role, None, "review", False, "ambiguous-initials")
+
     entry, score = roster.match_name(name, threshold)
     if entry:
         return Resolution(
@@ -427,14 +457,6 @@ def _resolve_tier2_probabilistic(
         return Resolution(
             best[1] or name, role, best[0], "resolved", best[3], f"person-name:{best[2]:.2f}"
         )
-
-    # Initials match (e.g. "LP" matching compound name)
-    initials_candidates = _initials_matches(name, known_people)
-    if len(initials_candidates) == 1:
-        c_email, full, tracked = initials_candidates[0]
-        return Resolution(full or name, role, c_email, "resolved", tracked, "person-initials")
-    if len(initials_candidates) > 1:
-        return Resolution(name, role, None, "review", False, "ambiguous-initials")
 
     # Unambiguous first-name match.
     given = _given_name_matches(name, known_people)

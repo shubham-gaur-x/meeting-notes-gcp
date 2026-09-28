@@ -1902,6 +1902,97 @@ def test_person_resolver_roster_load_failure_logs_warning(monkeypatch: Any) -> N
     res = person_resolver.resolve_to_full_name("Unknown Colleague")
     assert res == "Unknown Colleague"
     assert "person_resolver.roster_load_failed" in warnings
+    person_resolver.reset_roster_cache()
+
+
+def test_roster_loaded_flag_prevents_redundant_load_retries(monkeypatch: Any) -> None:
+    """Verify that _ROSTER_LOADED flag prevents repeated filesystem/config loads on empty roster."""
+    from meeting_notes import person_resolver
+
+    load_calls = 0
+
+    def mock_load(path: Any) -> Any:
+        nonlocal load_calls
+        load_calls += 1
+        return person_resolver.Roster([])
+
+    person_resolver.reset_roster_cache()
+    monkeypatch.setattr(person_resolver, "load_roster", mock_load)
+
+    class FakeSettings:
+        person_roster_path = "/valid/empty_roster.json"
+
+    monkeypatch.setattr("meeting_notes.config.get_settings", lambda: FakeSettings())
+
+    # First call loads once
+    person_resolver._ensure_roster_loaded()
+    assert load_calls == 1
+
+    # Second and third calls must NOT re-attempt load even though CONTACT_PROFILES is empty
+    person_resolver._ensure_roster_loaded()
+    person_resolver._ensure_roster_loaded()
+    assert load_calls == 1
+    person_resolver.reset_roster_cache()
+
+
+def test_resolve_to_full_name_ambiguity_gating() -> None:
+    """Verify resolve_to_full_name preserves raw mention when nickname collides across contacts."""
+    from meeting_notes import person_resolver
+    from meeting_notes.person_resolver import ContactProfile
+
+    person_resolver.reset_roster_cache()
+    p1 = ContactProfile(full_name="Alex Mercer", email="alex@example.com", nicknames=["Al"])
+    p2 = ContactProfile(full_name="Alice Miller", email="alice@example.com", nicknames=["Al"])
+    person_resolver.CONTACT_PROFILES["alex@example.com"] = p1
+    person_resolver.CONTACT_PROFILES["alice@example.com"] = p2
+
+    # Colliding nickname "Al" must NOT guess; it must return the raw mention "Al"
+    res = person_resolver.resolve_to_full_name("Al")
+    assert res == "Al", "Ambiguous nickname collision must return raw mention, not guess first"
+
+    # Unique mention resolves cleanly
+    res_unique = person_resolver.resolve_to_full_name("Alex Mercer")
+    assert res_unique == "Alex Mercer"
+    person_resolver.reset_roster_cache()
+
+
+def test_initials_matching_preempts_fuzzy_sequence_matching() -> None:
+    """Verify that 2-3 letter initials route to ambiguous-initials before fuzzy name matching."""
+    from meeting_notes.person_resolver import Roster, resolve
+
+    # Known people where fuzzy sequence matcher might yield partial ratio on short token
+    known = [
+        {"name": "Adam Miller", "email": "adam@example.com", "tracked": False},
+        {"name": "Alex Mercer", "email": "alex@example.com", "tracked": False},
+    ]
+
+    # "AM" matches initials for both Adam Miller and Alex Mercer -> routes to ambiguous-initials
+    res = resolve({"name": "AM", "email": None}, roster=Roster([]), known_people=known)
+    assert res.status == "review"
+    assert res.reason == "ambiguous-initials", "Initials check must run before fuzzy matching on short tokens"
+
+
+def test_expand_contact_mentions() -> None:
+    """Verify expand_contact_mentions expands full names, emails, and aliases."""
+    from meeting_notes import person_resolver
+    from meeting_notes.person_resolver import ContactProfile
+
+    person_resolver.reset_roster_cache()
+    p = ContactProfile(
+        full_name="Alex Mercer",
+        email="alex@example.com",
+        nicknames=["Lex"],
+        initials=["AM"],
+    )
+    person_resolver.CONTACT_PROFILES["alex@example.com"] = p
+
+    expanded = person_resolver.expand_contact_mentions(["Lex"])
+    assert "Alex Mercer" in expanded
+    assert "alex@example.com" in expanded
+    assert "Lex" in expanded
+    assert "AM" in expanded
+    person_resolver.reset_roster_cache()
+
 
 
 
