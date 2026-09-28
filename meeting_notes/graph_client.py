@@ -1009,8 +1009,10 @@ async def get_all_actions(
             OPTIONAL MATCH (m:Meeting)-[:FOLLOWS_UP]->(a)
             WITH a, min(m.date) AS meeting_date
             OPTIONAL MATCH (a)-[:ASSIGNED_TO]->(p:Person)
+            ORDER BY p.name ASC
             WITH a, meeting_date, head(collect(p)) AS p
             OPTIONAL MATCH (parent:ActionItem)-[:PARENT_OF]->(a)
+            ORDER BY parent.id ASC
             WITH a, meeting_date, p, head(collect(parent)) AS parent
             RETURN a.id AS id, a.task AS task, coalesce(p.name, a.owner) AS owner,
                    a.due AS due,

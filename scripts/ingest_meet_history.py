@@ -5,7 +5,11 @@ Directly queries the Google Meet API v2 for past conference records and their
 transcripts, stages them, and drains them into Memgraph.
 
 Usage:
-  PYTHONPATH=. uv run python jobs/ingest_meet_history.py
+  PYTHONPATH=. uv run python scripts/ingest_meet_history.py
+
+ADR-018 Compliance:
+  Uses canonical meeting_notes.db.stage_record and pipeline_drain.drain_batch.
+  Zero inline SQL; all database interactions remain fully encapsulated inside meeting_notes/db.py.
 """
 
 from __future__ import annotations

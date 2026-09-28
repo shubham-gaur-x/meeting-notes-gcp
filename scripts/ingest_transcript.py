@@ -9,6 +9,10 @@ Usage examples:
   uv run python scripts/ingest_transcript.py --title "Architecture Review" --file /path/to/transcript.txt
   uv run python scripts/ingest_transcript.py --title "Sprint Plan" --date "2026-09-18" --file notes.md
   uv run python scripts/ingest_transcript.py --title "1:1 Sync" --text "Michael: Ship it.\nAlex: Agreed."
+
+ADR-018 Compliance:
+  Uses canonical meeting_notes.db.stage_record and pipeline_drain.drain_batch.
+  Zero inline SQL; all database interactions remain fully encapsulated inside meeting_notes/db.py.
 """
 
 from __future__ import annotations

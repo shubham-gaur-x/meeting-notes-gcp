@@ -900,6 +900,14 @@ def test_push_self_only_strict_identity_matching() -> None:
     assert not jira_pusher.is_self_owned("Alex Smith", settings)
     assert not jira_pusher.is_self_owned("alex@evil.com", settings)
 
+    # Jira service account email must NEVER be conflated with a human self-identity
+    svc_settings = _jira_settings(
+        JIRA_PUSH_SELF_ONLY=True,
+        JIRA_USER_IDENTITIES="alex.mercer@example.com,Alex Mercer",
+        JIRA_EMAIL="jira-bot@example.com",
+    )
+    assert not jira_pusher.is_self_owned("jira-bot@example.com", svc_settings)
+
 
 @pytest.mark.parametrize(
     "keyword", ["1:1", "1-1", "one-on-one", "one on one", "catch up", "catchup"]
@@ -1024,7 +1032,9 @@ async def test_get_all_actions_deterministic_join_deduplication() -> None:
     assert actions[0]["id"] == "act-1"
     assert len(executed_queries) == 1
     assert "WITH a, min(m.date) AS meeting_date" in executed_queries[0]
+    assert "ORDER BY p.name ASC" in executed_queries[0]
     assert "WITH a, meeting_date, head(collect(p)) AS p" in executed_queries[0]
+    assert "ORDER BY parent.id ASC" in executed_queries[0]
     assert "WITH a, meeting_date, p, head(collect(parent)) AS parent" in executed_queries[0]
 
 

@@ -53,8 +53,8 @@ def _get_configured_identities(settings: Settings) -> set[str]:
                 identities.add(ident_clean)
     if settings.google_workspace_user:
         identities.add(settings.google_workspace_user.strip().lower())
-    if settings.jira_email:
-        identities.add(settings.jira_email.strip().lower())
+    # Note: jira_email is deliberately excluded; it represents the shared
+    # service account credential for the deployment, not an individual human's identity.
     return identities
 
 
