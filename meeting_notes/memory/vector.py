@@ -152,17 +152,14 @@ async def _embed_pending(
         chunks = [pending[i : i + chunk_size] for i in range(0, len(pending), chunk_size)]
 
         async def process_batch_chunk(chunk: list[dict[str, Any]]) -> int:
-            try:
-                texts = [r[text_field] for r in chunk]
-                async with semaphore:
-                    vectors = await embed_batch_texts(texts, settings=settings, embed_batch_fn=embed_batch_fn)
-                if len(vectors) != len(chunk):
-                    raise RuntimeError(
-                        f"Embedding batch size mismatch: expected {len(chunk)} vectors, got {len(vectors)}"
-                    )
-            except Exception as exc:  # noqa: BLE001 - per-chunk embedding resilience
-                log.warning("vector.batch_chunk_failed", chunk_size=len(chunk), error=str(exc))
-                return 0
+            texts = [r[text_field] for r in chunk]
+            async with semaphore:
+                vectors = await embed_batch_texts(texts, settings=settings, embed_batch_fn=embed_batch_fn)
+            if len(vectors) != len(chunk):
+                log.error("vector.batch_size_mismatch", expected=len(chunk), got=len(vectors))
+                raise RuntimeError(
+                    f"Embedding batch size mismatch: expected {len(chunk)} vectors, got {len(vectors)}"
+                )
 
             chunk_count = 0
             for row, vector in zip(chunk, vectors, strict=True):

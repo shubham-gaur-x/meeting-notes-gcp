@@ -1187,20 +1187,20 @@ async def test_vector_embed_pending_rejects_mismatched_batch_count() -> None:
     async def mismatched_embed(texts: list[str], **kwargs: Any) -> list[list[float]]:
         return [[0.1, 0.2]]
 
-    count = await vector._embed_pending(
-        "MATCH ... RETURN c.id AS id, c.content AS content",
-        "MATCH ... SET c.embedding = $embedding",
-        "m-mismatch",
-        "content",
-        driver=_Driver(),
-        settings=Settings(llm_backend="fake"),
-        embed=None,
-        semaphore=semaphore,
-        embed_batch_fn=mismatched_embed,
-    )
+    with pytest.raises(RuntimeError, match="Embedding batch size mismatch: expected 2 vectors, got 1"):
+        await vector._embed_pending(
+            "MATCH ... RETURN c.id AS id, c.content AS content",
+            "MATCH ... SET c.embedding = $embedding",
+            "m-mismatch",
+            "content",
+            driver=_Driver(),
+            settings=Settings(llm_backend="fake"),
+            embed=None,
+            semaphore=semaphore,
+            embed_batch_fn=mismatched_embed,
+        )
 
-    # Because count mismatched, the batch was skipped and 0 rows written
-    assert count == 0
+    # 0 rows written because exception aborted batch processing
     assert len(written) == 0
 
 
