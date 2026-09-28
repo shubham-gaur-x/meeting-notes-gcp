@@ -978,13 +978,12 @@ async def test_drain_batch_with_default_record_failure(monkeypatch: pytest.Monke
         raise RuntimeError("Process exploded")
 
     record = _make_staged("r-default-failure")
-    settings = Settings(pipeline_max_attempts=5)
     result = await drain_batch(
         [record],
         process=failing_process,
         sync_jira=None,
         record_failure=_default_record_failure,
-        settings=settings,
+        max_attempts=5,
     )
 
     assert result.errors == 1
@@ -1104,6 +1103,93 @@ async def test_queue_stats_does_not_double_count_quarantined_records() -> None:
     # guaranteeing structural mutual exclusivity across all buckets.
     assert "coalesce(status, CASE WHEN processed THEN 'processed' ELSE 'pending' END)" in executed[0]
     assert "dead_letter" in executed[0]
+
+
+def test_should_use_linear_rejects_identical_prefixes() -> None:
+    """Verify that when both trackers are configured with identical prefixes, an explicit error is raised."""
+    from meeting_notes.dev_agent.orchestrator import _should_use_linear
+
+    settings_colliding = Settings(
+        issue_tracker="both",
+        jira_enabled=True,
+        jira_project_key="ENG",
+        linear_api_key="linear-secret",
+        linear_team_id="ENG",
+    )
+    with pytest.raises(ValueError, match="Ambiguous tracker configuration: both Jira and Linear share prefix 'ENG'"):
+        _should_use_linear("ENG-101", settings_colliding)
+
+    # Also verify that explicit jira tracker raises if jira_enabled is False
+    settings_jira_disabled = Settings(
+        issue_tracker="jira",
+        jira_enabled=False,
+        jira_project_key="ENG",
+    )
+    with pytest.raises(RuntimeError, match="Jira is disabled and Linear is not configured"):
+        _should_use_linear("ENG-101", settings_jira_disabled)
+
+
+@pytest.mark.asyncio
+async def test_vector_embed_pending_rejects_mismatched_batch_count() -> None:
+    """Verify _embed_pending rejects mismatched batch vector counts and avoids partial/corrupted pairing."""
+    from meeting_notes.memory import vector
+
+    rows = [
+        {"id": "c1", "content": "text1"},
+        {"id": "c2", "content": "text2"},
+    ]
+    written: list[dict[str, Any]] = []
+
+    class _Result:
+        def __aiter__(self):
+            self._it = iter(rows)
+            return self
+
+        async def __anext__(self):
+            try:
+                return next(self._it)
+            except StopIteration:
+                raise StopAsyncIteration from None
+
+    class _Session:
+        async def run(self, cypher: str, **kwargs: Any) -> Any:
+            if "RETURN" in cypher:
+                return _Result()
+            written.append(kwargs)
+            return None
+
+        async def __aenter__(self) -> _Session:
+            return self
+
+        async def __aexit__(self, *exc: Any) -> bool:
+            return False
+
+    class _Driver:
+        def session(self) -> _Session:
+            return _Session()
+
+    semaphore = asyncio.Semaphore(5)
+
+    # Return only 1 vector for 2 texts
+    async def mismatched_embed(texts: list[str], **kwargs: Any) -> list[list[float]]:
+        return [[0.1, 0.2]]
+
+    count = await vector._embed_pending(
+        "MATCH ... RETURN c.id AS id, c.content AS content",
+        "MATCH ... SET c.embedding = $embedding",
+        "m-mismatch",
+        "content",
+        driver=_Driver(),
+        settings=Settings(llm_backend="fake"),
+        embed=None,
+        semaphore=semaphore,
+        embed_batch_fn=mismatched_embed,
+    )
+
+    # Because count mismatched, the batch was skipped and 0 rows written
+    assert count == 0
+    assert len(written) == 0
+
 
 
 
