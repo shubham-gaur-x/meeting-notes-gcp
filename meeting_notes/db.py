@@ -240,7 +240,7 @@ SELECT
     count(*) AS total,
     count(*) FILTER (WHERE coalesce(status, 'pending') = 'pending' AND processed = FALSE) AS pending,
     count(*) FILTER (WHERE coalesce(status, 'pending') = 'retry' AND processed = FALSE) AS retry,
-    count(*) FILTER (WHERE coalesce(status, 'pending') = 'dead_letter') AS dead_letter,
+    count(*) FILTER (WHERE coalesce(status, 'pending') = 'dead_letter' AND processed = FALSE) AS dead_letter,
     count(*) FILTER (WHERE coalesce(status, 'pending') = 'processed' OR processed = TRUE) AS processed
 FROM staged_records
 """

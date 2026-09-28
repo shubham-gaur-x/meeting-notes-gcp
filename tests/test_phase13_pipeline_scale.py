@@ -1090,7 +1090,7 @@ async def test_queue_stats_does_not_double_count_quarantined_records() -> None:
     # ensuring legacy rows with status IS NULL are strictly accounted for without dropping.
     assert "coalesce(status, 'pending') = 'pending' AND processed = FALSE" in db._QUEUE_STATS_SQL
     assert "coalesce(status, 'pending') = 'retry' AND processed = FALSE" in db._QUEUE_STATS_SQL
-    assert "coalesce(status, 'pending') = 'dead_letter'" in db._QUEUE_STATS_SQL
+    assert "coalesce(status, 'pending') = 'dead_letter' AND processed = FALSE" in db._QUEUE_STATS_SQL
     assert "coalesce(status, 'pending') = 'processed' OR processed = TRUE" in db._QUEUE_STATS_SQL
 
 
