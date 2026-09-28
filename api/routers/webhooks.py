@@ -9,6 +9,7 @@ the one route whose cost a caller can choose.
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 import json
 from typing import Any
@@ -17,7 +18,7 @@ import structlog
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 
 from api.deps import settings_dep
-from meeting_notes import github_webhook
+from meeting_notes import github_webhook, graph_client
 from meeting_notes.config import Settings, get_settings
 from meeting_notes.graph_client import close_agent_run_on_merge
 
@@ -176,11 +177,23 @@ async def webhook_jira_sync(
     return {"status": "ok", **result}
 
 
+def is_linear_state_done(state_name: str, state_type: str | None = None) -> bool:
+    """Determine whether a Linear issue state represents completion or cancellation."""
+    st = (state_type or "").strip().lower()
+    sn = (state_name or "").strip().lower()
+    return st in ("completed", "canceled", "cancelled") or sn in (
+        "done",
+        "completed",
+        "closed",
+        "canceled",
+        "cancelled",
+    )
+
+
 def verify_linear_signature(raw_body: bytes, signature: str | None, secret: str) -> bool:
     """Validate Linear-Signature header using HMAC SHA-256."""
     if not signature or not secret:
         return False
-    import hashlib
 
     expected = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
     return hmac.compare_digest(expected, signature)
@@ -230,17 +243,12 @@ async def webhook_linear(
         state_name = state_data.get("name", "")
         state_type = str(state_data.get("type", "")).lower()
 
-        is_done = (
-            state_type in ["completed", "canceled", "cancelled"]
-            or state_name.lower() in ["done", "completed", "closed", "canceled", "cancelled"]
-        )
+        is_done = is_linear_state_done(state_name, state_type)
 
         ref = identifier or issue_id
         if ref and state_name:
-            from meeting_notes.graph_client import update_action_linear_status_by_ref
-
             background_tasks.add_task(
-                update_action_linear_status_by_ref,
+                graph_client.update_action_linear_status_by_ref,
                 ref,
                 state_name,
                 is_done,
