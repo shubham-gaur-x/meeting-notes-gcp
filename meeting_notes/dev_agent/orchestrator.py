@@ -264,18 +264,14 @@ def _should_use_linear(key: str, settings: Settings) -> bool:
 async def _default_transition_issue(key: str, status: str, *, settings: Settings | None = None) -> bool:
     settings = settings or get_settings()
     if _should_use_linear(key, settings):
-        try:
-            from meeting_notes import linear_client
+        from meeting_notes import linear_client
 
-            resolved_state = await linear_client.resolve_workflow_state(status, settings=settings)
-            if resolved_state:
-                res = await linear_client.transition_issue(key, resolved_state["id"], settings=settings)
-                return bool(res)
-            log.warning("orchestrator.linear_transition_state_not_found", key=key, status=status)
-            return False
-        except Exception as exc:
-            log.warning("orchestrator.linear_transition_failed", key=key, error=str(exc))
-            return False
+        resolved_state = await linear_client.resolve_workflow_state(status, settings=settings)
+        if resolved_state:
+            res = await linear_client.transition_issue(key, resolved_state["id"], settings=settings)
+            return bool(res)
+        log.warning("orchestrator.linear_transition_state_not_found", key=key, status=status)
+        return False
     from meeting_notes import jira_client
 
     return await jira_client.transition_issue(key, status, settings=settings)
@@ -284,18 +280,14 @@ async def _default_transition_issue(key: str, status: str, *, settings: Settings
 async def _default_add_comment(key: str, body: str, *, settings: Settings | None = None) -> None:
     settings = settings or get_settings()
     if _should_use_linear(key, settings):
-        try:
-            from meeting_notes import linear_client
+        from meeting_notes import linear_client
 
-            issue = await linear_client.get_issue(key, settings=settings)
-            if issue and issue.get("id"):
-                await linear_client.add_comment(issue["id"], body, settings=settings)
-                return
+        issue = await linear_client.get_issue(key, settings=settings)
+        if not issue or not issue.get("id"):
             log.warning("orchestrator.linear_add_comment_issue_not_found", key=key)
-            return
-        except Exception as exc:
-            log.warning("orchestrator.linear_add_comment_failed", key=key, error=str(exc))
-            return
+            raise RuntimeError(f"Linear issue {key} not found for comment")
+        await linear_client.add_comment(issue["id"], body, settings=settings)
+        return
     from meeting_notes import jira_client
 
     await jira_client.add_comment(key, body, settings=settings)
@@ -304,23 +296,19 @@ async def _default_add_comment(key: str, body: str, *, settings: Settings | None
 async def _default_get_issue_detail(key: str, *, settings: Settings | None = None) -> dict[str, Any]:
     settings = settings or get_settings()
     if _should_use_linear(key, settings):
-        try:
-            from meeting_notes import linear_client
+        from meeting_notes import linear_client
 
-            issue = await linear_client.get_issue(key, settings=settings)
-            if issue:
-                return {
-                    "key": issue.get("identifier") or key,
-                    "id": issue.get("id"),
-                    "summary": issue.get("title", ""),
-                    "description": issue.get("description", ""),
-                    "tracker": "linear",
-                }
-            log.warning("orchestrator.linear_get_issue_not_found", key=key)
-            return {"key": key, "summary": "", "description": "", "tracker": "linear"}
-        except Exception as exc:
-            log.warning("orchestrator.linear_get_issue_failed", key=key, error=str(exc))
-            return {"key": key, "summary": "", "description": "", "tracker": "linear"}
+        issue = await linear_client.get_issue(key, settings=settings)
+        if issue:
+            return {
+                "key": issue.get("identifier") or key,
+                "id": issue.get("id"),
+                "summary": issue.get("title", ""),
+                "description": issue.get("description", ""),
+                "tracker": "linear",
+            }
+        log.warning("orchestrator.linear_get_issue_not_found", key=key)
+        raise RuntimeError(f"Linear issue {key} not found")
 
     from meeting_notes import jira_client
 

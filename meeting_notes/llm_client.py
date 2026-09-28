@@ -461,15 +461,11 @@ async def embed_batch(
                 "parameters": {"outputDimensionality": dimension},
             }
             headers = _vertex_auth_header() if transport is _default_transport else {}
-            try:
-                body = await _post(url, payload, headers, transport)
-                preds = json.loads(body).get("predictions", [])
-                for pred in preds:
-                    v = pred.get("embeddings", {}).get("values", [])
-                    results.append(list(v[:dimension]) if len(v) >= dimension else None)
-            except Exception as exc:
-                log.error("llm.vertex_batch_embed_failed", error=str(exc))
-                results.extend([None] * len(chunk))
+            body = await _post(url, payload, headers, transport)
+            preds = json.loads(body).get("predictions", [])
+            for pred in preds:
+                v = pred.get("embeddings", {}).get("values", [])
+                results.append(list(v[:dimension]) if len(v) >= dimension else None)
         return results
 
     if backend == "gemini":
@@ -489,15 +485,11 @@ async def embed_batch(
                     for t in chunk
                 ]
             }
-            try:
-                body = await _post(url, payload, {"x-goog-api-key": settings.gemini_api_key}, transport)
-                embeddings = json.loads(body).get("embeddings", [])
-                for emb in embeddings:
-                    v = emb.get("values", [])
-                    results_gemini.append(list(v[:dimension]) if len(v) >= dimension else None)
-            except Exception as exc:
-                log.error("llm.gemini_batch_embed_failed", error=str(exc))
-                results_gemini.extend([None] * len(chunk))
+            body = await _post(url, payload, {"x-goog-api-key": settings.gemini_api_key}, transport)
+            embeddings = json.loads(body).get("embeddings", [])
+            for emb in embeddings:
+                v = emb.get("values", [])
+                results_gemini.append(list(v[:dimension]) if len(v) >= dimension else None)
         return results_gemini
 
     return [await embed(t, settings=settings, transport=transport) for t in texts]

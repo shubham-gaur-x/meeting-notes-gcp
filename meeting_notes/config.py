@@ -165,6 +165,7 @@ class Settings(BaseSettings):
     # ─── Pipeline tuning ──────────────────────────────────────────────────
     classifier_score_threshold: float = 0.40
     pipeline_batch_size: int = 50
+    pipeline_max_attempts: int = 3
     drain_concurrency: int = 3
     graph_write_concurrency: int = 3
     # Embeddings are independent calls at ~12s each; issuing them one at a

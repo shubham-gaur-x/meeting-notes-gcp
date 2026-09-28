@@ -321,8 +321,8 @@ async def test_vector_embed_pending_multi_batch_concurrency_ceiling() -> None:
 
 
 @pytest.mark.asyncio
-async def test_vector_embed_pending_preserves_pr2_per_item_concurrency_ceiling() -> None:
-    """Verify PR #2 per-item concurrency ceiling is preserved when embed_batch_fn is None."""
+async def test_vector_embed_pending_preserves_per_item_concurrency_ceiling() -> None:
+    """Verify per-item embedding respects semaphore concurrency ceiling when embed_batch_fn is None."""
     sem = asyncio.Semaphore(2)
     active = 0
     peak = 0
@@ -642,7 +642,7 @@ async def test_find_sprint_candidates_resilient_to_individual_linear_issue_failu
 async def test_default_get_issue_detail_linear_does_not_fall_through_to_jira(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Verify Linear API failures return a safe fallback and NEVER attempt Jira."""
+    """Verify Linear API failures surface errors loudly and NEVER attempt Jira."""
     from meeting_notes.dev_agent import orchestrator
 
     async def mock_linear_fail(key: str, **kwargs: Any) -> Any:
@@ -664,10 +664,9 @@ async def test_default_get_issue_detail_linear_does_not_fall_through_to_jira(
         linear_api_key="test-key",
     )
 
-    detail = await orchestrator._default_get_issue_detail("ENG-42", settings=settings)
+    with pytest.raises(RuntimeError, match="Linear connection timeout"):
+        await orchestrator._default_get_issue_detail("ENG-42", settings=settings)
 
-    assert detail["key"] == "ENG-42"
-    assert detail["tracker"] == "linear"
     assert jira_called is False, "Expected Linear failure to NOT fall through to Jira"
 
 
@@ -690,5 +689,39 @@ async def test_drain_batch_record_failure_exception_resilience() -> None:
 
     assert result.errors == 1
     assert result.processed == 0
+
+
+@pytest.mark.asyncio
+async def test_mark_processed_clears_last_error_query() -> None:
+    """Verify _MARK_PROCESSED_SQL resets last_error to NULL upon successful processing."""
+    from meeting_notes.db import _MARK_PROCESSED_SQL
+
+    assert "last_error = NULL" in _MARK_PROCESSED_SQL
+    assert "status = 'processed'" in _MARK_PROCESSED_SQL
+
+
+@pytest.mark.asyncio
+async def test_claim_batch_excludes_dead_letter_status_query() -> None:
+    """Verify CLAIM_SQL explicitly filters out dead_letter status to decouple from processed flag."""
+    from meeting_notes.db import CLAIM_SQL
+
+    assert "coalesce(status, 'pending') != 'dead_letter'" in CLAIM_SQL
+    assert "coalesce(attempts, 0) < $2" in CLAIM_SQL
+
+
+@pytest.mark.asyncio
+async def test_default_add_comment_linear_raises_when_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify _default_add_comment raises RuntimeError when Linear issue is not found."""
+    from meeting_notes.dev_agent import orchestrator
+
+    async def mock_linear_get_empty(key: str, **kwargs: Any) -> Any:
+        return None
+
+    monkeypatch.setattr("meeting_notes.linear_client.get_issue", mock_linear_get_empty)
+    settings = Settings(linear_api_key="test-key")
+
+    with pytest.raises(RuntimeError, match="Linear issue ENG-99 not found for comment"):
+        await orchestrator._default_add_comment("ENG-99", "Test comment", settings=settings)
+
 
 
