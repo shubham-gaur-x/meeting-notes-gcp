@@ -665,13 +665,13 @@ def test_extract_raw_urls_harvests_valid_document_links() -> None:
 
     text = (
         "Please review the design spec at https://docs.google.com/document/d/123/edit "
-        "and the project board at https://michael-baylard.atlassian.net/browse/MDP-45. "
+        "and the project board at https://example-workspace.atlassian.net/browse/MDP-45. "
         "Also see https://drive.google.com/file/d/456/view."
     )
     urls = _extract_raw_urls(text)
     assert urls == [
         "https://docs.google.com/document/d/123/edit",
-        "https://michael-baylard.atlassian.net/browse/MDP-45",
+        "https://example-workspace.atlassian.net/browse/MDP-45",
         "https://drive.google.com/file/d/456/view",
     ]
 
@@ -711,7 +711,7 @@ def test_extract_raw_urls_harvests_ecosystem_platform_links() -> None:
     from meeting_notes.extractor import _extract_raw_urls
 
     platform_text = (
-        "Check Linear issue https://linear.app/ag-team/issue/ENG-402/pipeline-scale. "
+        "Check Linear issue https://linear.app/example-team/issue/ENG-402/pipeline-scale. "
         "System architecture diagram: https://lucid.app/lucidchart/98765/edit. "
         "Also see whiteboard at https://lucidchart.com/documents/view/54321. "
         "Slack discussion thread: https://workspace.slack.com/archives/C012345/p1693000000. "
@@ -727,7 +727,7 @@ def test_extract_raw_urls_harvests_ecosystem_platform_links() -> None:
     urls = _extract_raw_urls(platform_text)
 
     expected = [
-        "https://linear.app/ag-team/issue/ENG-402/pipeline-scale",
+        "https://linear.app/example-team/issue/ENG-402/pipeline-scale",
         "https://lucid.app/lucidchart/98765/edit",
         "https://lucidchart.com/documents/view/54321",
         "https://workspace.slack.com/archives/C012345/p1693000000",
@@ -746,12 +746,12 @@ def test_extract_raw_urls_harvests_ecosystem_platform_links() -> None:
 
 def test_extract_raw_urls_comma_separated_and_case_insensitive() -> None:
     """Verifies comma-separated URLs are split into distinct links, uppercase scheme is matched,
-    and noise domains/extensions are filtered out."""
+    duplicate URLs with varying casing/trailing slash are deduplicated, and noise domains are filtered out."""
     from meeting_notes.extractor import _extract_raw_urls
 
     sample_text = (
         "Check these issues: https://linear.app/t/issue/ENG-1,https://linear.app/t/issue/ENG-2; "
-        "and uppercase: HTTPS://LINEAR.APP/ISSUE/ENG-3. "
+        "duplicate: HTTPS://LINEAR.APP/T/ISSUE/ENG-1/ and uppercase: HTTPS://LINEAR.APP/ISSUE/ENG-3. "
         "Noise to reject: https://schemas.google.com/doc, https://fonts.googleapis.com/css, "
         "and https://example.com/logo.png."
     )
@@ -759,9 +759,109 @@ def test_extract_raw_urls_comma_separated_and_case_insensitive() -> None:
     assert "https://linear.app/t/issue/ENG-1" in urls
     assert "https://linear.app/t/issue/ENG-2" in urls
     assert "HTTPS://LINEAR.APP/ISSUE/ENG-3" in urls
+    # Verify case-insensitive deduplication preserved first occurrence and did not include second
+    assert len([u for u in urls if "eng-1" in u.lower()]) == 1
     assert not any("schemas.google.com" in u for u in urls)
     assert not any("fonts.googleapis.com" in u for u in urls)
     assert not any("logo.png" in u for u in urls)
+
+
+def test_extract_raw_urls_preserves_first_seen_casing_and_order() -> None:
+    """Verifies deduplication preserves the original casing and order of the first occurrence."""
+    from meeting_notes.extractor import _extract_raw_urls
+
+    sample_text = (
+        "Review https://Linear.App/Issue/ENG-100 then duplicate "
+        "HTTPS://LINEAR.APP/ISSUE/ENG-100/ and lowercase https://linear.app/issue/eng-100"
+    )
+    urls = _extract_raw_urls(sample_text)
+    assert len(urls) == 1
+    assert urls[0] == "https://Linear.App/Issue/ENG-100"
+
+
+def test_repair_merges_raw_urls_case_insensitively() -> None:
+    """Verifies repair() merges existing links and extracted raw links with case-normalized dedup."""
+    from meeting_notes.extractor import repair
+
+    data = {
+        "title": "Meeting",
+        "links": ["https://linear.app/issue/ENG-10"],
+        "action_items": [],
+    }
+    context = {
+        "text": "Discussion on HTTPS://LINEAR.APP/ISSUE/ENG-10 and https://lucid.app/lucidchart/abc",
+    }
+    repaired = repair(data, context)
+    assert len(repaired["links"]) == 2
+    assert "https://linear.app/issue/ENG-10" in repaired["links"]
+    assert "https://lucid.app/lucidchart/abc" in repaired["links"]
+
+
+def test_extract_raw_urls_markdown_and_internal_commas() -> None:
+    """Verifies URLs inside markdown links and with internal commas in query strings are intact."""
+    from meeting_notes.extractor import _extract_raw_urls
+
+    sample_text = (
+        "Check [Design Doc](https://docs.google.com/document/d/123/edit) and "
+        "query at https://example.com/search?tags=python,ai,gcp and webmail "
+        "at https://outlook.office.com/mail/inbox."
+    )
+    urls = _extract_raw_urls(sample_text)
+    assert "https://docs.google.com/document/d/123/edit" in urls
+    assert "https://example.com/search?tags=python,ai,gcp" in urls
+    assert not any("outlook.office.com" in u for u in urls)
+
+
+def test_extract_raw_urls_balanced_parentheses() -> None:
+    """Verifies balanced parentheses inside URLs are preserved while markdown
+    trailing parens are cleanly stripped.
+    """
+    from meeting_notes.extractor import _extract_raw_urls
+
+    sample_text = (
+        "Reference [Python](https://en.wikipedia.org/wiki/Python_(programming_language)) and "
+        "another doc at [Guide](https://example.com/guide)."
+    )
+    urls = _extract_raw_urls(sample_text)
+    assert "https://en.wikipedia.org/wiki/Python_(programming_language)" in urls
+    assert "https://example.com/guide" in urls
+
+
+def test_merge_links_logs_on_invalid_type() -> None:
+    """Verifies that non-string link types trigger a warning log and are safely excluded."""
+    from meeting_notes.extractor import _merge_links
+
+    raw = ["https://example.com/doc"]
+    merged = _merge_links(["https://example.com/spec", 12345, None, {"bad": "link"}], raw)
+    assert merged == ["https://example.com/spec", "https://example.com/doc"]
+
+
+def test_extract_raw_urls_size_bounds() -> None:
+    """Verifies that oversized inputs are truncated and overly long candidate URLs are skipped."""
+    from meeting_notes.extractor import MAX_RAW_URL_INPUT_CHARS, _extract_raw_urls
+
+    # Oversized candidate URL (>2048 chars) is skipped
+    oversized_url = "https://example.com/" + ("a" * 2100)
+    assert _extract_raw_urls(f"Link: {oversized_url}") == []
+
+    # Text exceeding MAX_RAW_URL_INPUT_CHARS is truncated without throwing
+    huge_text = ("word " * 120_000) + "https://example.com/valid"
+    assert len(huge_text) > MAX_RAW_URL_INPUT_CHARS
+    # Running extraction should execute smoothly and stay bounded
+    urls = _extract_raw_urls(huge_text)
+    assert isinstance(urls, list)
+
+
+def test_merge_links_caps_at_max_merged_links() -> None:
+    """Verifies that merged link count is capped at MAX_MERGED_LINKS."""
+    from meeting_notes.extractor import MAX_MERGED_LINKS, _merge_links
+
+    raw = [f"https://example.com/item-{i}" for i in range(150)]
+    merged = _merge_links([], raw)
+    assert len(merged) == MAX_MERGED_LINKS
+    assert merged[0] == "https://example.com/item-0"
+    assert merged[-1] == f"https://example.com/item-{MAX_MERGED_LINKS - 1}"
+
 
 
 

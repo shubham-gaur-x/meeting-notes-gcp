@@ -16,9 +16,11 @@ only module allowed to construct a client (CLAUDE.md).
 
 from __future__ import annotations
 
+import re
 import time
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlsplit
 
 import structlog
 
@@ -55,29 +57,62 @@ def build_system_prompt(type_hint: str | None = None) -> str:
     return f"{_SYSTEM_PROMPT}\n\nMeeting-type guidance:\n{type_hint}"
 
 
+MAX_RAW_URL_INPUT_CHARS = 500_000
+MAX_RAW_URL_LENGTH = 2048
+MAX_MERGED_LINKS = 100
+
+
+def _normalize_url(url: str) -> str:
+    """Normalize a URL for case-insensitive deduplication, stripping trailing slashes."""
+    return url.lower().rstrip("/")
+
+
+def _clean_url_candidate(token: str) -> str | None:
+    """Trim punctuation, apply balanced paren heuristic, and enforce candidate length bounds."""
+    u = token.strip().rstrip(".,;:>\x27\"")
+    while u.endswith(")") and u.count(")") > u.count("("):
+        u = u[:-1]
+    u = u.rstrip("]")
+    if len(u) < 10:
+        return None
+    if len(u) > MAX_RAW_URL_LENGTH:
+        log.warning(
+            "extractor.raw_url_length_exceeded",
+            length=len(u),
+            max_length=MAX_RAW_URL_LENGTH,
+        )
+        return None
+    return u
+
+
 def _extract_raw_urls(text: str) -> list[str]:
-    """Harvest real resource and document URLs from source text.
+    """Harvest genuine resource and document URLs from source text.
 
-    Captures genuine project, documentation, platform, and collaboration links,
-    including:
-    - Issue Trackers: Linear (linear.app), Jira (atlassian.net)
-    - Diagrams & Whiteboards: Lucid (lucid.app, lucidchart.com), Figma
-    - Chat & Collaboration: Slack (slack.com/archives), Google Chat (chat.google.com), Teams
-    - Meeting Links: Google Meet (meet.google.com), Zoom (zoom.us/j), Teams
-    - Learning & Skills: Google Cloud Skills Boost (cloudskillsboost.google, skills.google),
-      Databricks Academy / Workspace (academy.databricks.com, learn.databricks.com, *.databricks.com)
-    - Cloud Docs: Google Docs/Drive, Notion, Confluence
-
-    Filters out XML namespaces, image/logo assets, CDN trackers, and webmail UI anchors.
+    Scans text for http/https URLs and filters common noise domains (schemas, fonts,
+    static assets, and standard webmail links). Applies basic trailing punctuation
+    trimming with a single-level heuristic to retain balanced parentheses for doc links.
     """
-    import re
-
     if not text:
         return []
 
-    # Split on whitespace, commas, semicolons, quotes, and brackets to handle joined links cleanly
-    candidate_tokens = re.split(r'[\s,;<>\"]+', text)
+    if len(text) > MAX_RAW_URL_INPUT_CHARS:
+        log.warning(
+            "extractor.raw_url_input_truncated",
+            length=len(text),
+            max_chars=MAX_RAW_URL_INPUT_CHARS,
+        )
+        text = text[:MAX_RAW_URL_INPUT_CHARS]
+
+    # Find URL candidates starting with http:// or https:// delimited by whitespace, quotes, or brackets
+    raw_candidates = re.findall(r"https?://[^\s<>\"\x27`]+", text, re.IGNORECASE)
+    candidate_tokens: list[str] = []
+    for c in raw_candidates:
+        # Split joined URLs if multiple URLs were concatenated with commas or semicolons without spaces
+        for sub in re.split(r"[,;](?=https?://)", c, flags=re.IGNORECASE):
+            candidate_tokens.append(sub)
+
     cleaned: list[str] = []
+    seen: set[str] = set()
 
     noise_domains = (
         "schemas.microsoft.com",
@@ -85,7 +120,10 @@ def _extract_raw_urls(text: str) -> list[str]:
         "schemas.google.com",
         "w3.org",
         "xmlsoap.org",
-        "mail.google.com/mail",
+        "mail.google.com",
+        "outlook.office.com",
+        "outlook.live.com",
+        "mail.yahoo.com",
         "gstatic.com",
         "googleusercontent.com",
         "fonts.googleapis.com",
@@ -109,26 +147,68 @@ def _extract_raw_urls(text: str) -> list[str]:
     )
 
     for token in candidate_tokens:
-        u = token.strip().rstrip(".,;:)>]\x27")
-        if len(u) < 10:
+        u = _clean_url_candidate(token)
+        if u is None:
             continue
         if not re.match(r"^https?://[a-zA-Z0-9\-.]+\.[a-zA-Z]{2,}", u, re.IGNORECASE):
             continue
-        u_lower = u.lower()
-        if any(noise in u_lower for noise in noise_domains):
+        parsed = urlsplit(u)
+        netloc = parsed.netloc.lower()
+        path = parsed.path.lower()
+
+        if any(netloc == d or netloc.endswith(f".{d}") for d in noise_domains):
             continue
-        if any(u_lower.endswith(ext) or f"{ext}?" in u_lower for ext in noise_extensions):
+        if any(path.endswith(ext) for ext in noise_extensions):
             continue
+        norm_key = _normalize_url(u)
+        if norm_key in seen:
+            continue
+        seen.add(norm_key)
         cleaned.append(u)
 
-    return list(dict.fromkeys(cleaned))
+    return cleaned
+
+
+def _merge_links(existing_links: list[Any] | None, raw_urls: list[str]) -> list[str]:
+    """Merge model-extracted links with raw-harvested URLs.
+
+    Existing links take precedence in order; duplicates (by normalized key)
+    from raw URLs are omitted. Non-string items in existing_links trigger a warning log.
+    Total merged output is capped at MAX_MERGED_LINKS.
+    """
+    valid_links: list[str] = []
+    for link in existing_links or []:
+        if isinstance(link, str) and link.strip():
+            valid_links.append(link.strip())
+        else:
+            log.warning("extractor.invalid_link_item_skipped", item=str(link))
+
+    seen_links: set[str] = set()
+    merged: list[str] = []
+    for link in valid_links + raw_urls:
+        norm = _normalize_url(link)
+        if norm not in seen_links:
+            seen_links.add(norm)
+            merged.append(link)
+
+    if len(merged) > MAX_MERGED_LINKS:
+        log.warning(
+            "extractor.merged_links_capped",
+            count=len(merged),
+            max_links=MAX_MERGED_LINKS,
+        )
+        merged = merged[:MAX_MERGED_LINKS]
+
+    return merged
 
 
 def repair(data: dict[str, Any], context: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Fill required fields the model left null-like, in place.
+    """Fill required fields the model left null-like, in place, and merge raw URLs.
 
-    Carried from v5 unchanged. Every check goes through `_is_null_like` rather
-    than a truthiness test, because the literal string "null" is truthy.
+    Carried from v5 with link harvesting extension. Every null check goes through
+    `_is_null_like` rather than a truthiness test, because the literal string "null"
+    is truthy. Also harvests and deduplicates raw document/ecosystem URLs from context
+    into data["links"].
     """
     ctx = context or {}
 
@@ -141,10 +221,7 @@ def repair(data: dict[str, Any], context: dict[str, Any] | None = None) -> dict[
 
     # Merge extracted links with raw URLs present in source text/body
     raw_urls = _extract_raw_urls(ctx.get("text", "") or ctx.get("body", "") or "")
-    existing_links = [
-        link.strip() for link in (data.get("links") or []) if isinstance(link, str) and link.strip()
-    ]
-    data["links"] = list(dict.fromkeys(existing_links + raw_urls))
+    data["links"] = _merge_links(data.get("links"), raw_urls)
 
     # action_items: owner and task must be non-null strings, and an item is
     # repaired rather than dropped -- a nameless task is still a real task.
@@ -199,7 +276,13 @@ async def extract_meeting(
         return None
 
     try:
-        enriched_ctx = {"text": text, "source_type": source_type, **(context or {})}
+        # Caller context supplies supplementary metadata, but text and source_type
+        # are canonical to this extraction execution and cannot be overridden.
+        enriched_ctx = {
+            **(context or {}),
+            "text": text,
+            "source_type": source_type,
+        }
         meeting = ExtractedMeeting.model_validate(repair(data, enriched_ctx))
     except Exception as exc:  # noqa: BLE001 - reported, then surfaced as None
         log.error(
