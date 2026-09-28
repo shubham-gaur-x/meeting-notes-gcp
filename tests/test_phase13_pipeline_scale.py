@@ -959,6 +959,19 @@ async def test_embed_batch_size_mismatch_raises() -> None:
     with pytest.raises(ValueError, match="Gemini batchEmbed returned 1 embeddings for 2 inputs"):
         await llm_client.embed_batch(["text1", "text2"], settings=settings_gemini, transport=fake_gemini_transport_truncated)
 
+    # Dimension mismatch tests: right count, truncated vector dimension
+    async def fake_vertex_dimension_mismatch(url: str, payload: dict[str, Any], headers: dict[str, str]) -> str:
+        return json.dumps({"predictions": [{"embeddings": {"values": [0.1] * 100}}]})
+
+    with pytest.raises(ValueError, match="Vertex batchEmbed prediction dimension mismatch: expected >= 768, got 100"):
+        await llm_client.embed_batch(["text1"], settings=settings_vertex, transport=fake_vertex_dimension_mismatch)
+
+    async def fake_gemini_dimension_mismatch(url: str, payload: dict[str, Any], headers: dict[str, str]) -> str:
+        return json.dumps({"embeddings": [{"values": [0.1] * 50}]})
+
+    with pytest.raises(ValueError, match="Gemini batchEmbed embedding dimension mismatch: expected >= 768, got 50"):
+        await llm_client.embed_batch(["text1"], settings=settings_gemini, transport=fake_gemini_dimension_mismatch)
+
 
 @pytest.mark.asyncio
 async def test_drain_batch_with_default_record_failure(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1189,6 +1202,37 @@ async def test_vector_embed_pending_rejects_mismatched_batch_count() -> None:
     # Because count mismatched, the batch was skipped and 0 rows written
     assert count == 0
     assert len(written) == 0
+
+
+@pytest.mark.asyncio
+async def test_apply_migrations_executes_schema_and_migration_sql_with_backfill() -> None:
+    """Verify apply_migrations executes SCHEMA_SQL and MIGRATIONS_SQL including the status backfill."""
+    from meeting_notes import db
+
+    executed: list[str] = []
+
+    class FakeConn:
+        async def execute(self, query: str) -> None:
+            executed.append(query)
+
+    class FakePool:
+        class _Ctx:
+            async def __aenter__(self) -> FakeConn:
+                return FakeConn()
+
+            async def __aexit__(self, *args: Any) -> None:
+                pass
+
+        def acquire(self) -> _Ctx:
+            return self._Ctx()
+
+    await db.apply_migrations(pool=FakePool())  # type: ignore[arg-type]
+
+    combined = "\n".join(executed)
+    assert "CREATE TABLE IF NOT EXISTS staged_records" in combined
+    assert "ALTER TABLE staged_records ADD COLUMN IF NOT EXISTS status" in combined
+    assert "UPDATE staged_records SET status = 'processed' WHERE processed = TRUE AND status = 'pending';" in combined
+
 
 
 

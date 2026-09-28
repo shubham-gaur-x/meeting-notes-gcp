@@ -79,6 +79,7 @@ MIGRATIONS_SQL = """
 ALTER TABLE staged_records ADD COLUMN IF NOT EXISTS attempts INT NOT NULL DEFAULT 0;
 ALTER TABLE staged_records ADD COLUMN IF NOT EXISTS last_error TEXT;
 ALTER TABLE staged_records ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending';
+UPDATE staged_records SET status = 'processed' WHERE processed = TRUE AND status = 'pending';
 """
 
 # Phase 11 (ADR-020): the dev agent's own run tracking. One `state` column,
