@@ -89,7 +89,9 @@ async def drain_batch(
                     record_id=record.id, source=record.source_type, error=str(exc), exc_info=True,
                 )
                 try:
-                    await record_failure(record.id, str(exc), max_attempts=settings.pipeline_max_attempts)
+                    await record_failure(
+                        record.id, str(exc), max_attempts=resolve_max_attempts(settings=settings)
+                    )
                 except Exception as rec_exc:
                     log.error(
                         "pipeline_drain.record_failure_failed",
