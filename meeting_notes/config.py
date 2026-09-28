@@ -18,6 +18,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 LLMBackend = Literal["fake", "gemini", "vertex"]
 
+DEFAULT_PIPELINE_MAX_ATTEMPTS: int = 3
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -165,7 +167,7 @@ class Settings(BaseSettings):
     # ─── Pipeline tuning ──────────────────────────────────────────────────
     classifier_score_threshold: float = 0.40
     pipeline_batch_size: int = 50
-    pipeline_max_attempts: int = 3
+    pipeline_max_attempts: int = DEFAULT_PIPELINE_MAX_ATTEMPTS
     drain_concurrency: int = 3
     graph_write_concurrency: int = 3
     # Embeddings are independent calls at ~12s each; issuing them one at a

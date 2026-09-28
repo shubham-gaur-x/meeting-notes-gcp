@@ -352,7 +352,7 @@ async def stage_record(
 
 
 async def claim_batch(
-    limit: int, max_attempts: int = 5, pool: asyncpg.Pool | None = None
+    limit: int, max_attempts: int = 3, pool: asyncpg.Pool | None = None
 ) -> list[StagedRecord]:
     """Claim up to `limit` unprocessed records (ADR-006) with attempts < max_attempts.
 
