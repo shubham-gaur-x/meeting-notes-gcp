@@ -126,8 +126,11 @@ async def _embed_pending(
     earlier meeting is embedded once and not re-embedded on every ingestion.
 
     `semaphore` is shared across all embedding passes (meetings, actions, facts)
-    so total concurrent Vertex API calls stay within
-    `settings.embedding_concurrency` regardless of how many passes run.
+    so total concurrent Vertex API calls stay within `settings.embedding_concurrency`
+    regardless of how many passes run. When `embed_batch_fn` is supplied, `semaphore`
+    bounds concurrent batch-chunk requests (up to `DEFAULT_EMBEDDING_BATCH_CHUNK_SIZE`
+    items per request) to prevent provider throttling. When `embed_batch_fn` is None,
+    `semaphore` bounds individual item embedding calls matching PR #2 semantics.
     """
     async with driver.session() as session:
         result = await session.run(fetch_cypher, meeting_id=meeting_id)
