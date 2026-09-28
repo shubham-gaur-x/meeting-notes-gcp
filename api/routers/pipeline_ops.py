@@ -15,6 +15,16 @@ from meeting_notes.access_control import ADMIN, Principal
 router = APIRouter(prefix="/pipeline", tags=["pipeline"])
 
 
+async def require_admin(user: Principal = Depends(principal)) -> Principal:
+    """Ensure the caller has administrative role."""
+    if user.role != ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail="Forbidden: administrative role required",
+        )
+    return user
+
+
 class ReplayRequest(BaseModel):
     """Payload to replay one or all quarantined dead-letter records."""
 
@@ -28,13 +38,8 @@ class ReplayRequest(BaseModel):
 
 
 @router.get("/stats")
-async def queue_stats(user: Principal = Depends(principal)) -> dict[str, Any]:
+async def queue_stats(_: Principal = Depends(require_admin)) -> dict[str, Any]:
     """Retrieve staging queue depth and status breakdown (pending, retry, dead_letter, processed)."""
-    if user.role != ADMIN:
-        raise HTTPException(
-            status_code=403,
-            detail="Forbidden: administrative role required to view queue stats",
-        )
     stats = await db.get_queue_stats()
     return {"stats": stats}
 
@@ -42,14 +47,9 @@ async def queue_stats(user: Principal = Depends(principal)) -> dict[str, Any]:
 @router.get("/dlq")
 async def list_dead_letters(
     limit: int = Query(50, ge=1, le=500),
-    user: Principal = Depends(principal),
+    _: Principal = Depends(require_admin),
 ) -> dict[str, Any]:
     """List quarantined records that failed processing after reaching maximum retry attempts."""
-    if user.role != ADMIN:
-        raise HTTPException(
-            status_code=403,
-            detail="Forbidden: administrative role required to view DLQ records",
-        )
     records = await db.list_dead_letter_records(limit=limit)
     return {
         "count": len(records),
@@ -71,15 +71,9 @@ async def list_dead_letters(
 @router.post("/dlq/replay")
 async def replay_dead_letters(
     body: ReplayRequest | None = None,
-    user: Principal = Depends(principal),
+    _: Principal = Depends(require_admin),
 ) -> dict[str, Any]:
     """Replay quarantined dead-letter records by resetting attempts to 0 and status to 'pending'."""
-    if user.role != ADMIN:
-        raise HTTPException(
-            status_code=403,
-            detail="Forbidden: administrative role required to replay DLQ records",
-        )
-
     record_id = body.record_id if body else None
 
     if record_id:
