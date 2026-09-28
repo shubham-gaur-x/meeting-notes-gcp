@@ -1716,11 +1716,10 @@ function copyAnswerText(btn) {
   copyTextToClipboard(LAST_RAW_ANSWER, btn, "Copied Answer!");
 }
 
-function copySpecificAnswer(turnId) {
+function copySpecificAnswer(turnId, triggerBtn) {
   const turn = CHAT_TURNS.find(t => t.id === turnId);
   if (!turn || !turn.answer) return;
-  const card = $(`[data-id="${turnId}"]`);
-  const btn = card ? card.querySelector(".copy-answer-btn") : null;
+  const btn = triggerBtn || Array.from(document.querySelectorAll(".copy-answer-btn")).find(el => el.dataset.turnId === turnId);
   copyTextToClipboard(turn.answer, btn, "Copied Answer!");
 }
 
@@ -1753,13 +1752,12 @@ function copyDeliverablesText(btn) {
   copyTextToClipboard(deliverables, btn, "Copied Deliverables!");
 }
 
-function copySpecificDeliverables(turnId) {
+function copySpecificDeliverables(turnId, triggerBtn) {
   const turn = CHAT_TURNS.find(t => t.id === turnId);
   if (!turn || !turn.answer) return;
   const deliverables = extractDeliverables(turn.answer);
   if (!deliverables) return;
-  const card = $(`[data-id="${turnId}"]`);
-  const btn = card ? card.querySelector(".copy-deliverables-btn") : null;
+  const btn = triggerBtn || Array.from(document.querySelectorAll(".copy-deliverables-btn")).find(el => el.dataset.turnId === turnId);
   copyTextToClipboard(deliverables, btn, "Copied Deliverables!");
 }
 
@@ -1876,7 +1874,7 @@ function renderAssistantToolbarHtml(turn) {
   const safeId = esc(turn.id || "");
   const deliverablesText = extractDeliverables(turn.answer || "");
   const copyDeliverablesBtn = deliverablesText ? `
-    <button type="button" class="copy-btn copy-deliverables-btn" data-turn-id="${safeId}" onclick="copySpecificDeliverables(this.dataset.turnId)" title="Copy action items & deliverables only" aria-label="Copy deliverables">
+    <button type="button" class="copy-btn copy-deliverables-btn" data-turn-id="${safeId}" onclick="copySpecificDeliverables(this.dataset.turnId, this)" title="Copy action items & deliverables only" aria-label="Copy deliverables">
       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 11 12 14 22 4"></polyline><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg>
       <span>Copy Deliverables</span>
     </button>
@@ -1890,7 +1888,7 @@ function renderAssistantToolbarHtml(turn) {
       </div>
       <div style="display:flex;gap:6px;align-items:center">
         ${copyDeliverablesBtn}
-        <button type="button" class="copy-btn copy-answer-btn" data-turn-id="${safeId}" onclick="copySpecificAnswer(this.dataset.turnId)" title="Copy full markdown answer to clipboard" aria-label="Copy Answer">
+        <button type="button" class="copy-btn copy-answer-btn" data-turn-id="${safeId}" onclick="copySpecificAnswer(this.dataset.turnId, this)" title="Copy full markdown answer to clipboard" aria-label="Copy Answer">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
           <span>Copy Answer</span>
         </button>
@@ -1939,7 +1937,7 @@ async function renderChatFeed() {
       if (turn.timeframe) filterPills += `<span class="pill" style="font-size:10px;margin:0">Past ${esc(turn.timeframe)}d</span>`;
 
       html += `
-        <div class="chat-user-msg" data-id="${turn.id}">
+        <div class="chat-user-msg" data-id="${esc(turn.id || '')}">
           <div class="chat-user-meta">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
             <span>You</span>
@@ -1952,7 +1950,7 @@ async function renderChatFeed() {
       `;
     } else if (turn.role === "assistant") {
       html += `
-        <div class="answer" data-id="${turn.id}" style="position:relative">
+        <div class="answer" data-id="${esc(turn.id || '')}" style="position:relative">
           ${renderAssistantToolbarHtml(turn)}
           <div class="answer-markdown">${renderMarkdown(turn.answer)}</div>
           <div class="answer-extras">${renderAssistantContentHtml(turn)}</div>
@@ -2067,7 +2065,7 @@ async function askMemory() {
 
     const cardEl = document.createElement("div");
     cardEl.className = "answer";
-    cardEl.setAttribute("data-id", assistantTurn.id);
+    cardEl.dataset.id = assistantTurn.id;
     cardEl.style.position = "relative";
     cardEl.innerHTML = `
       ${renderAssistantToolbarHtml(assistantTurn)}
