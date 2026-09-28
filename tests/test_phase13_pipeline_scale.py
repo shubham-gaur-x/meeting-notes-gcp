@@ -1086,12 +1086,12 @@ async def test_queue_stats_does_not_double_count_quarantined_records() -> None:
     # Mutually exclusive: sum of distinct buckets equals total
     assert stats["pending"] + stats["retry"] + stats["dead_letter"] + stats["processed"] == stats["total"]
 
-    # Verify that the SQL query itself applies coalesce(status, 'pending') across all buckets
-    # ensuring legacy rows with status IS NULL are strictly accounted for without dropping.
-    assert "coalesce(status, 'pending') = 'pending' AND processed = FALSE" in db._QUEUE_STATS_SQL
-    assert "coalesce(status, 'pending') = 'retry' AND processed = FALSE" in db._QUEUE_STATS_SQL
-    assert "coalesce(status, 'pending') = 'dead_letter' AND processed = FALSE" in db._QUEUE_STATS_SQL
-    assert "coalesce(status, 'pending') = 'processed' OR processed = TRUE" in db._QUEUE_STATS_SQL
+    # Verify that the SQL query itself derives a single effective status per row,
+    # guaranteeing structural mutual exclusivity across all buckets.
+    assert "coalesce(status, CASE WHEN processed THEN 'processed' ELSE 'pending' END) = 'pending'" in db._QUEUE_STATS_SQL
+    assert "coalesce(status, CASE WHEN processed THEN 'processed' ELSE 'pending' END) = 'retry'" in db._QUEUE_STATS_SQL
+    assert "coalesce(status, CASE WHEN processed THEN 'processed' ELSE 'pending' END) = 'dead_letter'" in db._QUEUE_STATS_SQL
+    assert "coalesce(status, CASE WHEN processed THEN 'processed' ELSE 'pending' END) = 'processed'" in db._QUEUE_STATS_SQL
 
 
 
