@@ -22,7 +22,11 @@ def main() -> int:
             if not records:
                 print("  pipeline_drain: nothing to claim")
                 return 0
-            result = await drain_batch(records)
+            result = await drain_batch(
+                records,
+                concurrency_limit=settings.drain_concurrency,
+                max_attempts=resolve_max_attempts(settings=settings),
+            )
             print(f"  pipeline_drain: processed {result.processed}, errors {result.errors}")
             return 1 if result.errors else 0
         finally:

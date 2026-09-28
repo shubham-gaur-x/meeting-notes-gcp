@@ -17,7 +17,6 @@ from typing import Any
 
 import structlog
 
-from meeting_notes.config import Settings, get_settings, resolve_max_attempts
 from meeting_notes.models import StagedRecord
 from meeting_notes.pipeline import adapter_for
 
@@ -44,11 +43,11 @@ async def _default_sync_jira(payload: dict[str, Any], *, record_id: str) -> bool
 
 
 async def _default_record_failure(
-    record_id: str, error: str, max_attempts: int | None = None
+    record_id: str, error: str, max_attempts: int = 3
 ) -> tuple[int, bool, str]:
     from meeting_notes import db
 
-    return await db.record_drain_failure(record_id, error, max_attempts=resolve_max_attempts(max_attempts))
+    return await db.record_drain_failure(record_id, error, max_attempts=max_attempts)
 
 
 async def drain_batch(
@@ -57,17 +56,24 @@ async def drain_batch(
     process: Any = None,
     sync_jira: Any = None,
     record_failure: Any = None,
-    concurrency_limit: int | None = None,
-    settings: Settings | None = None,
+    concurrency_limit: int = 5,
+    max_attempts: int = 3,
+    settings: Any = None,
 ) -> DrainResult:
     """Route and process every record in a claimed batch with bounded concurrency."""
     process = process or _default_process
     sync_jira = sync_jira or _default_sync_jira
     record_failure = record_failure or _default_record_failure
-    settings = settings or get_settings()
 
-    limit = max(1, concurrency_limit if concurrency_limit is not None else settings.drain_concurrency)
-    sem = asyncio.Semaphore(limit)
+    limit = concurrency_limit
+    eff_max_attempts = max_attempts
+    if settings is not None:
+        if hasattr(settings, "drain_concurrency"):
+            limit = getattr(settings, "drain_concurrency")
+        if hasattr(settings, "pipeline_max_attempts"):
+            eff_max_attempts = getattr(settings, "pipeline_max_attempts")
+
+    sem = asyncio.Semaphore(max(1, limit))
     result = DrainResult()
     lock = asyncio.Lock()
 
@@ -90,7 +96,7 @@ async def drain_batch(
                 )
                 try:
                     await record_failure(
-                        record.id, str(exc), max_attempts=resolve_max_attempts(settings=settings)
+                        record.id, str(exc), max_attempts=eff_max_attempts
                     )
                 except Exception as rec_exc:
                     log.error(
