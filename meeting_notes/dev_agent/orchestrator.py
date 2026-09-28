@@ -238,17 +238,23 @@ class _Dependencies:
 
 
 def _is_linear_identifier(key: str) -> bool:
-    """Strict validation for Linear identifiers (UUID or TEAM-123)."""
+    """Format check for Linear identifiers (36-char UUID or TEAM-123 key)."""
     return bool(_UUID_RE.match(key) or _LINEAR_KEY_RE.match(key))
 
 
 def _is_jira_identifier(key: str) -> bool:
-    """Strict validation for Jira identifiers (PROJECT-123)."""
+    """Format check for Jira identifiers (PROJECT-123 key)."""
     return bool(_LINEAR_KEY_RE.match(key))
 
 
 def validate_tracker_key(key: str, tracker: str | None = None) -> bool:
-    """Validate format of ticket/issue key for a tracker.
+    """Validate syntactic key format for a tracker.
+
+    Both Jira and Linear standard human-facing issue keys share the
+    [PROJECT|TEAM]-[NUMBER] syntax (e.g. 'SCRUM-123', 'ENG-456'), while
+    Linear additionally supports 36-character UUIDs. Syntactic validation
+    verifies structure; semantic disambiguation between trackers is resolved
+    by project/team prefix in `_should_use_linear`.
 
     Raises ValueError if the key format is invalid.
     """
