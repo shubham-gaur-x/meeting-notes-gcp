@@ -34,7 +34,6 @@ _REPO_PATTERNS = (
 )
 
 _STANDARD_ISSUE_KEY_RE = re.compile(r"^[A-Za-z]{1,10}-\d+$")
-_LINEAR_KEY_RE = _STANDARD_ISSUE_KEY_RE
 _UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 
 
@@ -268,65 +267,13 @@ def validate_tracker_key(key: str, tracker: str | None = None) -> bool:
             raise ValueError(f"Invalid Jira issue key: {key!r}")
         return True
 
-    if not (_UUID_RE.match(key) or _STANDARD_ISSUE_KEY_RE.match(key)):
+    if not _is_linear_identifier(key):
         raise ValueError(f"Invalid issue key format: {key!r}")
     return True
 
 
-def _should_use_linear(key: str, settings: Settings, tracker: str | None = None) -> bool:
-    """Determine whether to route ticket operations to Linear or Jira.
-
-    Precedence:
-    1. If explicit tracker is provided -> validate and respect it ("linear" -> True, "jira" -> False)
-    2. If configured_tracker == "linear" -> validate Linear key presence and key format (True)
-    3. If configured_tracker == "jira" -> validate Jira enabled status and key format (False)
-    4. In "both" mode or unconfigured:
-       - If Jira disabled and Linear key configured -> Linear (True)
-       - If Linear key missing and Jira enabled -> Jira (False)
-       - If neither configured -> raise RuntimeError
-       - When both configured:
-         - Reject misconfiguration if jira_project_key == linear_team_id
-         - If key matches Linear UUID pattern -> Linear (True)
-         - If key matches configured Jira project prefix -> Jira (False)
-         - If key matches configured Linear team prefix -> Linear (True)
-         - Otherwise, fail-loudly with ValueError on ambiguous key.
-    """
-    if tracker is not None and tracker.lower() in ("linear", "jira"):
-        t = tracker.lower()
-        if t == "linear":
-            validate_tracker_key(key, tracker="linear")
-            return True
-        if t == "jira":
-            validate_tracker_key(key, tracker="jira")
-            return False
-
-    has_linear_key = bool(getattr(settings, "linear_api_key", None))
-    jira_enabled = getattr(settings, "jira_enabled", False)
-    configured_tracker = getattr(settings, "issue_tracker", "jira").lower()
-
-    if configured_tracker == "linear":
-        if not has_linear_key:
-            raise RuntimeError("Linear tracker configured but linear_api_key is not set")
-        validate_tracker_key(key, tracker="linear")
-        return True
-
-    if configured_tracker == "jira":
-        if not jira_enabled:
-            raise RuntimeError(f"Cannot route ticket {key}: Jira is disabled and Linear is not configured/applicable")
-        validate_tracker_key(key, tracker="jira")
-        return False
-
-    # In "both" mode or dynamic negotiation:
-    if not jira_enabled and has_linear_key:
-        validate_tracker_key(key, tracker="linear")
-        return True
-    if not has_linear_key and jira_enabled:
-        validate_tracker_key(key, tracker="jira")
-        return False
-    if not jira_enabled and not has_linear_key:
-        raise RuntimeError(f"Cannot route ticket {key}: Jira is disabled and Linear is not configured/applicable")
-
-    # Both Jira and Linear are enabled:
+def _resolve_dual_tracker_key(key: str, settings: Settings) -> bool:
+    """Disambiguate key between Jira and Linear when both trackers are enabled."""
     jira_prefix = (getattr(settings, "jira_project_key", "") or "").upper()
     linear_team = (getattr(settings, "linear_team_id", "") or "").upper()
     if jira_prefix and linear_team and jira_prefix == linear_team:
@@ -347,6 +294,53 @@ def _should_use_linear(key: str, settings: Settings, tracker: str | None = None)
     raise ValueError(f"Ambiguous tracker key {key!r}: cannot determine whether to route to Linear or Jira")
 
 
+def _should_use_linear(key: str, settings: Settings, tracker: str | None = None) -> bool:
+    """Determine whether to route ticket operations to Linear or Jira.
+
+    Precedence:
+    1. If explicit tracker is provided -> validate and respect it ("linear" -> True, "jira" -> False)
+    2. If configured_tracker == "linear" -> validate Linear key presence and key format (True)
+    3. If configured_tracker == "jira" -> validate Jira enabled status and key format (False)
+    4. In "both" mode or unconfigured -> delegate to dual-tracker resolution or available tracker.
+    """
+    if tracker is not None and tracker.lower() in ("linear", "jira"):
+        is_linear = tracker.lower() == "linear"
+        validate_tracker_key(key, tracker="linear" if is_linear else "jira")
+        return is_linear
+
+    has_linear_key = bool(getattr(settings, "linear_api_key", None))
+    jira_enabled = getattr(settings, "jira_enabled", False)
+    configured_tracker = getattr(settings, "issue_tracker", "jira").lower()
+
+    if configured_tracker == "linear":
+        if not has_linear_key:
+            raise RuntimeError("Linear tracker configured but linear_api_key is not set")
+        validate_tracker_key(key, tracker="linear")
+        return True
+
+    if configured_tracker == "jira":
+        if not jira_enabled:
+            raise RuntimeError(
+                f"Cannot route ticket {key}: Jira is disabled and Linear is not configured/applicable"
+            )
+        validate_tracker_key(key, tracker="jira")
+        return False
+
+    # In "both" mode or dynamic fallback:
+    if not jira_enabled and has_linear_key:
+        validate_tracker_key(key, tracker="linear")
+        return True
+    if not has_linear_key and jira_enabled:
+        validate_tracker_key(key, tracker="jira")
+        return False
+    if not jira_enabled and not has_linear_key:
+        raise RuntimeError(
+            f"Cannot route ticket {key}: Jira is disabled and Linear is not configured/applicable"
+        )
+
+    return _resolve_dual_tracker_key(key, settings)
+
+
 async def _default_transition_issue(
     key: str, status: str, *, settings: Settings | None = None, tracker: str | None = None
 ) -> bool:
@@ -362,7 +356,9 @@ async def _default_transition_issue(
         return False
 
     if not getattr(settings, "jira_enabled", False):
-        raise RuntimeError(f"Cannot route ticket {key}: Jira is disabled and Linear is not configured/applicable")
+        raise RuntimeError(
+            f"Cannot route ticket {key}: Jira is disabled and Linear is not configured/applicable"
+        )
 
     from meeting_notes import jira_client
 
@@ -384,7 +380,9 @@ async def _default_add_comment(
         return
 
     if not getattr(settings, "jira_enabled", False):
-        raise RuntimeError(f"Cannot route ticket {key}: Jira is disabled and Linear is not configured/applicable")
+        raise RuntimeError(
+            f"Cannot route ticket {key}: Jira is disabled and Linear is not configured/applicable"
+        )
 
     from meeting_notes import jira_client
 
@@ -411,7 +409,9 @@ async def _default_get_issue_detail(
         raise RuntimeError(f"Linear issue {key} not found")
 
     if not getattr(settings, "jira_enabled", False):
-        raise RuntimeError(f"Cannot route ticket {key}: Jira is disabled and Linear is not configured/applicable")
+        raise RuntimeError(
+            f"Cannot route ticket {key}: Jira is disabled and Linear is not configured/applicable"
+        )
 
     from meeting_notes import jira_client
 

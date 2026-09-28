@@ -63,25 +63,24 @@ async def embed_text(
 async def embed_batch_texts(
     texts: list[str], *, settings: Settings | None = None, embed_batch_fn: Any = None
 ) -> list[list[float] | None]:
+    """Embed a list of texts using embed_batch_fn (defaults to llm_client.embed_batch).
+
+    Chunking and concurrency are managed at the orchestration layer (_embed_pending),
+    while backend-specific HTTP batching is handled inside llm_client.embed_batch.
+    """
     if not texts:
         return []
     resolved = settings or get_settings()
-    chunk_size = getattr(resolved, "embedding_batch_size", 50)
     if embed_batch_fn is None:
         from meeting_notes import llm_client
 
         embed_batch_fn = llm_client.embed_batch
 
-    results: list[list[float] | None] = []
-    for i in range(0, len(texts), chunk_size):
-        chunk = texts[i : i + chunk_size]
-        try:
-            chunk_results = await embed_batch_fn(chunk, settings=resolved)
-            results.extend(chunk_results)
-        except Exception as exc:  # noqa: BLE001 - per-chunk resilience
-            log.warning("vector.embed_batch_chunk_failed", chunk_size=len(chunk), error=str(exc))
-            results.extend([None] * len(chunk))
-    return results
+    try:
+        return await embed_batch_fn(texts, settings=resolved)
+    except Exception as exc:  # noqa: BLE001 - resilience
+        log.warning("vector.embed_batch_failed", count=len(texts), error=str(exc))
+        return [None] * len(texts)
 
 
 async def embed_meeting(

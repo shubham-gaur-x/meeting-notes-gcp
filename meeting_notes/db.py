@@ -161,8 +161,7 @@ SELECT id, source_id, source_type, payload, fetched_at, processed,
 FROM staged_records
 WHERE processed = FALSE
   AND attempts < $2
-  AND status != 'dead_letter'
-  AND status != 'processed'
+  AND status NOT IN ('dead_letter', 'processed')
 ORDER BY fetched_at
 FOR UPDATE SKIP LOCKED
 LIMIT $1
@@ -493,7 +492,9 @@ async def replay_dead_letter_record(
     pool = pool or await get_pool()
     async with pool.acquire() as conn:
         val = await conn.fetchval(_REPLAY_DLQ_SQL, record_id)
-    return val is not None
+    success = val is not None
+    log.info("dlq.replay_one", record_id=record_id, success=success)
+    return success
 
 
 async def replay_all_dead_letter_records(pool: asyncpg.Pool | None = None) -> int:
@@ -503,7 +504,9 @@ async def replay_all_dead_letter_records(pool: asyncpg.Pool | None = None) -> in
         status_str = await conn.execute(_REPLAY_ALL_DLQ_SQL)
     parts = (status_str or "").strip().split()
     if len(parts) >= 2 and parts[0].upper() == "UPDATE" and parts[1].isdigit():
-        return int(parts[1])
+        count = int(parts[1])
+        log.info("dlq.replay_all", replayed_count=count)
+        return count
     raise RuntimeError(f"Unexpected status string from replay_all_dead_letter: {status_str!r}")
 
 

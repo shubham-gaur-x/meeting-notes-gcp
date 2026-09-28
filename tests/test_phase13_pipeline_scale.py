@@ -620,8 +620,8 @@ async def test_pipeline_dlq_api_endpoints(monkeypatch: pytest.MonkeyPatch) -> No
         assert resp.json()["count"] == 1
 
         # 6. Non-admin principal -> 403 Forbidden on stats, dlq, and replay
-        from meeting_notes.access_control import Principal
         from api.deps import principal
+        from meeting_notes.access_control import Principal
         member_principal = Principal(name="test-member", role="member")
         app.dependency_overrides[principal] = lambda: member_principal
 
@@ -864,7 +864,7 @@ async def test_claim_batch_excludes_dead_letter_in_query() -> None:
     assert records == []
     assert len(executed) == 1
     assert executed[0][1] == (25, 4)
-    assert "status != 'dead_letter'" in executed[0][0]
+    assert "status NOT IN ('dead_letter', 'processed')" in executed[0][0]
 
 
 def test_orchestrator_routes_ticket_lacking_tracker_key_by_prefix() -> None:
@@ -949,7 +949,9 @@ async def test_embed_batch_size_mismatch_raises() -> None:
 
     from meeting_notes import llm_client
 
-    async def fake_vertex_transport_truncated(url: str, payload: dict[str, Any], headers: dict[str, str]) -> str:
+    async def fake_vertex_transport_truncated(
+        url: str, payload: dict[str, Any], headers: dict[str, str]
+    ) -> str:
         return json.dumps({"predictions": [{"embeddings": {"values": [0.1] * 768}}]})
 
     settings_vertex = Settings(
@@ -961,9 +963,13 @@ async def test_embed_batch_size_mismatch_raises() -> None:
     )
 
     with pytest.raises(ValueError, match="Vertex batchEmbed returned 1 predictions for 2 inputs"):
-        await llm_client.embed_batch(["text1", "text2"], settings=settings_vertex, transport=fake_vertex_transport_truncated)
+        await llm_client.embed_batch(
+            ["text1", "text2"], settings=settings_vertex, transport=fake_vertex_transport_truncated
+        )
 
-    async def fake_gemini_transport_truncated(url: str, payload: dict[str, Any], headers: dict[str, str]) -> str:
+    async def fake_gemini_transport_truncated(
+        url: str, payload: dict[str, Any], headers: dict[str, str]
+    ) -> str:
         return json.dumps({"embeddings": [{"values": [0.1] * 768}]})
 
     settings_gemini = Settings(
@@ -974,20 +980,34 @@ async def test_embed_batch_size_mismatch_raises() -> None:
     )
 
     with pytest.raises(ValueError, match="Gemini batchEmbed returned 1 embeddings for 2 inputs"):
-        await llm_client.embed_batch(["text1", "text2"], settings=settings_gemini, transport=fake_gemini_transport_truncated)
+        await llm_client.embed_batch(
+            ["text1", "text2"], settings=settings_gemini, transport=fake_gemini_transport_truncated
+        )
 
     # Dimension mismatch tests: right count, truncated vector dimension
-    async def fake_vertex_dimension_mismatch(url: str, payload: dict[str, Any], headers: dict[str, str]) -> str:
+    async def fake_vertex_dimension_mismatch(
+        url: str, payload: dict[str, Any], headers: dict[str, str]
+    ) -> str:
         return json.dumps({"predictions": [{"embeddings": {"values": [0.1] * 100}}]})
 
-    with pytest.raises(ValueError, match="Vertex batchEmbed prediction dimension mismatch: expected 768, got 100"):
-        await llm_client.embed_batch(["text1"], settings=settings_vertex, transport=fake_vertex_dimension_mismatch)
+    with pytest.raises(
+        ValueError, match="Vertex batchEmbed prediction dimension mismatch: expected 768, got 100"
+    ):
+        await llm_client.embed_batch(
+            ["text1"], settings=settings_vertex, transport=fake_vertex_dimension_mismatch
+        )
 
-    async def fake_gemini_dimension_mismatch(url: str, payload: dict[str, Any], headers: dict[str, str]) -> str:
+    async def fake_gemini_dimension_mismatch(
+        url: str, payload: dict[str, Any], headers: dict[str, str]
+    ) -> str:
         return json.dumps({"embeddings": [{"values": [0.1] * 50}]})
 
-    with pytest.raises(ValueError, match="Gemini batchEmbed embedding dimension mismatch: expected 768, got 50"):
-        await llm_client.embed_batch(["text1"], settings=settings_gemini, transport=fake_gemini_dimension_mismatch)
+    with pytest.raises(
+        ValueError, match="Gemini batchEmbed embedding dimension mismatch: expected 768, got 50"
+    ):
+        await llm_client.embed_batch(
+            ["text1"], settings=settings_gemini, transport=fake_gemini_dimension_mismatch
+        )
 
 
 @pytest.mark.asyncio
@@ -998,7 +1018,9 @@ async def test_drain_batch_with_default_record_failure(monkeypatch: pytest.Monke
 
     db_calls: list[tuple[str, str, int]] = []
 
-    async def mock_db_record_failure(record_id: str, error: str, max_attempts: int = 3, **kwargs: Any) -> tuple[int, bool, str]:
+    async def mock_db_record_failure(
+        record_id: str, error: str, max_attempts: int = 3, **kwargs: Any
+    ) -> tuple[int, bool, str]:
         db_calls.append((record_id, error, max_attempts))
         return 1, False, "retry"
 
@@ -1023,9 +1045,9 @@ async def test_drain_batch_with_default_record_failure(monkeypatch: pytest.Monke
 
 @pytest.mark.asyncio
 async def test_orchestrator_process_ticket_ambiguous_key_failure_handling() -> None:
-    """Verify an ambiguous key that raises ValueError in routing is cleanly caught and fails the ticket without crashing batch."""
-    from meeting_notes.dev_agent import orchestrator
+    """Verify an ambiguous key that raises ValueError in routing fails ticket cleanly."""
     from meeting_notes.dev_agent import lifecycle as lc
+    from meeting_notes.dev_agent import orchestrator
 
     run_finished = False
     finished_state = None
@@ -1043,7 +1065,9 @@ async def test_orchestrator_process_ticket_ambiguous_key_failure_handling() -> N
     async def mock_set_state(key: str, state: str) -> None:
         pass
 
-    async def mock_remove_worktree(repo_dir: str, work_dir: str, branch: str, ignore_errors: bool = True) -> None:
+    async def mock_remove_worktree(
+        repo_dir: str, work_dir: str, branch: str, ignore_errors: bool = True
+    ) -> None:
         pass
 
     settings = Settings(
@@ -1146,7 +1170,9 @@ def test_should_use_linear_rejects_identical_prefixes() -> None:
         linear_api_key="linear-secret",
         linear_team_id="ENG",
     )
-    with pytest.raises(ValueError, match="Ambiguous tracker configuration: both Jira and Linear share prefix 'ENG'"):
+    with pytest.raises(
+        ValueError, match="Ambiguous tracker configuration: both Jira and Linear share prefix 'ENG'"
+    ):
         _should_use_linear("ENG-101", settings_colliding)
 
     # Also verify that explicit jira tracker raises if jira_enabled is False
@@ -1248,12 +1274,16 @@ async def test_apply_migrations_executes_schema_and_migration_sql_with_backfill(
     combined = "\n".join(executed)
     assert "CREATE TABLE IF NOT EXISTS staged_records" in combined
     assert "ALTER TABLE staged_records ADD COLUMN IF NOT EXISTS status" in combined
-    assert "UPDATE staged_records SET status = 'processed' WHERE processed = TRUE AND status = 'pending';" in combined
+    assert (
+        "UPDATE staged_records SET status = 'processed' WHERE processed = TRUE AND status = 'pending';"
+        in combined
+    )
 
 
 def test_max_attempts_defaults_aligned_across_modules() -> None:
-    """Verify max_attempts defaults to None and dynamically resolves via resolve_max_attempts across db and pipeline_drain."""
+    """Verify max_attempts defaults to None and resolves dynamically via resolve_max_attempts."""
     import inspect
+
     from meeting_notes import config, db, pipeline_drain
 
     assert config.DEFAULT_PIPELINE_MAX_ATTEMPTS == 3
