@@ -497,8 +497,6 @@ def resolve(
     if is_junk_name(name):
         return Resolution(name, role, None, "dropped", False, "junk-name")
 
-
-
     # Tier 1 — deterministic (email present)
     if email and "@" in email:
         return _resolve_with_email(name, role, email, roster, known_people)
