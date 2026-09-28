@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, ConfigDict, Field
 
 from api.deps import principal, settings_dep
 from meeting_notes import digest, graph_client
@@ -90,13 +91,33 @@ async def actions_list(
     }
 
 
-@router.get("/contacts")
-async def contacts_directory(_: Principal = Depends(principal)) -> dict[str, Any]:
+class ContactProfileItem(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    name: str = ""
+    email: str = ""
+    first_names: list[str] = Field(default_factory=list)
+    nicknames: list[str] = Field(default_factory=list)
+    initials: list[str] = Field(default_factory=list)
+    role: str = ""
+    organization: str = ""
+
+
+class ContactsResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    contacts: list[ContactProfileItem]
+    count: int
+
+
+@router.get("/contacts", response_model=ContactsResponse)
+async def contacts_directory(_: Principal = Depends(principal)) -> ContactsResponse:
     """Team contact profiles linking full names, corporate emails, nicknames, and aliases."""
     from meeting_notes import person_resolver
 
     contacts = person_resolver.get_contact_directory_list()
-    return {"contacts": contacts, "count": len(contacts)}
+    return ContactsResponse(
+        contacts=[ContactProfileItem(**c) for c in contacts],
+        count=len(contacts),
+    )
 
 
 @router.get("/provenance/{meeting_id}")

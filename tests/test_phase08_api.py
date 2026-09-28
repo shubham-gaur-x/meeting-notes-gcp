@@ -1438,7 +1438,11 @@ async def test_contacts_directory_endpoint(app: Any, monkeypatch: Any) -> None:
     assert resp.status_code == 200
     data = resp.json()
     assert data["count"] == 1
-    assert data["contacts"][0]["name"] == "Alice Smith"
+    contact = data["contacts"][0]
+    assert contact["name"] == "Alice Smith"
+    assert contact["email"] == "alice@example.com"
+    assert "organization" in contact
+    assert "role" in contact
 
 
 @pytest.mark.asyncio
@@ -1453,20 +1457,6 @@ async def test_resolve_person_review_no_email_synthesis() -> None:
     mock_session = AsyncMock()
     mock_driver.session.return_value.__aenter__.return_value = mock_session
 
-    find_record = {
-        "review_id": "rev-999",
-        "old_name": "Carol Danvers",
-        "meeting_id": "meet-1",
-        "title": "Review",
-    }
-
-    async def mock_find_iter():
-        yield find_record
-
-    async def mock_pres_iter():
-        return
-        yield
-
     class FakeResult:
         def __init__(self, items: list[dict[str, Any]]) -> None:
             self.items = items
@@ -1478,9 +1468,11 @@ async def test_resolve_person_review_no_email_synthesis() -> None:
             return gen()
 
     expected_person_id = uuid5_id("person", "name:carol danvers")
+    executed_queries: list[str] = []
     query_params: list[dict[str, Any]] = []
 
     def record_run(query: str, **kwargs: Any) -> Any:
+        executed_queries.append(query)
         query_params.append(kwargs)
         if "MERGE (p:Person" in query:
             return FakeResult([{
@@ -1489,8 +1481,6 @@ async def test_resolve_person_review_no_email_synthesis() -> None:
                 "email": None,
                 "meeting_id": "meet-1",
             }])
-        elif "toLower(p.name)" in query:
-            return FakeResult([])
         else:
             return FakeResult([{
                 "review_id": "rev-999",
@@ -1511,8 +1501,73 @@ async def test_resolve_person_review_no_email_synthesis() -> None:
     assert result["person_id"] == expected_person_id
     assert result["email"] is None
 
+    # Assert exactly two queries: find meeting review and MERGE person
+    assert len(executed_queries) == 2
+    for q in executed_queries:
+        assert "toLower(p.name)" not in q, "Must never attempt to guess/borrow email from same-named Person"
+
     merge_params = [p for p in query_params if "person_id" in p][0]
     assert merge_params["email"] is None
     assert merge_params["person_id"] == expected_person_id
+
+
+@pytest.mark.asyncio
+async def test_resolve_person_review_does_not_borrow_existing_person_email() -> None:
+    """Verify that resolving a person review without email never borrows an existing Person node's email."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from meeting_notes import graph_client
+    from meeting_notes.utils import uuid5_id
+
+    mock_driver = MagicMock()
+    mock_session = AsyncMock()
+    mock_driver.session.return_value.__aenter__.return_value = mock_session
+
+    class FakeResult:
+        def __init__(self, items: list[dict[str, Any]]) -> None:
+            self.items = items
+
+        def __aiter__(self):
+            async def gen():
+                for item in self.items:
+                    yield item
+            return gen()
+
+    expected_person_id = uuid5_id("person", "name:alex mercer")
+    executed_queries: list[str] = []
+    query_params: list[dict[str, Any]] = []
+
+    def record_run(query: str, **kwargs: Any) -> Any:
+        executed_queries.append(query)
+        query_params.append(kwargs)
+        if "MERGE (p:Person" in query:
+            return FakeResult([{
+                "person_id": expected_person_id,
+                "name": "Alex Mercer",
+                "email": None,
+                "meeting_id": "meet-2",
+            }])
+        return FakeResult([{
+            "review_id": "rev-100",
+            "old_name": "Alex Mercer",
+            "meeting_id": "meet-2",
+            "title": "Review 2",
+        }])
+
+    mock_session.run = AsyncMock(side_effect=record_run)
+
+    result = await graph_client.resolve_person_review(
+        review_id="rev-100",
+        name="Alex Mercer",
+        email=None,
+        driver=mock_driver,
+    )
+
+    assert result["person_id"] == expected_person_id
+    assert result["email"] is None
+    # No query should search for existing persons to copy their email
+    for q in executed_queries:
+        assert "p.email IS NOT NULL" not in q
+
 
 

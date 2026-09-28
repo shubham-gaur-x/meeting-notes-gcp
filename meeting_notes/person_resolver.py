@@ -78,7 +78,7 @@ class ContactProfile:
     nicknames: list[str] = field(default_factory=list)
     initials: list[str] = field(default_factory=list)
     role: str = ""
-    organization: str = "Onix"
+    organization: str = ""
 
     def all_mentions(self) -> list[str]:
         candidates = [self.full_name, self.email] + self.nicknames + self.first_names + self.initials
@@ -326,7 +326,7 @@ def _register_roster_contact(
         parts = name.split()
         initials = [f"{parts[0][0]}{parts[-1][0]}"]
     role = str(d.get("role", ""))
-    org = str(d.get("organization", "Onix"))
+    org = str(d.get("organization", ""))
     CONTACT_PROFILES[email] = ContactProfile(
         full_name=name,
         email=email,

@@ -1175,6 +1175,8 @@ a future phase requires:
 Workspace Events API delivers transcripts only; in-meeting chat logs are stored separately
 and cannot be reliably fetched with the current `meetings.space.readonly` scope.
 
+**Retrieval & Vector Degradation Resilience:** Hybrid RAG retrieval combines Memgraph structured Cypher traversals with opportunistic chunk-level vector similarity (`vector.py`). In line with high-availability search design, vector chunk search treats remote embedding timeouts or uninitialized vector indices as opportunistic enrichments that degrade gracefully (`chunk_search_failed` warning log) to keyword/semantic meeting search and deterministic Cypher graph provenance, ensuring chat endpoints never hard-crash when external embedding services experience transient latency. In contrast, structural graph queries fail loudly.
+
 ---
 
 ## ADR-029 — Linear issue tracking alongside Jira, with issue_tracker:"both" deduplication

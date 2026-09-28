@@ -1735,19 +1735,6 @@ async def resolve_person_review(
         old_name = record["old_name"]
         meeting_id = record["meeting_id"]
 
-        if not norm_email:
-            p_res = await session.run(
-                """
-                MATCH (p:Person)
-                WHERE toLower(p.name) = toLower($name) AND p.email IS NOT NULL
-                RETURN p.email AS email LIMIT 1
-                """,
-                name=norm_name,
-            )
-            async for prec in p_res:
-                norm_email = prec["email"]
-                break
-
         if norm_email:
             person_id = uuid5_id("person", norm_email)
         else:
