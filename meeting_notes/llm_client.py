@@ -469,13 +469,18 @@ async def embed_batch(
                 )
             for pred in preds:
                 v = pred.get("embeddings", {}).get("values", [])
-                results.append(list(v[:dimension]) if len(v) >= dimension else None)
+                if len(v) < dimension:
+                    log.error("llm.vertex_batch_embed_dimension_mismatch", expected=dimension, got=len(v))
+                    raise ValueError(
+                        f"Vertex batchEmbed prediction dimension mismatch: expected >= {dimension}, got {len(v)}"
+                    )
+                results.append(list(v[:dimension]))
         return results
 
     if backend == "gemini":
         model = settings.gemini_embedding_model
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:batchEmbedContents"
-        results_gemini: list[list[float] | None] = []
+        results_gemini: list[list[float]] = []
         for i in range(0, len(texts), chunk_size):
             chunk = texts[i : i + chunk_size]
             payload = {
@@ -497,7 +502,12 @@ async def embed_batch(
                 )
             for emb in embeddings:
                 v = emb.get("values", [])
-                results_gemini.append(list(v[:dimension]) if len(v) >= dimension else None)
+                if len(v) < dimension:
+                    log.error("llm.gemini_batch_embed_dimension_mismatch", expected=dimension, got=len(v))
+                    raise ValueError(
+                        f"Gemini batchEmbed embedding dimension mismatch: expected >= {dimension}, got {len(v)}"
+                    )
+                results_gemini.append(list(v[:dimension]))
         return results_gemini
 
     return [await embed(t, settings=settings, transport=transport) for t in texts]
