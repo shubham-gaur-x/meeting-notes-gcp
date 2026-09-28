@@ -66,7 +66,9 @@ async def drain_batch(
     record_failure = record_failure or _default_record_failure
     settings = settings or get_settings()
 
-    limit = concurrency_limit or max(1, getattr(settings, "graph_write_concurrency", 3))
+    limit = concurrency_limit or max(
+        1, getattr(settings, "drain_concurrency", getattr(settings, "graph_write_concurrency", 3))
+    )
     sem = asyncio.Semaphore(limit)
     result = DrainResult()
     lock = asyncio.Lock()

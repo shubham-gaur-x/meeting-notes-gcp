@@ -149,4 +149,3 @@ class StagedRecord(BaseModel):
     attempts: int = 0
     last_error: str | None = None
     status: str = "pending"
-
