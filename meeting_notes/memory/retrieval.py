@@ -20,7 +20,9 @@ Two governance rules are enforced here rather than assumed:
 
 from __future__ import annotations
 
+import re
 from typing import Any
+from urllib.parse import urlparse
 
 import structlog
 
@@ -151,8 +153,6 @@ def format_doc_link(url: str) -> str:
             return f"[{label}]({u})"
 
     if "atlassian.net" in u_lower:
-        import re
-
         key_match = re.search(r"/browse/([A-Z][A-Z0-9]+-\d+)", u)
         if key_match:
             label = f"Jira {key_match.group(1)}"
@@ -163,8 +163,6 @@ def format_doc_link(url: str) -> str:
         return f"[{label}]({u})"
 
     try:
-        from urllib.parse import urlparse
-
         netloc = urlparse(u).netloc.lower()
         if netloc.startswith("www."):
             netloc = netloc[4:]
@@ -226,7 +224,7 @@ def _format_action_context_line(record: dict[str, Any], settings: Settings) -> s
         "done",
         "closed",
         "resolved",
-    ) or linear_state.lower() in ("done", "closed", "canceled", "completed")
+    ) or linear_state.lower() in ("done", "closed", "canceled", "cancelled", "completed")
     state_tag = "[DONE]" if is_done else "[OPEN]"
 
     raw_status = record.get("jira_status")
@@ -371,8 +369,6 @@ async def assemble_context(
     search_meetings: Any = None,
 ) -> tuple[list[str], list[str]]:
     """Gather graph context for a question. Returns (context_lines, node_ids)."""
-    import re
-
     settings = settings or get_settings()
     driver = driver or _driver()
     lines: list[str] = []
@@ -382,7 +378,7 @@ async def assemble_context(
     topics = [t.lower().strip() for t in entities.get("topics", []) if isinstance(t, str)]
 
     # Check for specific Jira or Linear ticket keys mentioned in the question (e.g. MDP-25, ENG-101)
-    mentioned_issue_keys = [k.upper() for k in re.findall(r"\b[A-Za-z][A-Za-z0-9]+-\d+\b", question)]
+    mentioned_issue_keys = re.findall(r"\b[A-Z]{2,10}-\d+\b", question)
 
     async with driver.session() as session:
         # 1. Action Items (surfacing open deliverables, done states, and specific tickets)

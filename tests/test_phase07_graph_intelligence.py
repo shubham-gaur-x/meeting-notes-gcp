@@ -1347,7 +1347,7 @@ async def test_assemble_context_formats_open_and_done_jira_statuses() -> None:
         {
             "id": "act-1",
             "task": "Submit and fix Salesforce timecards",
-            "owner": "Michael Baylard",
+            "owner": "Alex Mercer",
             "due": None,
             "priority": "high",
             "jira_key": "MDP-27",
@@ -1361,7 +1361,7 @@ async def test_assemble_context_formats_open_and_done_jira_statuses() -> None:
         {
             "id": "act-2",
             "task": "Verify identity for Empower HSA",
-            "owner": "Michael Baylard",
+            "owner": "Alex Mercer",
             "due": "2026-10-21",
             "priority": "medium",
             "jira_key": "MDP-25",
@@ -1415,7 +1415,7 @@ async def test_assemble_context_direct_jira_key_lookup() -> None:
             {
                 "id": "act-99",
                 "task": "Deploy production cloud run job",
-                "owner": "Michael Baylard",
+                "owner": "Alex Mercer",
                 "due": "2026-09-01",
                 "priority": "high",
                 "jira_key": "MDP-99",
@@ -1452,12 +1452,12 @@ async def test_assemble_context_direct_linear_key_lookup() -> None:
             {
                 "id": "act-101",
                 "task": "Build high-throughput pipeline drain",
-                "owner": "Sarah Chen",
+                "owner": "Jordan Hayes",
                 "due": "2026-09-15",
                 "priority": "high",
                 "linear_identifier": "ENG-101",
                 "linear_state": "In Progress",
-                "linear_url": "https://linear.app/ag-team/issue/ENG-101",
+                "linear_url": "https://linear.app/example-team/issue/ENG-101",
                 "done": False,
                 "meeting_title": "Scale Sync",
                 "source_id": None,
@@ -1478,6 +1478,95 @@ async def test_assemble_context_direct_linear_key_lookup() -> None:
     assert "act-101" in node_ids
     assert any("ActionItem: [OPEN]" in line and "ENG-101" in line for line in lines)
     assert any("Linear: ENG-101 (Status: In Progress)" in line for line in lines)
-    assert any("[Linear ENG-101](https://linear.app/ag-team/issue/ENG-101)" in line for line in lines)
+    assert any("[Linear ENG-101](https://linear.app/example-team/issue/ENG-101)" in line for line in lines)
     assert any("[Lucidchart](https://lucid.app/lucidchart/123/edit)" in line for line in lines)
+
+
+def test_format_doc_link_converts_known_patterns() -> None:
+    from meeting_notes.memory.retrieval import format_doc_link
+
+    doc = format_doc_link("https://docs.google.com/document/d/123/edit")
+    assert doc == "[Google Doc](https://docs.google.com/document/d/123/edit)"
+
+    lucid = format_doc_link("https://lucid.app/lucidchart/abc")
+    assert lucid == "[Lucidchart](https://lucid.app/lucidchart/abc)"
+
+    linear = format_doc_link("https://linear.app/team/issue/ENG-1")
+    assert linear == "[Linear](https://linear.app/team/issue/ENG-1)"
+
+    jira = format_doc_link("https://test.atlassian.net/browse/MDP-45")
+    assert jira == "[Jira MDP-45](https://test.atlassian.net/browse/MDP-45)"
+
+    gen = format_doc_link("https://example.com/spec.pdf")
+    assert gen == "[Doc (example.com)](https://example.com/spec.pdf)"
+
+    assert format_doc_link("not-a-url") == ""
+
+
+async def test_assemble_context_issue_key_detection_ignores_false_positives() -> None:
+    from meeting_notes.config import Settings
+    from meeting_notes.memory import retrieval
+
+    settings = Settings(jira_domain="test.atlassian.net", fact_min_confidence=0.5)
+    session = FakeSession()
+    driver = FakeDriver(session)
+
+    # Question with common false-positive tokens ("gpt-4", "utf-8", "step-2") and one valid ticket "ENG-42"
+    question = "Compare gpt-4 with utf-8 encoding on step-2 for issue ENG-42"
+    await retrieval.assemble_context(
+        entities={"people": [], "topics": []},
+        question=question,
+        driver=driver,
+        settings=settings,
+    )
+
+    # Inspect all query parameter calls on the session
+    key_queries = [p for c, p in session.calls if "$keys" in c]
+    assert len(key_queries) == 1
+    queried_keys = key_queries[0]["keys"]
+    assert queried_keys == ["ENG-42"]
+    assert "gpt-4" not in queried_keys
+    assert "utf-8" not in queried_keys
+    assert "step-2" not in queried_keys
+
+
+def test_format_action_context_line_linear_state_taxonomy() -> None:
+    from meeting_notes.config import Settings
+    from meeting_notes.memory.retrieval import _format_action_context_line
+
+    settings = Settings(jira_domain="test.atlassian.net", fact_min_confidence=0.5)
+    base = {
+        "id": "act-1",
+        "task": "Test task",
+        "owner": "Alex Mercer",
+        "due": None,
+        "priority": "normal",
+        "meeting_title": "Standup",
+        "source_id": None,
+        "meeting_links": [],
+    }
+
+    # Open states
+    in_prog = _format_action_context_line({**base, "linear_state": "In Progress"}, settings)
+    assert "[OPEN]" in in_prog
+    assert "Status: In Progress" in in_prog
+
+    todo = _format_action_context_line({**base, "linear_state": "Todo"}, settings)
+    assert "[OPEN]" in todo
+    assert "Status: Todo" in todo
+
+    # Terminal states
+    done = _format_action_context_line({**base, "linear_state": "Done"}, settings)
+    assert "[DONE]" in done
+
+    completed = _format_action_context_line({**base, "linear_state": "Completed"}, settings)
+    assert "[DONE]" in completed
+
+    canceled = _format_action_context_line({**base, "linear_state": "Canceled"}, settings)
+    assert "[DONE]" in canceled
+
+    cancelled_double_l = _format_action_context_line({**base, "linear_state": "Cancelled"}, settings)
+    assert "[DONE]" in cancelled_double_l
+
+
 
