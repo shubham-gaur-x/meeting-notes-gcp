@@ -121,7 +121,9 @@ async def _embed_pending(
     semaphore: asyncio.Semaphore,
     embed_batch_fn: Any = None,
 ) -> int:
-    """Embed rows that have no embedding yet. Idempotent by construction.
+    """Embed rows that have no embedding yet. Idempotent by construction —
+    the fetch filters on `embedding IS NULL`, so a MERGE-matched node from an
+    earlier meeting is embedded once and not re-embedded on every ingestion.
 
     `semaphore` bounds concurrent API calls across all embedding passes.
     In batch mode, each chunk (sized to DEFAULT_EMBEDDING_BATCH_CHUNK_SIZE)

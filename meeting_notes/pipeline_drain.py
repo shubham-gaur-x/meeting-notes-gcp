@@ -1,5 +1,9 @@
 """Drain one claimed batch: route each record to the pipeline or jira_sync with bounded concurrency.
 
+Exists so `jobs/pipeline_drain.py` stays thin (CLAUDE.md). `staged_records`
+holds every source in one table (ADR-018); `jira` rows are status
+sync-back, everything else goes through `pipeline.process` claimed with SKIP LOCKED (ADR-006).
+
 Errors are per-record, not per-batch: one exploding record must not silently
 drop every other record queued behind it in the same claim. Bounded concurrency
 via drain_concurrency ensures high throughput without exceeding connection limits.
