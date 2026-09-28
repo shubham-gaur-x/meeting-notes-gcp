@@ -1661,7 +1661,6 @@ function askQuestion(q) {
   askMemory();
 }
 
-let LAST_RAW_ANSWER = "";
 let currentQueryAbortController = null;
 
 function copyTextToClipboard(text, btn, successLabel = "Copied!") {
@@ -1711,11 +1710,6 @@ function fallbackCopy(text, cb) {
   document.body.removeChild(ta);
 }
 
-function copyAnswerText(btn) {
-  if (!LAST_RAW_ANSWER) return;
-  copyTextToClipboard(LAST_RAW_ANSWER, btn, "Copied Answer!");
-}
-
 function copySpecificAnswer(btn) {
   const turnId = btn?.dataset?.turnId;
   if (!turnId) return;
@@ -1745,12 +1739,6 @@ function extractDeliverables(md) {
     }
   }
   return deliverables.length ? deliverables.join("\n") : "";
-}
-
-function copyDeliverablesText(btn) {
-  const deliverables = extractDeliverables(LAST_RAW_ANSWER);
-  if (!deliverables) return;
-  copyTextToClipboard(deliverables, btn, "Copied Deliverables!");
 }
 
 function copySpecificDeliverables(btn) {
@@ -2062,7 +2050,6 @@ async function askMemory() {
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     };
     CHAT_TURNS.push(assistantTurn);
-    LAST_RAW_ANSWER = assistantTurn.answer;
     saveChatHistory();
 
     const cardEl = document.createElement("div");
