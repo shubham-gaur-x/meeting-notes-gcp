@@ -236,27 +236,40 @@ class _Dependencies:
 def _should_use_linear(key: str, settings: Settings) -> bool:
     """Determine whether to route ticket operations to Linear or Jira.
 
-    Precedence in 'both' mode:
-    1. If key matches configured Jira project prefix -> Jira (False)
-    2. If key matches Linear UUID or team-key pattern -> Linear (True)
-    3. Malformed / ambiguous key -> fails safe to Jira (False) with warning log.
+    Precedence:
+    1. If Jira is not enabled and Linear is configured -> Linear (True)
+    2. If Linear is not configured -> Jira (False)
+    3. If configured_tracker == "linear" -> Linear (True)
+    4. If configured_tracker == "jira" -> Jira (False)
+    5. In "both" mode:
+       - If Jira is enabled and key matches configured Jira project prefix -> Jira (False)
+       - If key matches Linear UUID or team-key pattern -> Linear (True)
+       - If Jira is not enabled -> Linear (True)
+       - Otherwise, fail-safe to Jira (False) with warning log.
     """
     has_linear_key = bool(getattr(settings, "linear_api_key", None))
+    jira_enabled = getattr(settings, "jira_enabled", False)
+
+    if not jira_enabled and has_linear_key:
+        return True
     if not has_linear_key:
         return False
+
     configured_tracker = getattr(settings, "issue_tracker", "jira").lower()
     if configured_tracker == "linear":
         return True
     if configured_tracker == "jira":
         return False
-    # "both": route to Jira if key matches configured Jira project prefix
+
+    # In "both" mode:
     jira_prefix = (getattr(settings, "jira_project_key", "") or "").upper()
-    if jira_prefix and key.upper().startswith(f"{jira_prefix}-"):
+    if jira_enabled and jira_prefix and key.upper().startswith(f"{jira_prefix}-"):
         return False
-    # In "both" mode, only route to Linear if key matches valid Linear identifier or UUID pattern
     if _UUID_RE.match(key) or _LINEAR_KEY_RE.match(key):
         return True
-    # Fail-safe: malformed or unknown key routes to Jira rather than misrouting to Linear
+    if not jira_enabled:
+        return True
+
     log.warning("orchestrator.tracker_routing_ambiguous", key=key, default="jira")
     return False
 
@@ -272,6 +285,10 @@ async def _default_transition_issue(key: str, status: str, *, settings: Settings
             return bool(res)
         log.warning("orchestrator.linear_transition_state_not_found", key=key, status=status)
         return False
+
+    if not getattr(settings, "jira_enabled", False):
+        raise RuntimeError(f"Cannot route ticket {key}: Jira is disabled and Linear is not configured/applicable")
+
     from meeting_notes import jira_client
 
     return await jira_client.transition_issue(key, status, settings=settings)
@@ -288,6 +305,10 @@ async def _default_add_comment(key: str, body: str, *, settings: Settings | None
             raise RuntimeError(f"Linear issue {key} not found for comment")
         await linear_client.add_comment(issue["id"], body, settings=settings)
         return
+
+    if not getattr(settings, "jira_enabled", False):
+        raise RuntimeError(f"Cannot route ticket {key}: Jira is disabled and Linear is not configured/applicable")
+
     from meeting_notes import jira_client
 
     await jira_client.add_comment(key, body, settings=settings)
@@ -309,6 +330,9 @@ async def _default_get_issue_detail(key: str, *, settings: Settings | None = Non
             }
         log.warning("orchestrator.linear_get_issue_not_found", key=key)
         raise RuntimeError(f"Linear issue {key} not found")
+
+    if not getattr(settings, "jira_enabled", False):
+        raise RuntimeError(f"Cannot route ticket {key}: Jira is disabled and Linear is not configured/applicable")
 
     from meeting_notes import jira_client
 
