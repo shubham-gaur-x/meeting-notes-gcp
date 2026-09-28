@@ -1018,6 +1018,37 @@ async def test_orchestrator_process_ticket_ambiguous_key_failure_handling() -> N
     assert "Ambiguous tracker key 'MALFORMED_NO_HYPHEN'" in (finished_error or "")
 
 
+@pytest.mark.asyncio
+async def test_default_tracker_helpers_raise_on_ambiguous_key() -> None:
+    """Verify default tracker helpers fail loudly when given an ambiguous key in both mode."""
+    from meeting_notes.dev_agent import orchestrator
+
+    settings = Settings(
+        issue_tracker="both",
+        jira_project_key="SCRUM",
+        linear_api_key="lin-secret",
+        jira_enabled=True,
+    )
+
+    with pytest.raises(ValueError, match="Ambiguous tracker key 'AMBIGUOUS'"):
+        await orchestrator._default_transition_issue("AMBIGUOUS", "Done", settings=settings)
+
+    with pytest.raises(ValueError, match="Ambiguous tracker key 'AMBIGUOUS'"):
+        await orchestrator._default_add_comment("AMBIGUOUS", "Hello", settings=settings)
+
+    with pytest.raises(ValueError, match="Ambiguous tracker key 'AMBIGUOUS'"):
+        await orchestrator._default_get_issue_detail("AMBIGUOUS", settings=settings)
+
+
+def test_schema_sql_includes_backward_compat_migration() -> None:
+    """Verify SCHEMA_SQL contains ALTER TABLE statements for existing staged_records tables."""
+    from meeting_notes.db import SCHEMA_SQL
+
+    assert "ALTER TABLE staged_records ADD COLUMN IF NOT EXISTS attempts" in SCHEMA_SQL
+    assert "ALTER TABLE staged_records ADD COLUMN IF NOT EXISTS last_error" in SCHEMA_SQL
+    assert "ALTER TABLE staged_records ADD COLUMN IF NOT EXISTS status" in SCHEMA_SQL
+
+
 
 
 
