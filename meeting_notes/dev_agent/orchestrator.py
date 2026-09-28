@@ -33,7 +33,8 @@ _REPO_PATTERNS = (
     re.compile(r"\brepo(?:sitory)?\s*[:=]\s*([\w.-]+)/([\w.-]+)", re.I),
 )
 
-_LINEAR_KEY_RE = re.compile(r"^[A-Za-z]{1,10}-\d+$")
+_STANDARD_ISSUE_KEY_RE = re.compile(r"^[A-Za-z]{1,10}-\d+$")
+_LINEAR_KEY_RE = _STANDARD_ISSUE_KEY_RE
 _UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 
 
@@ -238,13 +239,13 @@ class _Dependencies:
 
 
 def _is_linear_identifier(key: str) -> bool:
-    """Format check for Linear identifiers (36-char UUID or TEAM-123 key)."""
-    return bool(_UUID_RE.match(key) or _LINEAR_KEY_RE.match(key))
+    """Format check for Linear identifiers (36-char UUID or standard TEAM-123 key)."""
+    return bool(_UUID_RE.match(key) or _STANDARD_ISSUE_KEY_RE.match(key))
 
 
 def _is_jira_identifier(key: str) -> bool:
-    """Format check for Jira identifiers (PROJECT-123 key)."""
-    return bool(_LINEAR_KEY_RE.match(key))
+    """Format check for Jira identifiers (standard PROJECT-123 key)."""
+    return bool(_STANDARD_ISSUE_KEY_RE.match(key))
 
 
 def validate_tracker_key(key: str, tracker: str | None = None) -> bool:
@@ -267,7 +268,7 @@ def validate_tracker_key(key: str, tracker: str | None = None) -> bool:
             raise ValueError(f"Invalid Jira issue key: {key!r}")
         return True
 
-    if not (_UUID_RE.match(key) or _LINEAR_KEY_RE.match(key)):
+    if not (_UUID_RE.match(key) or _STANDARD_ISSUE_KEY_RE.match(key)):
         raise ValueError(f"Invalid issue key format: {key!r}")
     return True
 
