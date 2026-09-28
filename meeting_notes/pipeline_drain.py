@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
+import inspect
 from typing import Any
 
 import structlog
@@ -22,6 +23,16 @@ from meeting_notes.models import StagedRecord
 from meeting_notes.pipeline import adapter_for
 
 log = structlog.get_logger()
+
+
+def _record_failure_takes_max_attempts(fn: Any) -> bool:
+    try:
+        sig = inspect.signature(fn)
+        return "max_attempts" in sig.parameters or any(
+            p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+        )
+    except (ValueError, TypeError):
+        return True
 
 
 @dataclass
@@ -44,11 +55,12 @@ async def _default_sync_jira(payload: dict[str, Any], *, record_id: str) -> bool
 
 
 async def _default_record_failure(
-    record_id: str, error: str, max_attempts: int = 3
+    record_id: str, error: str, max_attempts: int | None = None
 ) -> tuple[int, bool, str]:
     from meeting_notes import db
 
-    return await db.record_drain_failure(record_id, error, max_attempts=max_attempts)
+    resolved_max = max_attempts if max_attempts is not None else get_settings().pipeline_max_attempts
+    return await db.record_drain_failure(record_id, error, max_attempts=resolved_max)
 
 
 async def drain_batch(
@@ -89,12 +101,16 @@ async def drain_batch(
                     record_id=record.id, source=record.source_type, error=str(exc), exc_info=True,
                 )
                 try:
-                    await record_failure(record.id, str(exc), max_attempts=settings.pipeline_max_attempts)
-                except Exception as rec_exc:  # noqa: BLE001
-                    log.warning(
+                    if _record_failure_takes_max_attempts(record_failure):
+                        await record_failure(record.id, str(exc), max_attempts=settings.pipeline_max_attempts)
+                    else:
+                        await record_failure(record.id, str(exc))
+                except Exception as rec_exc:
+                    log.error(
                         "pipeline_drain.record_failure_failed",
                         record_id=record.id,
                         error=str(rec_exc),
+                        exc_info=True,
                     )
 
     await asyncio.gather(*[_handle_record(r) for r in records])

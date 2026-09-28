@@ -449,10 +449,10 @@ async def embed_batch(
 
     transport = transport or _default_transport
 
+    chunk_size = getattr(settings, "embedding_batch_size", DEFAULT_EMBEDDING_BATCH_CHUNK_SIZE)
     if backend == "vertex":
         url = _vertex_predict_url(settings)
         results: list[list[float] | None] = []
-        chunk_size = DEFAULT_EMBEDDING_BATCH_CHUNK_SIZE
         for i in range(0, len(texts), chunk_size):
             chunk = texts[i : i + chunk_size]
             payload = {
@@ -476,7 +476,6 @@ async def embed_batch(
         model = settings.gemini_embedding_model
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:batchEmbedContents"
         results_gemini: list[list[float] | None] = []
-        chunk_size = DEFAULT_EMBEDDING_BATCH_CHUNK_SIZE
         for i in range(0, len(texts), chunk_size):
             chunk = texts[i : i + chunk_size]
             payload = {
