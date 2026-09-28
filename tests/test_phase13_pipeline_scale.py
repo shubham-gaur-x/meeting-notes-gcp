@@ -89,7 +89,9 @@ async def test_drain_batch_records_failure_and_routes_to_dlq() -> None:
             raise ValueError("Corrupted record payload")
         return None
 
-    async def mock_record_failure(record_id: str, error: str) -> tuple[int, bool, str]:
+    async def mock_record_failure(
+        record_id: str, error: str, max_attempts: int = 3
+    ) -> tuple[int, bool, str]:
         failed_calls.append((record_id, error))
         return 1, False, "retry"
 
@@ -408,12 +410,18 @@ def test_should_use_linear_fail_safe_routing() -> None:
     assert _should_use_linear("ENG-42", linear_settings) is True
     assert _should_use_linear("SCRUM-12", linear_settings) is True
 
-    # 3. Both mode: Jira prefix matches -> Jira, Linear format -> Linear, Malformed -> Jira fail-safe
-    both_settings = Settings(issue_tracker="both", jira_project_key="SCRUM", linear_api_key="lin-key")
+    # 3. Both mode: Jira prefix matches -> Jira, Linear format -> Linear, Malformed -> raises ValueError
+    both_settings = Settings(
+        issue_tracker="both",
+        jira_project_key="SCRUM",
+        linear_api_key="lin-key",
+        jira_enabled=True,
+    )
     assert _should_use_linear("SCRUM-12", both_settings) is False
     assert _should_use_linear("ENG-42", both_settings) is True
     assert _should_use_linear("11111111-2222-3333-4444-555555555555", both_settings) is True
-    assert _should_use_linear("MALFORMED_NO_HYPHEN", both_settings) is False
+    with pytest.raises(ValueError, match="Ambiguous tracker key"):
+        _should_use_linear("MALFORMED_NO_HYPHEN", both_settings)
 
 
 @pytest.mark.asyncio
@@ -876,6 +884,74 @@ async def test_default_add_comment_linear_raises_when_not_found(monkeypatch: pyt
 
     with pytest.raises(RuntimeError, match="Linear issue ENG-99 not found for comment"):
         await orchestrator._default_add_comment("ENG-99", "Test comment", settings=settings)
+
+
+@pytest.mark.asyncio
+async def test_embed_batch_size_mismatch_raises() -> None:
+    """Verify embed_batch raises ValueError if the API returns fewer embeddings than inputs."""
+    import json
+
+    from meeting_notes import llm_client
+
+    async def fake_vertex_transport_truncated(url: str, payload: dict[str, Any], headers: dict[str, str]) -> str:
+        return json.dumps({"predictions": [{"embeddings": {"values": [0.1] * 768}}]})
+
+    settings_vertex = Settings(
+        llm_backend="vertex",
+        vertex_embedding_model="text-embedding-004",
+        vertex_location="us-central1",
+        gcp_project_id="test-proj",
+        embedding_dimension=768,
+    )
+
+    with pytest.raises(ValueError, match="Vertex batchEmbed returned 1 predictions for 2 inputs"):
+        await llm_client.embed_batch(["text1", "text2"], settings=settings_vertex, transport=fake_vertex_transport_truncated)
+
+    async def fake_gemini_transport_truncated(url: str, payload: dict[str, Any], headers: dict[str, str]) -> str:
+        return json.dumps({"embeddings": [{"values": [0.1] * 768}]})
+
+    settings_gemini = Settings(
+        llm_backend="gemini",
+        gemini_embedding_model="text-embedding-004",
+        gemini_api_key="fake-key",
+        embedding_dimension=768,
+    )
+
+    with pytest.raises(ValueError, match="Gemini batchEmbed returned 1 embeddings for 2 inputs"):
+        await llm_client.embed_batch(["text1", "text2"], settings=settings_gemini, transport=fake_gemini_transport_truncated)
+
+
+@pytest.mark.asyncio
+async def test_drain_batch_with_default_record_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify drain_batch works end-to-end with the real _default_record_failure and db."""
+    from meeting_notes import db
+    from meeting_notes.pipeline_drain import _default_record_failure
+
+    db_calls: list[tuple[str, str, int]] = []
+
+    async def mock_db_record_failure(record_id: str, error: str, max_attempts: int = 3, **kwargs: Any) -> tuple[int, bool, str]:
+        db_calls.append((record_id, error, max_attempts))
+        return 1, False, "retry"
+
+    monkeypatch.setattr(db, "record_drain_failure", mock_db_record_failure)
+
+    async def failing_process(record: StagedRecord, adapter: Any) -> None:
+        raise RuntimeError("Process exploded")
+
+    record = _make_staged("r-default-failure")
+    settings = Settings(pipeline_max_attempts=5)
+    result = await drain_batch(
+        [record],
+        process=failing_process,
+        sync_jira=None,
+        record_failure=_default_record_failure,
+        settings=settings,
+    )
+
+    assert result.errors == 1
+    assert len(db_calls) == 1
+    assert db_calls[0] == ("r-default-failure", "Process exploded", 5)
+
 
 
 

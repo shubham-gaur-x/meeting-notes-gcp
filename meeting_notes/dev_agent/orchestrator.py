@@ -270,8 +270,8 @@ def _should_use_linear(key: str, settings: Settings) -> bool:
     if not jira_enabled:
         return True
 
-    log.warning("orchestrator.tracker_routing_ambiguous", key=key, default="jira")
-    return False
+    log.error("orchestrator.tracker_routing_ambiguous", key=key)
+    raise ValueError(f"Ambiguous tracker key {key!r}: cannot determine whether to route to Linear or Jira")
 
 
 async def _default_transition_issue(key: str, status: str, *, settings: Settings | None = None) -> bool:
