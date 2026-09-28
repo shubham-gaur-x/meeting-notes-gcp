@@ -1150,9 +1150,6 @@ model, where it can be validated against a real re-embed.
 
 ---
 
-## Template
-
-```
 ## ADR-029 — Linear issue tracking alongside Jira, with issue_tracker:"both" deduplication
 
 ### Context
@@ -1177,6 +1174,11 @@ and issue-to-meeting graph provenance.
 - Graph schema explicitly supports dual tracker tracking with zero cross-tracker key collisions.
 - Autonomous agent pickup (`dev_agent`) can poll candidates from either Jira or Linear.
 
+---
+
+## Template
+
+```
 ## ADR-NNN — <short imperative title>
 
 **Date:** YYYY-MM-DD · **Status:** Proposed | Accepted | Superseded by ADR-NNN
