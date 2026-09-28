@@ -175,6 +175,61 @@ async def test_vector_embed_pending_uses_batch_embed_fn() -> None:
 
 
 @pytest.mark.asyncio
+async def test_vector_embed_pending_bounds_concurrency_with_semaphore_in_batch_mode() -> None:
+    """Verify _embed_pending acquires the shared semaphore even when embed_batch_fn is provided."""
+    sem = asyncio.Semaphore(1)
+    acquired_under_sem = False
+
+    async def fake_batch_embed(texts: list[str], **kwargs: Any) -> list[list[float] | None]:
+        nonlocal acquired_under_sem
+        # Since sem was initialized with 1, locked() being True confirms semaphore was acquired
+        if sem.locked():
+            acquired_under_sem = True
+        return [[0.1] * 768 for _ in texts]
+
+    rows = [{"id": "act-1", "task": "Task one"}]
+
+    class _Result:
+        def __aiter__(self):
+            self._it = iter(rows)
+            return self
+
+        async def __anext__(self):
+            try:
+                return next(self._it)
+            except StopIteration:
+                raise StopAsyncIteration from None
+
+    class _Session:
+        async def run(self, cypher: str, **kwargs: Any) -> Any:
+            return _Result() if "RETURN" in cypher else None
+
+        async def __aenter__(self) -> _Session:
+            return self
+
+        async def __aexit__(self, *exc: Any) -> bool:
+            return False
+
+    class _Driver:
+        def session(self) -> _Session:
+            return _Session()
+
+    await vector._embed_pending(
+        "MATCH ... RETURN a.id AS id, a.task AS task",
+        "MATCH ... SET a.embedding = $embedding",
+        "meet-123",
+        "task",
+        driver=_Driver(),
+        settings=Settings(llm_backend="fake"),
+        embed=None,
+        semaphore=sem,
+        embed_batch_fn=fake_batch_embed,
+    )
+
+    assert acquired_under_sem is True
+
+
+@pytest.mark.asyncio
 async def test_find_sprint_candidates_picks_up_linear_tickets(monkeypatch: pytest.MonkeyPatch) -> None:
     from meeting_notes.dev_agent import orchestrator
 
@@ -216,8 +271,11 @@ async def test_dlq_db_inspection_and_replay() -> None:
 
     from meeting_notes import db
 
+    executed_queries: list[str] = []
+
     class FakeConn:
         async def fetch(self, query: str, *args: Any) -> list[dict[str, Any]]:
+            executed_queries.append(query)
             return [
                 {
                     "id": "11111111-1111-1111-1111-111111111111",
@@ -233,21 +291,28 @@ async def test_dlq_db_inspection_and_replay() -> None:
             ]
 
         async def fetchval(self, query: str, *args: Any) -> Any:
-            if "REPLAY_DLQ" in query or "UPDATE staged_records" in query:
-                return "11111111-1111-1111-1111-111111111111"
+            executed_queries.append(query)
+            if query == db._REPLAY_DLQ_SQL:
+                return args[0]
             return None
 
         async def fetchrow(self, query: str, *args: Any) -> dict[str, Any]:
+            executed_queries.append(query)
             return {"total": 10, "pending": 4, "retry": 1, "dead_letter": 2, "processed": 3}
 
         async def execute(self, query: str, *args: Any) -> str:
-            return "UPDATE 2"
+            executed_queries.append(query)
+            if query == db._REPLAY_ALL_DLQ_SQL:
+                return "UPDATE 2"
+            return "UPDATE 0"
+
+    fake_conn = FakeConn()
 
     class FakePool:
         def acquire(self) -> Any:
             class _Ctx:
                 async def __aenter__(self) -> FakeConn:
-                    return FakeConn()
+                    return fake_conn
 
                 async def __aexit__(self, *exc: Any) -> bool:
                     return False
@@ -255,10 +320,10 @@ async def test_dlq_db_inspection_and_replay() -> None:
             return _Ctx()
 
         async def fetch(self, query: str, *args: Any) -> list[dict[str, Any]]:
-            return await FakeConn().fetch(query, *args)
+            return await fake_conn.fetch(query, *args)
 
         async def fetchrow(self, query: str, *args: Any) -> dict[str, Any]:
-            return await FakeConn().fetchrow(query, *args)
+            return await fake_conn.fetchrow(query, *args)
 
     pool = FakePool()  # type: ignore[assignment]
 
@@ -278,6 +343,11 @@ async def test_dlq_db_inspection_and_replay() -> None:
     assert stats["total"] == 10
     assert stats["dead_letter"] == 2
     assert stats["pending"] == 4
+
+    assert db._LIST_DLQ_SQL in executed_queries
+    assert db._REPLAY_DLQ_SQL in executed_queries
+    assert db._REPLAY_ALL_DLQ_SQL in executed_queries
+    assert db._QUEUE_STATS_SQL in executed_queries
 
 
 @pytest.mark.asyncio

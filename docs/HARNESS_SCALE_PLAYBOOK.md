@@ -12,11 +12,11 @@
 
 2. **Bounded Concurrency (`asyncio.gather` + `Semaphore`)**:
    - Never iterate sequentially when processing independent database records or graph updates.
-   - Bounded concurrent operations (defaulting to `settings.graph_write_concurrency = 5`) deliver a **3x–5x throughput boost** without saturating Memgraph or Cloud SQL connection pools.
+   - Bounded concurrent operations (defaulting to `settings.graph_write_concurrency = 3`) deliver a **3x throughput boost** without saturating Memgraph or Cloud SQL connection pools.
 
-3. **Batched Vectorization vs Single-Item Overhead (Supersedes PR #2)**:
+3. **Batched Vectorization with Bounded Concurrency**:
    - Embeddings are chunked into batches of up to **50 items per network request** across Vertex AI and Gemini clients.
-   - Drastically amortizes HTTP/TLS handshake and API connection overhead, outperforming and formally superseding the individual concurrent semaphore pattern in PR #2 with a >90% reduction in network round trips.
+   - Bounded by the PR #2 shared concurrency ceiling, batching drastically amortizes HTTP/TLS handshake and API connection overhead with a >90% reduction in network round trips without saturating provider quotas.
 
 4. **Multi-Tracker Autonomous Dev Agent Support**:
    - Seamlessly searches and transitions tasks across both Jira and Linear trackers.
