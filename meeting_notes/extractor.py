@@ -219,7 +219,7 @@ def _repair_action_items(items: list[Any]) -> None:
 
         o = str(item.get("owner", "")).strip()
         if o and o != "Unknown" and is_junk_name(o):
-            item["owner"] = "Unassigned"
+            item["owner"] = "Unknown"
 
 
 def _repair_attendees(attendees: list[Any]) -> list[dict[str, Any]]:

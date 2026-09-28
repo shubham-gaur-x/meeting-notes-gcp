@@ -380,6 +380,7 @@ def load_roster(path: str | None) -> Roster:
     for d in data:
         raw_email = d.get("email")
         if not raw_email:
+            log.warning("person_resolver.roster_entry_missing_email", entry=d)
             continue
         email = normalize_email(raw_email)
         name = d.get("name", "")

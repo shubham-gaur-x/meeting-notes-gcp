@@ -369,7 +369,7 @@ async def _query_people_context(
 
     lines: list[str] = []
     node_ids: list[str] = []
-    expanded_people = person_resolver.expand_contact_mentions(people)
+    expanded_people = person_resolver.expand_contact_mentions(people)[:20]
     result = await session.run(
         """
         UNWIND $names AS name

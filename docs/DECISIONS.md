@@ -1223,6 +1223,24 @@ timeouts, or uninitialized vector tables during initial boot.
 
 ---
 
+## ADR-031 — Filtering synthetic transcript artifacts (junk speakers) from review queues
+
+**Date:** 2026-09-24 · **Status:** Accepted
+
+**Context.** Speech-to-text engines and Google Meet transcripts frequently introduce synthetic placeholder tokens for unassigned audio streams (e.g. `Speaker 1`, `Unknown`, `Unidentified`, `Call Participant`). Under the original v6 contract, every string entered the review queue, flooding operators with dozens of junk placeholder review items that represent non-humans.
+
+**Decision.**
+1. `person_resolver.is_junk_name()` identifies generic audio stream tokens (`speaker \d+`, `unknown`, `null`, etc.).
+2. In `resolve()`, junk names are classified as `status="dropped"` with reason `"junk-name"`.
+3. In `resolve_attendees()`, dropped junk speaker artifacts are filtered out of both the `resolved` and `needs_review` queues.
+4. Real human names that cannot be matched continue to be preserved in the `needs_review` queue without data loss ("never drop real human names").
+
+**Consequences.** Operators only see real, ambiguous human names in review queues, eliminating review noise from transcript artifacts.
+
+**Rejected:** *Keeping synthetic speaker tokens in the review queue.* Clogs human operator review with dozens of non-actionable "Speaker 1" prompts.
+
+---
+
 ## Template
 
 ```
