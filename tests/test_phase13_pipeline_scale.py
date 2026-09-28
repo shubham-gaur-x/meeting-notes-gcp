@@ -423,6 +423,8 @@ def test_should_use_linear_fail_safe_routing() -> None:
     assert _should_use_linear("11111111-2222-3333-4444-555555555555", both_settings) is True
     with pytest.raises(ValueError, match="Ambiguous tracker key"):
         _should_use_linear("MALFORMED_NO_HYPHEN", both_settings)
+    with pytest.raises(ValueError, match="Ambiguous tracker key"):
+        _should_use_linear("UNKNOWN-123", both_settings)
 
 
 @pytest.mark.asyncio
@@ -618,11 +620,20 @@ async def test_pipeline_dlq_api_endpoints(monkeypatch: pytest.MonkeyPatch) -> No
         assert resp.status_code == 200
         assert resp.json()["count"] == 1
 
-        # 6. POST /pipeline/dlq/replay with non-admin principal -> 403 Forbidden
+        # 6. Non-admin principal -> 403 Forbidden on stats, dlq, and replay
         from meeting_notes.access_control import Principal
         from api.deps import principal
         member_principal = Principal(name="test-member", role="member")
         app.dependency_overrides[principal] = lambda: member_principal
+
+        stats_resp = await client.get("/pipeline/stats")
+        assert stats_resp.status_code == 403
+        assert "administrative role required" in stats_resp.json()["detail"]
+
+        dlq_resp = await client.get("/pipeline/dlq")
+        assert dlq_resp.status_code == 403
+        assert "administrative role required" in dlq_resp.json()["detail"]
+
         forbidden_resp = await client.post("/pipeline/dlq/replay", json={})
         assert forbidden_resp.status_code == 403
         assert "administrative role required" in forbidden_resp.json()["detail"]
@@ -687,6 +698,7 @@ async def test_default_get_issue_detail_linear_does_not_fall_through_to_jira(
     settings = Settings(
         issue_tracker="both",
         jira_project_key="SCRUM",
+        linear_team_id="ENG",
         linear_api_key="test-key",
     )
 
@@ -909,7 +921,7 @@ async def test_default_add_comment_linear_raises_when_not_found(monkeypatch: pyt
         return None
 
     monkeypatch.setattr("meeting_notes.linear_client.get_issue", mock_linear_get_empty)
-    settings = Settings(linear_api_key="test-key")
+    settings = Settings(linear_api_key="test-key", linear_team_id="ENG", issue_tracker="linear")
 
     with pytest.raises(RuntimeError, match="Linear issue ENG-99 not found for comment"):
         await orchestrator._default_add_comment("ENG-99", "Test comment", settings=settings)
