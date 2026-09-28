@@ -19,7 +19,7 @@ router = APIRouter(prefix="/graph", tags=["memory"])
 
 
 class MemoryQuery(BaseModel):
-    question: str = Field(min_length=1, max_length=4000)
+    question: str = Field(min_length=1, max_length=2000)
     history: list[dict[str, Any]] | None = Field(default=None, max_length=50)
 
 

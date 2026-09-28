@@ -1865,6 +1865,32 @@ function abortChatQuery() {
   }
 }
 
+function renderAssistantToolbarHtml(turn) {
+  const deliverablesText = extractDeliverables(turn.answer || "");
+  const copyDeliverablesBtn = deliverablesText ? `
+    <button type="button" class="copy-btn copy-deliverables-btn" onclick="copySpecificDeliverables('${turn.id}')" title="Copy action items & deliverables only" aria-label="Copy deliverables">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 11 12 14 22 4"></polyline><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg>
+      <span>Copy Deliverables</span>
+    </button>
+  ` : "";
+
+  return `
+    <div class="answer-toolbar">
+      <div class="answer-badge">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
+        <span>Meeting Memory Analysis</span>
+      </div>
+      <div style="display:flex;gap:6px;align-items:center">
+        ${copyDeliverablesBtn}
+        <button type="button" class="copy-btn copy-answer-btn" onclick="copySpecificAnswer('${turn.id}')" title="Copy full markdown answer to clipboard" aria-label="Copy Answer">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+          <span>Copy Answer</span>
+        </button>
+      </div>
+    </div>
+  `;
+}
+
 async function renderChatFeed() {
   const body = $("#ask-body");
   if (!body) return;
@@ -1917,29 +1943,9 @@ async function renderChatFeed() {
         </div>
       `;
     } else if (turn.role === "assistant") {
-      const deliverablesText = extractDeliverables(turn.answer);
-      const copyDeliverablesBtn = deliverablesText ? `
-        <button type="button" class="copy-btn copy-deliverables-btn" onclick="copySpecificDeliverables('${turn.id}')" title="Copy action items & deliverables only" aria-label="Copy deliverables">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 11 12 14 22 4"></polyline><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg>
-          <span>Copy Deliverables</span>
-        </button>
-      ` : "";
-
       html += `
         <div class="answer" data-id="${turn.id}" style="position:relative">
-          <div class="answer-toolbar">
-            <div class="answer-badge">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
-              <span>Meeting Memory Analysis</span>
-            </div>
-            <div style="display:flex;gap:6px;align-items:center">
-              ${copyDeliverablesBtn}
-              <button type="button" class="copy-btn copy-answer-btn" onclick="copySpecificAnswer('${turn.id}')" title="Copy full markdown answer to clipboard" aria-label="Copy Answer">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                <span>Copy Answer</span>
-              </button>
-            </div>
-          </div>
+          ${renderAssistantToolbarHtml(turn)}
           <div class="answer-markdown">${renderMarkdown(turn.answer)}</div>
           <div class="answer-extras">${renderAssistantContentHtml(turn)}</div>
         </div>
@@ -2051,39 +2057,18 @@ async function askMemory() {
     LAST_RAW_ANSWER = assistantTurn.answer;
     saveChatHistory();
 
-    const deliverablesText = extractDeliverables(assistantTurn.answer);
-    const copyDeliverablesBtn = deliverablesText ? `
-      <button type="button" class="copy-btn copy-deliverables-btn" onclick="copySpecificDeliverables('${assistantTurn.id}')" title="Copy action items & deliverables only" aria-label="Copy deliverables">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 11 12 14 22 4"></polyline><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg>
-        <span>Copy Deliverables</span>
-      </button>
-    ` : "";
-
     const cardEl = document.createElement("div");
     cardEl.className = "answer";
     cardEl.setAttribute("data-id", assistantTurn.id);
     cardEl.style.position = "relative";
     cardEl.innerHTML = `
-      <div class="answer-toolbar">
-        <div class="answer-badge">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
-          <span>Meeting Memory Analysis</span>
-        </div>
-        <div style="display:flex;gap:6px;align-items:center">
-          ${copyDeliverablesBtn}
-          <button type="button" class="copy-btn copy-answer-btn" onclick="copySpecificAnswer('${assistantTurn.id}')" title="Copy full markdown answer to clipboard" aria-label="Copy Answer">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-            <span>Copy Answer</span>
-          </button>
-        </div>
-      </div>
+      ${renderAssistantToolbarHtml(assistantTurn)}
       <div class="answer-markdown"></div>
       <div class="answer-extras" style="display:none">
         ${renderAssistantContentHtml(assistantTurn)}
       </div>
     `;
 
-    const feedBody = $("#ask-body");
     if (feedBody) {
       feedBody.appendChild(cardEl);
       scrollChatToBottom(true);
