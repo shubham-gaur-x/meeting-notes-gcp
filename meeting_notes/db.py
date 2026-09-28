@@ -238,10 +238,10 @@ WHERE status = 'dead_letter'
 _QUEUE_STATS_SQL = """
 SELECT
     count(*) AS total,
-    count(*) FILTER (WHERE coalesce(status, 'pending') = 'pending' AND processed = FALSE) AS pending,
-    count(*) FILTER (WHERE coalesce(status, 'pending') = 'retry' AND processed = FALSE) AS retry,
-    count(*) FILTER (WHERE coalesce(status, 'pending') = 'dead_letter' AND processed = FALSE) AS dead_letter,
-    count(*) FILTER (WHERE coalesce(status, 'pending') = 'processed' OR processed = TRUE) AS processed
+    count(*) FILTER (WHERE coalesce(status, CASE WHEN processed THEN 'processed' ELSE 'pending' END) = 'pending') AS pending,
+    count(*) FILTER (WHERE coalesce(status, CASE WHEN processed THEN 'processed' ELSE 'pending' END) = 'retry') AS retry,
+    count(*) FILTER (WHERE coalesce(status, CASE WHEN processed THEN 'processed' ELSE 'pending' END) = 'dead_letter') AS dead_letter,
+    count(*) FILTER (WHERE coalesce(status, CASE WHEN processed THEN 'processed' ELSE 'pending' END) = 'processed') AS processed
 FROM staged_records
 """
 
