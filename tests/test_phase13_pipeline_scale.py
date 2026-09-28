@@ -166,6 +166,7 @@ async def test_vector_embed_pending_uses_batch_embed_fn() -> None:
         driver=_Driver(),
         settings=Settings(llm_backend="fake"),
         embed=None,
+        semaphore=asyncio.Semaphore(5),
         embed_batch_fn=fake_batch_embed,
     )
 

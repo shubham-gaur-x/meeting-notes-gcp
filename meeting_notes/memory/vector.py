@@ -118,7 +118,7 @@ async def _embed_pending(
     driver: Any,
     settings: Settings | None,
     embed: Any,
-    semaphore: asyncio.Semaphore | None = None,
+    semaphore: asyncio.Semaphore,
     embed_batch_fn: Any = None,
 ) -> int:
     """Embed rows that have no embedding yet. Idempotent by construction —
@@ -140,8 +140,6 @@ async def _embed_pending(
         return 0
 
     now = datetime.now(UTC).isoformat()
-    resolved = settings or get_settings()
-    sem = semaphore or asyncio.Semaphore(max(1, resolved.embedding_concurrency))
 
     # When explicit batching is supplied, chunk into batches and process with semaphore concurrency:
     if embed_batch_fn is not None:
@@ -152,7 +150,7 @@ async def _embed_pending(
 
         async def process_batch_chunk(chunk: list[dict[str, Any]]) -> int:
             texts = [r[text_field] for r in chunk]
-            async with sem:
+            async with semaphore:
                 vectors = await embed_batch_texts(texts, settings=settings, embed_batch_fn=embed_batch_fn)
 
             chunk_count = 0
@@ -167,7 +165,7 @@ async def _embed_pending(
         return sum(chunk_counts)
 
     async def embed_one(row: dict[str, Any]) -> int:
-        async with sem:
+        async with semaphore:
             vector = await embed_text(row[text_field], settings=settings, embed=embed)
         if vector is None:
             return 0
