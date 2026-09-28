@@ -1234,6 +1234,28 @@ async def test_apply_migrations_executes_schema_and_migration_sql_with_backfill(
     assert "UPDATE staged_records SET status = 'processed' WHERE processed = TRUE AND status = 'pending';" in combined
 
 
+def test_max_attempts_defaults_aligned_across_modules() -> None:
+    """Verify DEFAULT_PIPELINE_MAX_ATTEMPTS is used consistently as default across db and pipeline_drain."""
+    import inspect
+    from meeting_notes import config, db, pipeline_drain
+
+    assert config.DEFAULT_PIPELINE_MAX_ATTEMPTS == 3
+    assert config.Settings().pipeline_max_attempts == 3
+
+    claim_sig = inspect.signature(db.claim_batch)
+    assert claim_sig.parameters["max_attempts"].default == config.DEFAULT_PIPELINE_MAX_ATTEMPTS
+
+    record_fail_sig = inspect.signature(db.record_drain_failure)
+    assert record_fail_sig.parameters["max_attempts"].default == config.DEFAULT_PIPELINE_MAX_ATTEMPTS
+
+    drain_sig = inspect.signature(pipeline_drain.drain_batch)
+    assert drain_sig.parameters["max_attempts"].default == config.DEFAULT_PIPELINE_MAX_ATTEMPTS
+
+    default_fail_sig = inspect.signature(pipeline_drain._default_record_failure)
+    assert default_fail_sig.parameters["max_attempts"].default == config.DEFAULT_PIPELINE_MAX_ATTEMPTS
+
+
+
 
 
 
