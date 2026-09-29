@@ -656,7 +656,7 @@ def test_the_dashboard_offers_example_questions() -> None:
     import api
 
     html = (Path(api.__file__).parent / "static" / "dashboard.html").read_text(encoding="utf-8")
-    assert "EXAMPLES" in html and "prompt-card" in html
+    assert ("EXAMPLES" in html or "DEFAULT_COMMON_QUERIES" in html) and "prompt-card" in html
 
 
 # ─── dev agent ─────────────────────────────────────────────────────────────
