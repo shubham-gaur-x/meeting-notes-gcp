@@ -33,6 +33,9 @@ _REPO_PATTERNS = (
     re.compile(r"\brepo(?:sitory)?\s*[:=]\s*([\w.-]+)/([\w.-]+)", re.I),
 )
 
+_STANDARD_ISSUE_KEY_RE = re.compile(r"^[A-Za-z]{1,10}-\d+$")
+_UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+
 
 def repo_dir_for(owner: str, repo: str, settings: Settings) -> str:
     """Checkout directory for one repository.
@@ -117,27 +120,75 @@ async def find_sprint_candidates(settings: Settings | None = None) -> list[dict[
     extracted ActionItem below `dev_agent_confidence_threshold`, it is held
     back even though it is labelled — the label alone is not trusted. A
     ticket with no linked ActionItem (human-authored) passes this gate.
+    Supports both Jira and Linear trackers based on settings.issue_tracker.
     """
     from meeting_notes import graph_client, jira_client
 
     settings = settings or get_settings()
-    candidates = await jira_client.list_active_sprint_tickets(
-        settings.jira_project_key,
-        ["To Do"],
-        ["dev-agent"],
-        ["meeting-action-item"],
-        settings=settings,
-    )
-    eligible = []
-    for ticket in candidates:
-        conf = await graph_client.get_action_confidence(ticket["key"])
-        if conf is not None and conf < settings.dev_agent_confidence_threshold:
-            log.info(
-                "orchestrator.triage.low_confidence_skip",
-                key=ticket["key"], confidence=round(conf, 2),
-            )
-            continue
-        eligible.append(ticket)
+    tracker = getattr(settings, "issue_tracker", "jira").lower()
+    eligible: list[dict[str, Any]] = []
+
+    # 1. Jira candidates
+    if tracker in ("jira", "both") and settings.jira_enabled:
+        candidates = await jira_client.list_active_sprint_tickets(
+            settings.jira_project_key,
+            ["To Do"],
+            ["dev-agent"],
+            ["meeting-action-item"],
+            settings=settings,
+        )
+        for ticket in candidates:
+            try:
+                conf = await graph_client.get_action_confidence(ticket["key"])
+                if conf is not None and conf < settings.dev_agent_confidence_threshold:
+                    log.info(
+                        "orchestrator.triage.low_confidence_skip",
+                        key=ticket["key"], confidence=round(conf, 2),
+                    )
+                    continue
+                eligible.append({**ticket, "tracker": "jira"})
+            except Exception as ticket_exc:
+                log.warning(
+                    "orchestrator.jira_ticket_eval_failed",
+                    key=ticket.get("key"),
+                    error=str(ticket_exc),
+                )
+
+    # 2. Linear candidates
+    if tracker in ("linear", "both") and getattr(settings, "linear_api_key", None):
+        from meeting_notes import linear_client
+
+        linear_issues = await linear_client.list_issues(
+            label="dev-agent",
+            settings=settings,
+        )
+        for issue in linear_issues:
+            try:
+                state_type = (issue.get("state") or {}).get("type", "").lower()
+                if state_type in ("completed", "canceled", "started"):
+                    continue
+                key = issue.get("identifier") or issue.get("id", "")
+                conf = await graph_client.get_action_confidence(key)
+                if conf is not None and conf < settings.dev_agent_confidence_threshold:
+                    log.info(
+                        "orchestrator.triage.linear_low_confidence_skip",
+                        key=key, confidence=round(conf, 2),
+                    )
+                    continue
+                eligible.append({
+                    "key": key,
+                    "id": issue.get("id"),
+                    "summary": issue.get("title", ""),
+                    "description": issue.get("description", ""),
+                    "tracker": "linear",
+                })
+            except Exception as issue_exc:
+                log.warning(
+                    "orchestrator.linear_issue_eval_failed",
+                    issue_id=issue.get("id"),
+                    error=str(issue_exc),
+                )
+
     return eligible
 
 
@@ -189,10 +240,192 @@ class _Dependencies:
     review_pr: Any
 
 
+def _is_linear_identifier(key: str) -> bool:
+    """Format check for Linear identifiers (36-char UUID or standard TEAM-123 key)."""
+    return bool(_UUID_RE.match(key) or _STANDARD_ISSUE_KEY_RE.match(key))
+
+
+def _is_jira_identifier(key: str) -> bool:
+    """Format check for Jira identifiers (standard PROJECT-123 key)."""
+    return bool(_STANDARD_ISSUE_KEY_RE.match(key))
+
+
+def validate_tracker_key(key: str, tracker: str | None = None) -> bool:
+    """Validate syntactic key format for a tracker.
+
+    Both Jira and Linear standard human-facing issue keys share the
+    [PROJECT|TEAM]-[NUMBER] syntax (e.g. 'SCRUM-123', 'ENG-456'), while
+    Linear additionally supports 36-character UUIDs. Syntactic validation
+    verifies structure; semantic disambiguation between trackers is resolved
+    by project/team prefix in `_should_use_linear`.
+
+    Raises ValueError if the key format is invalid.
+    """
+    if tracker == "linear":
+        if not _is_linear_identifier(key):
+            raise ValueError(f"Invalid Linear issue key or identifier: {key!r}")
+        return True
+    if tracker == "jira":
+        if not _is_jira_identifier(key):
+            raise ValueError(f"Invalid Jira issue key: {key!r}")
+        return True
+
+    if not _is_linear_identifier(key):
+        raise ValueError(f"Invalid issue key format: {key!r}")
+    return True
+
+
+def _resolve_dual_tracker_key(key: str, settings: Settings) -> bool:
+    """Disambiguate key between Jira and Linear when both trackers are enabled."""
+    jira_prefix = (settings.jira_project_key or "").upper()
+    linear_team = (settings.linear_team_id or "").upper()
+    if jira_prefix and linear_team and jira_prefix == linear_team:
+        raise ValueError(
+            f"Ambiguous tracker configuration: both Jira and Linear share prefix {jira_prefix!r}"
+        )
+
+    if _UUID_RE.match(key):
+        return True
+
+    if jira_prefix and key.upper().startswith(f"{jira_prefix}-"):
+        return False
+
+    if linear_team and key.upper().startswith(f"{linear_team}-"):
+        return True
+
+    log.error("orchestrator.tracker_routing_ambiguous", key=key)
+    raise ValueError(f"Ambiguous tracker key {key!r}: cannot determine whether to route to Linear or Jira")
+
+
+def _should_use_linear(key: str, settings: Settings, tracker: str | None = None) -> bool:
+    """Determine whether to route ticket operations to Linear or Jira.
+
+    Precedence:
+    1. If explicit tracker is provided -> validate and respect it ("linear" -> True, "jira" -> False)
+    2. If configured_tracker == "linear" -> validate Linear key presence and key format (True)
+    3. If configured_tracker == "jira" -> validate Jira enabled status and key format (False)
+    4. In "both" mode or unconfigured -> delegate to dual-tracker resolution or available tracker.
+    """
+    if tracker is not None and tracker.lower() in ("linear", "jira"):
+        is_linear = tracker.lower() == "linear"
+        validate_tracker_key(key, tracker="linear" if is_linear else "jira")
+        return is_linear
+
+    has_linear_key = bool(settings.linear_api_key)
+    jira_enabled = settings.jira_enabled
+    configured_tracker = settings.issue_tracker.lower()
+
+    if configured_tracker == "linear":
+        if not has_linear_key:
+            raise RuntimeError("Linear tracker configured but linear_api_key is not set")
+        validate_tracker_key(key, tracker="linear")
+        return True
+
+    if configured_tracker == "jira":
+        if not jira_enabled:
+            raise RuntimeError(
+                f"Cannot route ticket {key}: Jira is disabled and Linear is not configured/applicable"
+            )
+        validate_tracker_key(key, tracker="jira")
+        return False
+
+    # In "both" mode or dynamic fallback:
+    if not jira_enabled and has_linear_key:
+        validate_tracker_key(key, tracker="linear")
+        return True
+    if not has_linear_key and jira_enabled:
+        validate_tracker_key(key, tracker="jira")
+        return False
+    if not jira_enabled and not has_linear_key:
+        raise RuntimeError(
+            f"Cannot route ticket {key}: Jira is disabled and Linear is not configured/applicable"
+        )
+
+    return _resolve_dual_tracker_key(key, settings)
+
+
+async def _default_transition_issue(
+    key: str, status: str, *, settings: Settings | None = None, tracker: str | None = None
+) -> bool:
+    settings = settings or get_settings()
+    if _should_use_linear(key, settings, tracker=tracker):
+        from meeting_notes import linear_client
+
+        resolved_state = await linear_client.resolve_workflow_state(status, settings=settings)
+        if resolved_state:
+            res = await linear_client.transition_issue(key, resolved_state["id"], settings=settings)
+            return bool(res)
+        log.warning("orchestrator.linear_transition_state_not_found", key=key, status=status)
+        return False
+
+    if not settings.jira_enabled:
+        raise RuntimeError(
+            f"Cannot route ticket {key}: Jira is disabled and Linear is not configured/applicable"
+        )
+
+    from meeting_notes import jira_client
+
+    return await jira_client.transition_issue(key, status, settings=settings)
+
+
+async def _default_add_comment(
+    key: str, body: str, *, settings: Settings | None = None, tracker: str | None = None
+) -> None:
+    settings = settings or get_settings()
+    if _should_use_linear(key, settings, tracker=tracker):
+        from meeting_notes import linear_client
+
+        issue = await linear_client.get_issue(key, settings=settings)
+        if not issue or not issue.get("id"):
+            log.warning("orchestrator.linear_add_comment_issue_not_found", key=key)
+            raise RuntimeError(f"Linear issue {key} not found for comment")
+        await linear_client.add_comment(issue["id"], body, settings=settings)
+        return
+
+    if not settings.jira_enabled:
+        raise RuntimeError(
+            f"Cannot route ticket {key}: Jira is disabled and Linear is not configured/applicable"
+        )
+
+    from meeting_notes import jira_client
+
+    await jira_client.add_comment(key, body, settings=settings)
+
+
+async def _default_get_issue_detail(
+    key: str, *, settings: Settings | None = None, tracker: str | None = None
+) -> dict[str, Any]:
+    settings = settings or get_settings()
+    if _should_use_linear(key, settings, tracker=tracker):
+        from meeting_notes import linear_client
+
+        issue = await linear_client.get_issue(key, settings=settings)
+        if issue:
+            return {
+                "key": issue.get("identifier") or key,
+                "id": issue.get("id"),
+                "summary": issue.get("title", ""),
+                "description": issue.get("description", ""),
+                "tracker": "linear",
+            }
+        log.warning("orchestrator.linear_get_issue_not_found", key=key)
+        raise RuntimeError(f"Linear issue {key} not found")
+
+    if not settings.jira_enabled:
+        raise RuntimeError(
+            f"Cannot route ticket {key}: Jira is disabled and Linear is not configured/applicable"
+        )
+
+    from meeting_notes import jira_client
+
+    detail = await jira_client.get_issue_detail(key, settings=settings)
+    return detail
+
+
 def _default_dependencies() -> dict[str, Any]:
     """The real implementations. Imported here rather than at module scope so
     importing the orchestrator does not drag in a database driver."""
-    from meeting_notes import db, jira_client
+    from meeting_notes import db
     from meeting_notes.dev_agent import (
         gate_runner,
         gemini_runner,
@@ -207,9 +440,9 @@ def _default_dependencies() -> dict[str, Any]:
         "set_state": db.set_dev_agent_state,
         "get_run": db.get_dev_agent_run,
         "finish_run": db.finish_dev_agent_run,
-        "transition_issue": jira_client.transition_issue,
-        "add_comment": jira_client.add_comment,
-        "get_issue_detail": jira_client.get_issue_detail,
+        "transition_issue": _default_transition_issue,
+        "add_comment": _default_add_comment,
+        "get_issue_detail": _default_get_issue_detail,
         "ensure_repo_cloned": git_ops.ensure_repo_cloned,
         "create_worktree": git_ops.create_worktree,
         "remove_worktree": git_ops.remove_worktree,
@@ -416,14 +649,17 @@ async def _escalate_to_human(ctx: _Outcome, failed: list[Any], review: Any) -> N
         "orchestrator.review_blocked", failed=[g.name for g in failed],
         review_blocking=bool(review and review.blocking), pr_url=ctx.pr["html_url"],
     )
+    tracker = ctx.ticket.get("tracker")
+    tracker_kwargs = {"tracker": tracker} if tracker else {}
     await ctx.deps.add_comment(
         ctx.key,
         "Dev agent opened a PR but it did NOT pass review, so it has not been marked "
         f"shipped.\n\n{_rejection_reason(failed, review)}\n\n"
         f"PR: {ctx.pr['html_url']}\n\nA human needs to review this before it merges.",
         settings=ctx.settings,
+        **tracker_kwargs,
     )
-    if not await ctx.deps.transition_issue(ctx.key, "In Review", settings=ctx.settings):
+    if not await ctx.deps.transition_issue(ctx.key, "In Review", settings=ctx.settings, **tracker_kwargs):
         ctx.logger.warning("orchestrator.review_transition_failed")
     await ctx.deps.finish_run(
         ctx.key, lc.NEEDS_HUMAN, pr_url=ctx.pr["html_url"], pr_number=ctx.pr["number"],
@@ -462,10 +698,12 @@ async def _ship(ctx: _Outcome) -> None:
     """Gates and reviewer both passed. SHIPPED means the PR is open and the
     ticket is in review — CLOSED happens only when a human actually merges,
     via `/webhook/github`."""
+    tracker = ctx.ticket.get("tracker")
+    tracker_kwargs = {"tracker": tracker} if tracker else {}
     await ctx.deps.add_comment(
-        ctx.key, _ship_comment(ctx.result, ctx.verdict, ctx.pr), settings=ctx.settings
+        ctx.key, _ship_comment(ctx.result, ctx.verdict, ctx.pr), settings=ctx.settings, **tracker_kwargs
     )
-    if not await ctx.deps.transition_issue(ctx.key, "In Review", settings=ctx.settings):
+    if not await ctx.deps.transition_issue(ctx.key, "In Review", settings=ctx.settings, **tracker_kwargs):
         ctx.logger.warning("orchestrator.review_transition_failed")
 
     await ctx.deps.finish_run(
@@ -497,6 +735,8 @@ async def process_ticket(
     deps = _resolve_dependencies(overrides)
 
     key = ticket["key"]
+    tracker = ticket.get("tracker")
+    tracker_kwargs = {"tracker": tracker} if tracker else {}
     bound_log = log.bind(ticket_key=key)
     branch_name = f"agent/{key}"
     work_dir = f"{settings.dev_agent_work_root}/{key}"
@@ -505,13 +745,14 @@ async def process_ticket(
     await deps.claim_run(key, lc.TRIAGED, branch_name)
 
     try:
-        if not await deps.transition_issue(key, "In Progress", settings=settings):
+        if not await deps.transition_issue(key, "In Progress", settings=settings, **tracker_kwargs):
             bound_log.warning("orchestrator.in_progress_transition_failed")
+
         await deps.add_comment(
-            key, f"Picked up by dev_agent (backend={dev_backend}).", settings=settings
+            key, f"Picked up by dev_agent (backend={dev_backend}).", settings=settings, **tracker_kwargs
         )
 
-        detail = await deps.get_issue_detail(key, settings=settings)
+        detail = await deps.get_issue_detail(key, settings=settings, **tracker_kwargs)
         # The ticket names its own repository; the settings are only a fallback.
         repo = repo_for_ticket(detail, settings)
         bound_log = bound_log.bind(repo=f"{repo[0]}/{repo[1]}")
@@ -564,7 +805,7 @@ async def process_ticket(
             lambda: deps.finish_run(key, lc.FAILED, error=error_text),
             lambda: _advance_state(key, lc.FAILED, deps.set_state, deps.get_run),
             lambda: deps.record_session_memory(ticket, outcome="failed", error=error_text),
-            lambda: deps.transition_issue(key, "To Do", settings=settings),
+            lambda: deps.transition_issue(key, "To Do", settings=settings, **tracker_kwargs),
         ]
         for step in cleanup:
             try:

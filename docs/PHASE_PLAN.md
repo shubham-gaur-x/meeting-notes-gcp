@@ -807,6 +807,37 @@ unrelated test that passes untouched on master. The change was arguably an impro
 was not asked for, and nothing flagged it: a "files changed are plausibly related to the
 ticket" check is the missing gate.
 
+## Phase 12 — Linear Board Integration ✅ DONE (PR #44)
+
+Linear GraphQL API client (`meeting_notes/linear_client.py`), action item pusher
+(`meeting_notes/linear_pusher.py`), dual-tracker routing (`issue_tracker: "both"`), and graph
+provenance (`ActionItem -[:SYNCED_AS]-> LinearIssue`).
+
+## Phase 13 — Linear Webhooks & Real-time Graph Sync (Roadmap / PR #46)
+
+Bidirectional Linear webhook receiver (`api/routers/webhooks.py`) with HMAC SHA-256 verification
+and state updates reflected back into Memgraph action nodes.
+
+## Phase 14 — Pipeline Scale, Bounded Concurrency & DLQ (Roadmap / PR #45)
+
+Bounded drain concurrency, poison-pill dead-letter queue (DLQ) in `meeting_notes/db.py`, and
+high-throughput batch vectorization.
+
+## Phase 15 — Unified Dashboard Portal, Command Palette & Kanban (Roadmap / PR #48)
+
+Single-page application dashboard (`api/static/dashboard.html`), hash routing, Cmd+K palette,
+sticky chat dock, and 1:1 meeting classification.
+
+## Phase 16 — Server-Sent Events (SSE) Streaming Chat (Roadmap / PR #47)
+
+Real-time token streaming endpoint (`/graph/memory/query/stream`) yielding SSE frames for interactive
+graph memory retrieval.
+
+## Phase 17 — Multi-Tracker Issue Key Routing & Platform Link Anchoring (Roadmap / PR #42)
+
+Deterministic issue key regex routing (Jira and Linear) bypassing vector lookup, paired with
+harvested platform link anchoring.
+
 ## v2 — Deferred scope
 
 Not in v1. See ADR-008.

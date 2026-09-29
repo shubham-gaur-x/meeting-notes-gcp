@@ -18,6 +18,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 LLMBackend = Literal["fake", "gemini", "vertex"]
 
+DEFAULT_PIPELINE_MAX_ATTEMPTS: int = 3
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -146,10 +148,16 @@ class Settings(BaseSettings):
     # costs a full REST sweep per call while the event route beside it cannot
     # be made to write anything a caller chooses.
     #
-    # Cloud Run IAM with an OIDC caller is the stronger gate and should become
-    # the primary one once Terraform grows a Cloud Scheduler job. This stays as
-    # defence in depth rather than being replaced by it.
     jira_sync_trigger_token: str = ""
+
+    # ─── Linear (Epics, Projects, Sub-projects, Tasks) ────────────────────
+    issue_tracker: Literal["jira", "linear", "both", "none"] = "jira"
+    linear_api_key: str = ""
+    linear_team_id: str = ""
+    linear_default_project_id: str | None = None
+    linear_confidence_threshold: float = 0.6
+    linear_dedup_enabled: bool = True
+    linear_dedup_threshold: float = 0.9
 
     # ─── Governance ───────────────────────────────────────────────────────
     fact_min_confidence: float = 0.5
@@ -159,10 +167,13 @@ class Settings(BaseSettings):
     # ─── Pipeline tuning ──────────────────────────────────────────────────
     classifier_score_threshold: float = 0.40
     pipeline_batch_size: int = 50
+    pipeline_max_attempts: int = DEFAULT_PIPELINE_MAX_ATTEMPTS
+    drain_concurrency: int = 3
     graph_write_concurrency: int = 3
     # Embeddings are independent calls at ~12s each; issuing them one at a
     # time made a 16-action meeting spend >3 minutes embedding alone.
     embedding_concurrency: int = 8
+    embedding_batch_size: int = 50
 
     # ─── Service ──────────────────────────────────────────────────────────
     log_level: str = "INFO"
@@ -179,3 +190,10 @@ def get_settings() -> Settings:
     so they never depend on the ambient environment or the cache.
     """
     return Settings()
+
+
+def resolve_max_attempts(max_attempts: int | None = None, settings: Settings | None = None) -> int:
+    """Single authoritative resolution for pipeline max attempts."""
+    if max_attempts is not None:
+        return max_attempts
+    return (settings or get_settings()).pipeline_max_attempts
