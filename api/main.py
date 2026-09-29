@@ -79,6 +79,15 @@ def create_app() -> FastAPI:
             "llm_backend": settings.llm_backend,
         }
 
+    @app.get("/version")
+    async def version() -> dict[str, str]:
+        """Running build identity."""
+        settings = get_settings()
+        return {
+            "commit": settings.commit_sha,
+            "timestamp": settings.build_timestamp,
+        }
+
     @app.get("/", include_in_schema=False)
     async def root() -> RedirectResponse:
         """The service root points at the dashboard.
