@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import json
+from collections.abc import AsyncIterator
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from api.deps import principal
@@ -27,12 +30,34 @@ async def suggested_questions(_: Principal = Depends(principal)) -> dict[str, An
 
 
 @router.post("/memory/query")
-async def memory_query(body: MemoryQuery, _: Principal = Depends(principal)) -> dict[str, Any]:
+async def memory_query(
+    body: MemoryQuery,
+    stream: bool = Query(False),
+    _: Principal = Depends(principal),
+) -> Any:
     """Answer a natural-language question from the graph.
 
     Semantic search is passed in as the fallback so a question sharing no
     keywords with any meeting still finds it by meaning.
+    Supports Server-Sent Events (SSE) streaming when stream=true.
     """
+    if stream:
+        async def event_stream() -> AsyncIterator[str]:
+            async for chunk in retrieval.stream_memory_query(
+                body.question, search_meetings=vector.search_similar_meetings
+            ):
+                yield f"data: {json.dumps(chunk)}\n\n"
+
+        return StreamingResponse(
+            event_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
     return await retrieval.full_memory_query(
         body.question, search_meetings=vector.search_similar_meetings
     )

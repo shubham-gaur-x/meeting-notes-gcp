@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 import structlog
 
@@ -58,6 +58,30 @@ async def embed_text(
     except Exception as exc:  # noqa: BLE001 - enrichment is best-effort
         log.warning("vector.embed_failed", error=str(exc))
         return None
+
+
+async def embed_batch_texts(
+    texts: list[str], *, settings: Settings | None = None, embed_batch_fn: Any = None
+) -> list[list[float] | None]:
+    """Embed a list of texts using embed_batch_fn (defaults to llm_client.embed_batch).
+
+    Chunking and concurrency are managed at the orchestration layer (_embed_pending),
+    while backend-specific HTTP batching is handled inside llm_client.embed_batch.
+    """
+    if not texts:
+        return []
+    resolved = settings or get_settings()
+    if embed_batch_fn is None:
+        from meeting_notes import llm_client
+
+        embed_batch_fn = llm_client.embed_batch
+
+    try:
+        raw_res = await embed_batch_fn(texts, settings=resolved)
+        return cast(list[list[float] | None], raw_res)
+    except Exception as exc:  # noqa: BLE001 - resilience
+        log.warning("vector.embed_batch_failed", count=len(texts), error=str(exc))
+        return [None] * len(texts)
 
 
 async def embed_meeting(
@@ -102,14 +126,15 @@ async def _embed_pending(
     settings: Settings | None,
     embed: Any,
     semaphore: asyncio.Semaphore,
+    embed_batch_fn: Any = None,
 ) -> int:
     """Embed rows that have no embedding yet. Idempotent by construction —
     the fetch filters on `embedding IS NULL`, so a MERGE-matched node from an
     earlier meeting is embedded once and not re-embedded on every ingestion.
 
-    `semaphore` is shared across all embedding passes (meetings, actions, facts)
-    so total concurrent Vertex API calls stay within
-    `settings.embedding_concurrency` regardless of how many passes run.
+    `semaphore` bounds concurrent API calls across all embedding passes.
+    In batch mode, each chunk (sized to DEFAULT_EMBEDDING_BATCH_CHUNK_SIZE)
+    acquires `semaphore`, keeping in-flight batch requests within embedding_concurrency.
     """
     async with driver.session() as session:
         result = await session.run(fetch_cypher, meeting_id=meeting_id)
@@ -118,11 +143,50 @@ async def _embed_pending(
     if not pending:
         return 0
 
+    resolved = settings or get_settings()
     now = datetime.now(UTC).isoformat()
 
+    # When explicit batching is supplied, chunk into batches and process with semaphore concurrency:
+    if embed_batch_fn is not None:
+        chunk_size = resolved.embedding_batch_size
+        chunks = [pending[i : i + chunk_size] for i in range(0, len(pending), chunk_size)]
+
+        async def process_batch_chunk(chunk: list[dict[str, Any]]) -> int:
+            texts = [r[text_field] for r in chunk]
+            async with semaphore:
+                vectors = await embed_batch_texts(texts, settings=settings, embed_batch_fn=embed_batch_fn)
+            if len(vectors) != len(chunk):
+                log.error("vector.batch_size_mismatch", expected=len(chunk), got=len(vectors))
+                raise RuntimeError(
+                    f"Embedding batch size mismatch: expected {len(chunk)} vectors, got {len(vectors)}"
+                )
+
+            chunk_count = 0
+            for row, vector in zip(chunk, vectors, strict=True):
+                if vector is None:
+                    log.warning("vector.row_embedding_skipped", id=row.get("id"))
+                    continue
+                try:
+                    async with driver.session() as session:
+                        await session.run(write_cypher, id=row["id"], embedding=vector, now=now)
+                    chunk_count += 1
+                except Exception as row_exc:  # noqa: BLE001 - per-record write resilience
+                    log.warning("vector.batch_row_write_failed", id=row.get("id"), error=str(row_exc))
+            return chunk_count
+
+        chunk_counts = await asyncio.gather(*(process_batch_chunk(c) for c in chunks))
+        total_embedded = sum(chunk_counts)
+        if total_embedded < len(pending):
+            log.warning(
+                "vector.partial_embeddings_saved",
+                meeting_id=meeting_id,
+                total_pending=len(pending),
+                embedded=total_embedded,
+                failed=len(pending) - total_embedded,
+            )
+        return total_embedded
+
     async def embed_one(row: dict[str, Any]) -> int:
-        # The model call is what the semaphore bounds; the write is cheap and
-        # already serialised by the driver's own pool.
         async with semaphore:
             vector = await embed_text(row[text_field], settings=settings, embed=embed)
         if vector is None:
@@ -142,6 +206,7 @@ async def embed_action_items_for_meeting(
     settings: Settings | None = None,
     embed: Any = None,
     semaphore: asyncio.Semaphore | None = None,
+    embed_batch_fn: Any = None,
 ) -> int:
     """Embed this meeting's un-embedded ActionItems — the dedup similarity input."""
     driver = driver or _driver()
@@ -157,7 +222,13 @@ async def embed_action_items_for_meeting(
         MATCH (a:ActionItem {id: $id})
         SET a.embedding = $embedding, a.embedding_updated_at = $now
         """,
-        meeting_id, "task", driver=driver, settings=resolved, embed=embed, semaphore=sem,
+        meeting_id,
+        "task",
+        driver=driver,
+        settings=resolved,
+        embed=embed,
+        semaphore=sem,
+        embed_batch_fn=embed_batch_fn,
     )
     if count:
         log.info("vector.actions_embedded", meeting_id=meeting_id, count=count)
@@ -171,6 +242,7 @@ async def embed_facts_for_meeting(
     settings: Settings | None = None,
     embed: Any = None,
     semaphore: asyncio.Semaphore | None = None,
+    embed_batch_fn: Any = None,
 ) -> int:
     """Embed Facts attached to this meeting that have no embedding yet."""
     driver = driver or _driver()
@@ -186,7 +258,13 @@ async def embed_facts_for_meeting(
         MATCH (f:Fact {id: $id})
         SET f.embedding = $embedding, f.embedding_updated_at = $now
         """,
-        meeting_id, "text", driver=driver, settings=resolved, embed=embed, semaphore=sem,
+        meeting_id,
+        "text",
+        driver=driver,
+        settings=resolved,
+        embed=embed,
+        semaphore=sem,
+        embed_batch_fn=embed_batch_fn,
     )
     if count:
         log.info("vector.facts_embedded", meeting_id=meeting_id, count=count)
