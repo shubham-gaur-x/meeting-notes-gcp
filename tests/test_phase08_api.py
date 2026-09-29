@@ -1881,6 +1881,7 @@ def test_person_resolver_roster_load_failure_logs_warning(monkeypatch: Any) -> N
     """Verify that an invalid roster path logs structured warning instead of silent swallow."""
     from meeting_notes import person_resolver
 
+    person_resolver.reset_roster_cache()
     warnings: list[str] = []
 
     def mock_warning(event: str, **kwargs: Any) -> None:

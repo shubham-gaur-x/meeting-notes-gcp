@@ -1,0 +1,24 @@
+[
+  {
+    "name": "Jane Doe",
+    "email": "jane.doe@example.com",
+    "first_names": ["Jane"],
+    "nicknames": ["Janey"],
+    "initials": ["JD"],
+    "role": "Staff Engineer",
+    "organization": "Engineering",
+    "aliases": ["jane@example.com"],
+    "tracked": true
+  },
+  {
+    "name": "John Smith",
+    "email": "john.smith@example.com",
+    "first_names": ["John"],
+    "nicknames": ["Johnny"],
+    "initials": ["JS"],
+    "role": "Product Manager",
+    "organization": "Product",
+    "aliases": ["john@example.com"],
+    "tracked": true
+  }
+]
