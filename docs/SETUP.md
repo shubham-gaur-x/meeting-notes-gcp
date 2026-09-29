@@ -49,7 +49,7 @@ The LLM step uses `LLM_BACKEND=fake`, which replays recorded fixtures from
 `sample_data/llm_fixtures/`. No API key, no network, deterministic. The graph you
 get is real — built by the real pipeline from real recorded extractions.
 
-Inspect it in Memgraph Lab at **http://localhost:3000**.
+Inspect it in Memgraph Lab at **<http://localhost:3000>**.
 
 ```bash
 make demo-down            # stop the stack
@@ -67,10 +67,10 @@ make demo-down ARGS=-v    # stop it and delete its data
 
 Everything from tier 0, but real extraction instead of replayed fixtures.
 
-1. Get a free key at **https://aistudio.google.com/apikey** (no GCP project, no
+1. Get a free key at **<https://aistudio.google.com/apikey>** (no GCP project, no
    billing).
 2. Put it in `.env`:
-   ```
+   ```bash
    LLM_BACKEND=gemini
    GEMINI_API_KEY=your-key-here
    ```

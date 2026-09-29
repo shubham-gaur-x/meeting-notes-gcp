@@ -32,7 +32,7 @@ prompts, the Cypher, the test suite — is carried across deliberately rather th
 
 ## Architecture
 
-```
+```text
 Gmail · Calendar · Meet · Jira
    │  Cloud Run Jobs (our connectors)  ← no Airbyte
    ▼
@@ -102,7 +102,7 @@ tells you if it is outstanding.
 
 ## The dashboard
 
-`make demo` brings up the stack; the dashboard is at **http://localhost:8080/dashboard**.
+`make demo` brings up the stack; the dashboard is at **<http://localhost:8080/dashboard>**.
 To run just the API against an already-running stack:
 
 ```bash
