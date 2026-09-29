@@ -93,6 +93,15 @@ def create_app() -> FastAPI:
     async def dashboard() -> HTMLResponse:
         return HTMLResponse((STATIC / "dashboard.html").read_text(encoding="utf-8"))
 
+    @app.get("/version")
+    async def version() -> dict[str, str]:
+        """Returns the running build identity."""
+        settings = get_settings()
+        return {
+            "commit": settings.commit_sha,
+            "timestamp": settings.build_timestamp,
+        }
+
     return app
 
 

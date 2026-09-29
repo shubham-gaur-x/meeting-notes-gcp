@@ -169,6 +169,8 @@ class Settings(BaseSettings):
     github_webhook_secret: str = ""
     api_url: str = ""
     gcs_backup_bucket: str = ""
+    commit_sha: str = "unknown"
+    build_timestamp: str = "unknown"
 
 
 @lru_cache(maxsize=1)

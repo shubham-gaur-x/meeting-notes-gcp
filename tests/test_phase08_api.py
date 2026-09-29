@@ -132,6 +132,24 @@ async def test_health_reports_degraded_rather_than_failing(app: Any) -> None:
     assert response.json()["status"] in ("ok", "degraded")
 
 
+async def test_version_endpoint_returns_build_identity(app: Any, monkeypatch: Any) -> None:
+    from meeting_notes.config import get_settings
+
+    # We patch Settings using dependency override for a clean test
+    fake = get_settings().model_copy(
+        update={"commit_sha": "abc1234", "build_timestamp": "2026-09-10T12:00:00Z"}
+    )
+    # The /version route uses get_settings() directly instead of Depends(get_settings),
+    # so we should monkeypatch the config.get_settings function.
+    monkeypatch.setattr("api.main.get_settings", lambda: fake)
+
+    response = await _get(app, "/version")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["commit"] == "abc1234"
+    assert body["timestamp"] == "2026-09-10T12:00:00Z"
+
+
 @pytest.mark.parametrize(
     "path",
     [
