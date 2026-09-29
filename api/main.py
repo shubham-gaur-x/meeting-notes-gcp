@@ -14,9 +14,10 @@ from pathlib import Path
 from typing import Any
 
 import structlog
-from fastapi import FastAPI
+from fastapi import BackgroundTasks, Depends, FastAPI, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
+from api import deps
 from api.routers import (
     dev_agent,
     graph,
@@ -28,7 +29,7 @@ from api.routers import (
     review,
     webhooks,
 )
-from meeting_notes.config import get_settings
+from meeting_notes.config import Settings, get_settings
 from meeting_notes.utils import configure_logging
 
 log = structlog.get_logger()
@@ -102,6 +103,15 @@ def create_app() -> FastAPI:
     @app.get("/dashboard", response_class=HTMLResponse)
     async def dashboard() -> HTMLResponse:
         return HTMLResponse((STATIC / "dashboard.html").read_text(encoding="utf-8"))
+
+    @app.post("/api/webhooks/linear", include_in_schema=False)
+    async def webhook_linear_alias(
+        request: Request,
+        background_tasks: BackgroundTasks,
+        settings: Settings = Depends(deps.settings_dep),
+    ) -> dict[str, Any]:
+        """Backward-compatibility alias for Linear webhooks configured using /api/webhooks/linear."""
+        return await webhooks.webhook_linear(request, background_tasks, settings=settings)
 
     return app
 

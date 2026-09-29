@@ -300,3 +300,46 @@ def test_is_linear_state_done_classification() -> None:
     assert is_linear_state_done("In Progress", "started") is False
     assert is_linear_state_done("Backlog", "unstarted") is False
     assert is_linear_state_done("Triage", "triage") is False
+
+
+@pytest.mark.asyncio
+async def test_linear_webhook_alias_route_api_webhooks_linear(app) -> None:
+    """Verify that requests to the documented /api/webhooks/linear path succeed with identical behaviour."""
+    secret = "test_webhook_secret_key_123"
+    app.dependency_overrides[settings_dep] = lambda: Settings(
+        linear_webhook_secret=secret,
+        gcp_project_id="test-proj",
+    )
+
+    payload = {
+        "action": "update",
+        "type": "Issue",
+        "data": {
+            "id": "iss_123",
+            "identifier": "ENG-101",
+            "state": {"name": "Done", "type": "completed"},
+        },
+    }
+    raw_body = json.dumps(payload).encode("utf-8")
+    sig = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
+
+    patch_target = "meeting_notes.graph_client.update_action_linear_status_by_ref"
+    with patch(patch_target, new_callable=AsyncMock) as mock_update:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post(
+                "/api/webhooks/linear",
+                content=raw_body,
+                headers={"Linear-Signature": sig, "Content-Type": "application/json"},
+            )
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["status"] == "accepted"
+            assert data["issue"] == "ENG-101"
+            assert data["state"] == "Done"
+            assert data["done"] is True
+
+        mock_update.assert_awaited_once_with("ENG-101", "Done", True)
+
+    app.dependency_overrides.clear()
+
