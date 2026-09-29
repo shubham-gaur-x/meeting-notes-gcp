@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 import structlog
 
@@ -77,7 +77,8 @@ async def embed_batch_texts(
         embed_batch_fn = llm_client.embed_batch
 
     try:
-        return await embed_batch_fn(texts, settings=resolved)
+        raw_res = await embed_batch_fn(texts, settings=resolved)
+        return cast(list[list[float] | None], raw_res)
     except Exception as exc:  # noqa: BLE001 - resilience
         log.warning("vector.embed_batch_failed", count=len(texts), error=str(exc))
         return [None] * len(texts)
