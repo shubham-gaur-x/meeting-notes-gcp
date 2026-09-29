@@ -445,13 +445,14 @@ async def test_find_sprint_candidates_picks_up_linear_tickets(monkeypatch: pytes
         }
     ]
 
-    async def mock_search_issues(query: str, **kwargs: Any) -> list[dict[str, Any]]:
+    async def mock_list_issues(*args: Any, **kwargs: Any) -> list[dict[str, Any]]:
         return fake_issues
 
     async def mock_confidence(key: str) -> float:
         return 0.95
 
-    monkeypatch.setattr("meeting_notes.linear_client.search_issues", mock_search_issues)
+    monkeypatch.setattr("meeting_notes.linear_client.list_issues", mock_list_issues)
+    monkeypatch.setattr("meeting_notes.linear_client.search_issues", mock_list_issues)
     monkeypatch.setattr("meeting_notes.graph_client.get_action_confidence", mock_confidence)
 
     settings = Settings(
@@ -655,7 +656,7 @@ async def test_find_sprint_candidates_resilient_to_individual_linear_issue_failu
         {"id": "lin-ok", "identifier": "ENG-2", "title": "Working", "description": "Succeeds"},
     ]
 
-    async def mock_search_issues(query: str, **kwargs: Any) -> list[dict[str, Any]]:
+    async def mock_search_issues(*args: Any, **kwargs: Any) -> list[dict[str, Any]]:
         return fake_issues
 
     async def mock_confidence(key: str) -> float:
@@ -663,6 +664,7 @@ async def test_find_sprint_candidates_resilient_to_individual_linear_issue_failu
             raise RuntimeError("Corrupted graph node")
         return 0.95
 
+    monkeypatch.setattr("meeting_notes.linear_client.list_issues", mock_search_issues)
     monkeypatch.setattr("meeting_notes.linear_client.search_issues", mock_search_issues)
     monkeypatch.setattr("meeting_notes.graph_client.get_action_confidence", mock_confidence)
 

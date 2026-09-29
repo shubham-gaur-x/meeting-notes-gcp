@@ -158,12 +158,15 @@ async def find_sprint_candidates(settings: Settings | None = None) -> list[dict[
     if tracker in ("linear", "both") and getattr(settings, "linear_api_key", None):
         from meeting_notes import linear_client
 
-        linear_issues = await linear_client.search_issues(
-            "label:dev-agent",
+        linear_issues = await linear_client.list_issues(
+            label="dev-agent",
             settings=settings,
         )
         for issue in linear_issues:
             try:
+                state_type = (issue.get("state") or {}).get("type", "").lower()
+                if state_type in ("completed", "canceled", "started"):
+                    continue
                 key = issue.get("identifier") or issue.get("id", "")
                 conf = await graph_client.get_action_confidence(key)
                 if conf is not None and conf < settings.dev_agent_confidence_threshold:
