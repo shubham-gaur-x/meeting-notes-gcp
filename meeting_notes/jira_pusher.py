@@ -39,7 +39,6 @@ async def _default_get_open_actions(
     *,
     exclude_id: str,
     meeting_id: str | None = None,
-    **kwargs: Any,
 ) -> list[dict[str, Any]]:
     from meeting_notes.graph_client import get_open_actions_for_owner
 
