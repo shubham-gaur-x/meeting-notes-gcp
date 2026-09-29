@@ -29,6 +29,177 @@ log = structlog.get_logger()
 
 FUZZY_THRESHOLD = 0.85
 
+_JUNK_NAMES = {
+    "unknown",
+    "unknown speaker",
+    "speaker",
+    "speaker 1",
+    "speaker 2",
+    "speaker 3",
+    "speaker 4",
+    "speaker 5",
+    "unidentified",
+    "unidentified speaker",
+    "none",
+    "nobody",
+    "the group",
+    "all",
+    "everyone",
+    "someone",
+    "n/a",
+    "na",
+    "—",
+    "-",
+}
+
+
+def is_junk_name(n: str | None) -> bool:
+    """Return True if candidate name is an empty placeholder or transcription artifact."""
+    if not n or not str(n).strip():
+        return True
+    norm = normalize_name(n)
+    if norm in _JUNK_NAMES:
+        return True
+    if re.match(r"^speaker\s*\d*$", norm):
+        return True
+    if re.match(r"^unknown(\s*speaker)?$", norm):
+        return True
+    if re.match(r"^unidentified(\s*speaker)?$", norm):
+        return True
+    return False
+
+
+@dataclass
+class ContactProfile:
+    """Canonical contact profile linking full names, emails, nicknames, first names, and initials."""
+    full_name: str
+    email: str
+    first_names: list[str] = field(default_factory=list)
+    nicknames: list[str] = field(default_factory=list)
+    initials: list[str] = field(default_factory=list)
+    role: str = ""
+    organization: str = ""
+
+    def all_mentions(self) -> list[str]:
+        candidates = [self.full_name, self.email] + self.nicknames + self.first_names + self.initials
+        seen: set[str] = set()
+        res: list[str] = []
+        for c in candidates:
+            k = normalize_name(c)
+            if k and k not in seen:
+                seen.add(k)
+                res.append(c)
+        return res
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.full_name,
+            "email": self.email,
+            "first_names": self.first_names,
+            "nicknames": self.nicknames,
+            "initials": self.initials,
+            "role": self.role,
+            "organization": self.organization,
+        }
+
+
+# Central team contact dictionary (dynamically populated via load_roster / PERSON_ROSTER_PATH)
+CONTACT_PROFILES: dict[str, ContactProfile] = {}
+KNOWN_PERSON_ALIASES: dict[str, tuple[str, str]] = {}
+EMAIL_ALIASES: dict[str, str] = {}
+_ROSTER_LOADED: bool = False
+
+
+def reset_roster_cache() -> None:
+    """Reset cached contact profiles and load state (primarily for test isolation)."""
+    global _ROSTER_LOADED
+    CONTACT_PROFILES.clear()
+    KNOWN_PERSON_ALIASES.clear()
+    EMAIL_ALIASES.clear()
+    _ROSTER_LOADED = False
+
+
+def _ensure_roster_loaded() -> None:
+    """Ensure contact profiles are loaded once from roster path with structured logging."""
+    global _ROSTER_LOADED
+    if _ROSTER_LOADED:
+        return
+    _ROSTER_LOADED = True
+    try:
+        from meeting_notes.config import get_settings
+
+        path = get_settings().person_roster_path
+        if path:
+            load_roster(path)
+    except Exception as exc:
+        log.warning("person_resolver.roster_load_failed", error=str(exc))
+
+
+def resolve_to_full_name(mention: str | None) -> str:
+    """Resolve any first name, nickname, initials, or email to the canonical contact full name."""
+    if not mention:
+        return ""
+    raw = str(mention).strip()
+    norm = normalize_name(raw)
+    if not norm or is_junk_name(norm):
+        return raw
+
+    _ensure_roster_loaded()
+
+    # 1. Match against contact profiles with ambiguity gating
+    matches = [
+        profile.full_name
+        for profile in CONTACT_PROFILES.values()
+        if any(norm == normalize_name(m) for m in profile.all_mentions())
+    ]
+    unique_matches = list(dict.fromkeys(matches))
+    if len(unique_matches) == 1:
+        return unique_matches[0]
+    if len(unique_matches) > 1:
+        # Ambiguous across multiple contact profiles -> do not guess, preserve raw mention
+        return raw
+
+    # 2. Check alias map
+    alias_match = KNOWN_PERSON_ALIASES.get(norm)
+    if alias_match:
+        return alias_match[0]
+
+    return raw
+
+
+def expand_contact_mentions(names: list[str]) -> list[str]:
+    """Expand a list of names/mentions to include full names, emails, and all known aliases.
+
+    Applies ambiguity gating: if a mention matches aliases across multiple distinct
+    contact profiles, the ambiguous aliases are NOT expanded to avoid cross-contaminating
+    search context.
+    """
+    _ensure_roster_loaded()
+
+    expanded: set[str] = set()
+    for name in names:
+        if not name:
+            continue
+        expanded.add(name)
+        norm = normalize_name(name)
+        matching_profiles = [
+            profile
+            for profile in CONTACT_PROFILES.values()
+            if any(norm == normalize_name(m) for m in profile.all_mentions())
+        ]
+        if len(matching_profiles) == 1:
+            for m in matching_profiles[0].all_mentions():
+                expanded.add(m)
+        # If len(matching_profiles) > 1, mention is ambiguous; keep only raw mention.
+    return list(expanded)
+
+
+def get_contact_directory_list() -> list[dict[str, Any]]:
+    """Return all known contact profiles as serializable dictionaries."""
+    _ensure_roster_loaded()
+    return [p.to_dict() for p in CONTACT_PROFILES.values()]
+
+
 
 def normalize_email(email: str | None) -> str:
     """Lowercase, trim, and drop any ``+tag`` from the local part."""
@@ -62,6 +233,30 @@ def _name_sim(a: str, b: str) -> float:
     return SequenceMatcher(None, na, nb).ratio()
 
 
+def _initials_matches(
+    mention: str, known_people: list[dict[str, Any]]
+) -> list[tuple[str | None, str | None, bool]]:
+    """Known people whose initials match a 2-3 letter mention (e.g. 'LP')."""
+    m = _norm_name(mention).replace(".", "").replace(" ", "")
+    if len(m) < 2 or len(m) > 3 or not m.isalpha():
+        return []
+
+    out: list[tuple[str | None, str | None, bool]] = []
+    for person in known_people:
+        raw_name = str(person.get("name", "")).strip()
+        if not raw_name:
+            continue
+        # Split on whitespace, hyphens, and camelCase transitions for compound names
+        parts = [p for p in re.split(r"[\s\-_]+|(?<=[a-z])(?=[A-Z])", raw_name) if p]
+        if len(parts) >= 2:
+            initials_all = "".join(p[0].lower() for p in parts)
+            first_two = "".join(p[0].lower() for p in parts[:2])
+            first_last = f"{parts[0][0].lower()}{parts[-1][0].lower()}"
+            if m in (initials_all, first_two, first_last):
+                out.append((person.get("email"), person.get("name"), bool(person.get("tracked", False))))
+    return out
+
+
 def _given_name_matches(
     mention: str, known_people: list[dict[str, Any]]
 ) -> list[tuple[str | None, str | None, bool]]:
@@ -75,7 +270,7 @@ def _given_name_matches(
     if len(tokens) != 1:
         return []
     first = tokens[0]
-    if len(first) < 3:  # "TK", "JD" -- initials are not a given name
+    if len(first) < 3:  # Initials handled separately in _initials_matches
         return []
 
     out: list[tuple[str | None, str | None, bool]] = []
@@ -144,6 +339,44 @@ class Roster:
         return (best, best_score) if best and best_score >= threshold else (None, best_score)
 
 
+def _register_roster_contact(
+    name: str, email: str, aliases: list[str], d: dict[str, Any]
+) -> None:
+    if email in CONTACT_PROFILES:
+        log.warning(
+            "person_resolver.roster_duplicate_email_ignored",
+            email=email,
+            existing=CONTACT_PROFILES[email].full_name,
+            duplicate=name,
+        )
+        return
+    nicknames = [str(n) for n in d.get("nicknames", [])]
+    first_names = [str(f) for f in d.get("first_names", [])] or ([name.split()[0]] if name else [])
+    initials = [str(i) for i in d.get("initials", [])]
+    if not initials and name and len(name.split()) > 1:
+        parts = name.split()
+        initials = [f"{parts[0][0]}{parts[-1][0]}"]
+    role = str(d.get("role", ""))
+    org = str(d.get("organization", ""))
+    CONTACT_PROFILES[email] = ContactProfile(
+        full_name=name,
+        email=email,
+        first_names=first_names,
+        nicknames=nicknames,
+        initials=initials,
+        role=role,
+        organization=org,
+    )
+    if name:
+        KNOWN_PERSON_ALIASES[normalize_name(name)] = (name, email)
+    for al in aliases + nicknames + first_names:
+        if al:
+            KNOWN_PERSON_ALIASES[normalize_name(al)] = (name, email)
+    for email_alias in aliases:
+        if "@" in email_alias:
+            EMAIL_ALIASES[email_alias] = email
+
+
 def load_roster(path: str | None) -> Roster:
     """Load the canonical roster from `path` (a JSON list), or an empty roster.
 
@@ -160,15 +393,101 @@ def load_roster(path: str | None) -> Roster:
     except Exception as exc:
         log.warning("person_resolver.roster_load_failed", path=path, error=str(exc))
         return Roster([])
-    return Roster([
-        RosterEntry(
-            name=d.get("name", ""),
-            email=normalize_email(d.get("email", "")),
-            aliases=[normalize_email(a) for a in d.get("aliases", [])],
-            tracked=bool(d.get("tracked", False)),
+    entries: list[RosterEntry] = []
+    for d in data:
+        raw_email = d.get("email")
+        if not raw_email:
+            log.warning("person_resolver.roster_entry_missing_email", entry=d)
+            continue
+        email = normalize_email(raw_email)
+        name = d.get("name", "")
+        aliases = [normalize_email(a) for a in d.get("aliases", [])]
+        tracked = bool(d.get("tracked", False))
+        entry = RosterEntry(
+            name=name,
+            email=email,
+            aliases=aliases,
+            tracked=tracked,
         )
-        for d in data if d.get("email")
-    ])
+        entries.append(entry)
+        _register_roster_contact(name, email, aliases, d)
+
+    return Roster(entries)
+
+
+def _resolve_with_email(
+    name: str,
+    role: str,
+    email: str,
+    roster: Roster,
+    known_people: list[dict[str, Any]],
+) -> Resolution:
+    """Tier 1: deterministic resolution when email is present."""
+    ne = normalize_email(email)
+    ne = EMAIL_ALIASES.get(ne, ne)
+    entry = roster.match_email(ne)
+    if entry:
+        return Resolution(
+            entry.name or name, role, entry.email, "resolved", entry.tracked, "roster-email"
+        )
+    for kp in known_people:
+        if normalize_email(kp.get("email")) == ne and kp.get("name"):
+            return Resolution(
+                kp["name"],
+                role,
+                ne,
+                "resolved",
+                bool(kp.get("tracked", False)),
+                "known-email",
+            )
+    return Resolution(name, role, ne, "resolved", False, "email-normalized")
+
+
+def _resolve_tier2_probabilistic(
+    name: str,
+    role: str,
+    roster: Roster,
+    known_people: list[dict[str, Any]],
+    threshold: float,
+    email: str | None,
+) -> Resolution:
+    norm_clean = _norm_name(name).replace(".", "").replace(" ", "")
+    if 2 <= len(norm_clean) <= 3 and norm_clean.isalpha():
+        initials_candidates = _initials_matches(name, known_people)
+        if len(initials_candidates) == 1:
+            c_email, full, tracked = initials_candidates[0]
+            return Resolution(full or name, role, c_email, "resolved", tracked, "person-initials")
+        if len(initials_candidates) > 1:
+            return Resolution(name, role, None, "review", False, "ambiguous-initials")
+
+    entry, score = roster.match_name(name, threshold)
+    if entry:
+        return Resolution(
+            entry.name, role, entry.email, "resolved", entry.tracked, f"roster-name:{score:.2f}"
+        )
+
+    best: tuple[str | None, str | None, float, bool] = (None, None, 0.0, False)
+    for p in known_people:
+        s = _name_sim(name, p.get("name", ""))
+        if s > best[2]:
+            best = (p.get("email"), p.get("name"), s, bool(p.get("tracked", False)))
+    if best[0] and best[2] >= threshold:
+        return Resolution(
+            best[1] or name, role, best[0], "resolved", best[3], f"person-name:{best[2]:.2f}"
+        )
+
+    # Unambiguous first-name match.
+    given = _given_name_matches(name, known_people)
+    if len(given) == 1:
+        c_email, full, tracked = given[0]
+        return Resolution(full or name, role, c_email, "resolved", tracked, "person-given-name")
+    if len(given) > 1:
+        return Resolution(name, role, None, "review", False, "ambiguous-given-name")
+
+    # Give up → review. Never silently drop real human names.
+    return Resolution(
+        name, role, None, "review", False, "no-email-no-match" if not email else "unresolved"
+    )
 
 
 def resolve(
@@ -191,57 +510,16 @@ def resolve(
         role = getattr(attendee, "role", "attendee") or "attendee"
         email = getattr(attendee, "email", None)
 
+    # 1. Filter out junk placeholder speaker names immediately
+    if is_junk_name(name):
+        return Resolution(name, role, None, "dropped", False, "junk-name")
+
     # Tier 1 — deterministic (email present)
     if email and "@" in email:
-        ne = normalize_email(email)
-        entry = roster.match_email(ne)
-        if entry:
-            return Resolution(
-                entry.name or name, role, entry.email, "resolved", entry.tracked, "roster-email"
-            )
-        # Real email, not in roster → canonical is the normalized email (a new person).
-        return Resolution(name, role, ne, "resolved", False, "email-normalized")
+        return _resolve_with_email(name, role, email, roster, known_people)
 
     # Tier 2 — probabilistic (no email): fuzzy name against roster, then known Person nodes.
-    entry, score = roster.match_name(name, threshold)
-    if entry:
-        return Resolution(
-            entry.name, role, entry.email, "resolved", entry.tracked, f"roster-name:{score:.2f}"
-        )
-
-    # `tracked` is carried in the tuple deliberately. v5 read it off `p`
-    # after the loop -- the LAST person iterated, not the one that matched --
-    # so the governance gate was decided by list ordering. Person.tracked is
-    # opt-in (CLAUDE.md); getting it from the wrong person is a real leak.
-    best: tuple[str | None, str | None, float, bool] = (None, None, 0.0, False)
-    for p in known_people:
-        s = _name_sim(name, p.get("name", ""))
-        if s > best[2]:
-            best = (p.get("email"), p.get("name"), s, bool(p.get("tracked", False)))
-    if best[0] and best[2] >= threshold:
-        return Resolution(
-            best[1] or name, role, best[0], "resolved", best[3], f"person-name:{best[2]:.2f}"
-        )
-
-    # Unambiguous first-name match.
-    #
-    # Meeting notes refer to colleagues by first name constantly, and whole-string
-    # similarity is hopeless at it: "Matteo" vs "Matteo Vaiente" scores 0.60 against a
-    # 0.85 threshold, so EVERY first-name mention of a known person landed in the review
-    # queue. Measured on the real corpus, that was most of it.
-    #
-    # Resolves only when the mention matches exactly ONE known person's given name. Two
-    # Matteos means genuine ambiguity, and guessing between colleagues is worse than
-    # asking -- so it stays in review.
-    given = _given_name_matches(name, known_people)
-    if len(given) == 1:
-        email, full, tracked = given[0]
-        return Resolution(full or name, role, email, "resolved", tracked, "person-given-name")
-    if len(given) > 1:
-        return Resolution(name, role, None, "review", False, "ambiguous-given-name")
-
-    # Give up → review. Never silently drop.
-    return Resolution(name, role, None, "review", False, "no-email-no-match" if not email else "unresolved")
+    return _resolve_tier2_probabilistic(name, role, roster, known_people, threshold, email)
 
 
 def resolve_attendees(
@@ -249,12 +527,18 @@ def resolve_attendees(
     roster: Roster,
     known_people: list[dict[str, Any]] | None = None,
 ) -> tuple[list[Resolution], list[Resolution]]:
-    """Return (resolved, reviews) for a list of attendees."""
+    """Return (resolved, reviews) for a list of attendees.
+
+    Junk speakers (e.g. 'Unknown speaker') are dropped from both queues.
+    """
     resolved: list[Resolution] = []
     reviews: list[Resolution] = []
     for a in attendees:
         r = resolve(a, roster, known_people=known_people)
-        (resolved if r.status == "resolved" else reviews).append(r)
+        if r.status == "resolved":
+            resolved.append(r)
+        elif r.status == "review":
+            reviews.append(r)
     return resolved, reviews
 
 

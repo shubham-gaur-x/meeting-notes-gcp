@@ -6,6 +6,8 @@ of the plan and run by hand.
 
 from __future__ import annotations
 
+import pytest
+
 from meeting_notes.graph_client import get_open_actions_for_owner, update_action_jira_status
 
 # ─── graph_client fixes (Task 1) ───────────────────────────────────────────────
@@ -768,6 +770,295 @@ async def test_no_action_items_is_a_clean_no_op() -> None:
     meeting = _meeting(action_items=[])
     keys = await jira_pusher.push_action_items([], meeting, "src-1", settings=settings)
     assert keys == []
+
+
+async def test_administrative_task_is_skipped_and_not_sent_to_review() -> None:
+    from meeting_notes import jira_pusher
+
+    reviewed: list[tuple] = []
+    created_calls: list[dict] = []
+
+    async def mark_needs_review(action_id, reason, **kw):
+        reviewed.append((action_id, reason))
+
+    async def create_issue(**kw):
+        created_calls.append(kw)
+        return "SCRUM-1"
+
+    async def get_active_sprint(*a, **kw):
+        return None
+
+    settings = _jira_settings(
+        JIRA_ENABLED=True,
+        JIRA_CONFIDENCE_THRESHOLD=0.6,
+        JIRA_DEDUP_ENABLED=False,
+        JIRA_SKIP_ADMINISTRATIVE=True,
+    )
+    meeting = _meeting(action_items=[
+        {"owner": "Alex Mercer", "task": "Submit weekly timesheets by Friday", "confidence": 0.95}
+    ])
+    keys = await jira_pusher.push_action_items(
+        meeting.action_items, meeting, "src-1", settings=settings,
+        mark_needs_review=mark_needs_review, create_issue=create_issue,
+        get_active_sprint=get_active_sprint,
+    )
+
+    assert keys == []
+    assert created_calls == [], "administrative task must not trigger ticket creation"
+    assert reviewed == [], "administrative task must not pollute the needs_review queue"
+
+
+async def test_push_self_only_skips_tasks_owned_by_others() -> None:
+    from meeting_notes import jira_pusher
+
+    reviewed: list[tuple] = []
+    created_calls: list[dict] = []
+
+    async def mark_needs_review(action_id, reason, **kw):
+        reviewed.append((action_id, reason))
+
+    async def create_issue(**kw):
+        created_calls.append(kw)
+        return "SCRUM-1"
+
+    async def get_active_sprint(*a, **kw):
+        return None
+
+    settings = _jira_settings(
+        JIRA_ENABLED=True,
+        JIRA_DEDUP_ENABLED=False,
+        JIRA_PUSH_SELF_ONLY=True,
+        JIRA_USER_IDENTITIES="alex.mercer@example.com,Alex Mercer,Alex",
+    )
+    meeting = _meeting(action_items=[
+        {"owner": "Jordan Hayes", "task": "Grant Alex access to cloud console", "confidence": 0.95},
+        {"owner": "Alex Mercer", "task": "Implement data pipeline connector", "confidence": 0.95},
+    ])
+    updated_keys: list[tuple] = []
+
+    async def update_jira_key(action_id, jira_key, **kw):
+        updated_keys.append((action_id, jira_key))
+
+    keys = await jira_pusher.push_action_items(
+        meeting.action_items, meeting, "src-1", settings=settings,
+        mark_needs_review=mark_needs_review, create_issue=create_issue,
+        update_jira_key=update_jira_key,
+        get_active_sprint=get_active_sprint,
+    )
+
+    assert len(created_calls) == 1
+    assert keys == ["SCRUM-1"]
+    assert reviewed == [], "non-self task must not pollute review queue"
+
+
+async def test_push_self_only_fails_closed_when_no_identities_configured() -> None:
+    from meeting_notes import jira_pusher
+
+    settings = _jira_settings(
+        JIRA_ENABLED=True,
+        JIRA_PUSH_SELF_ONLY=True,
+        JIRA_USER_IDENTITIES="",
+    )
+    # When push_self_only is set but no identities are known, it must fail closed and return False
+    assert not jira_pusher.is_self_owned("Alex Mercer", settings)
+    assert not jira_pusher.is_self_owned("me", settings)
+    assert not jira_pusher.is_self_owned("self", settings)
+
+
+def test_is_administrative_task_cases() -> None:
+    from meeting_notes.jira_pusher import is_administrative_task
+
+    # Positive matches: generic payroll, corporate benefits, expense reports
+    assert is_administrative_task("Submit timesheet by 5pm")
+    assert is_administrative_task("Submit weekly timesheets")
+    assert is_administrative_task("Log timecards for previous week")
+    assert is_administrative_task("Complete expense report for offsite")
+    assert is_administrative_task("Review 401k benefits enrollment options")
+    assert is_administrative_task("HSA and healthcare plan selections")
+
+    # Negative matches: legitimate engineering, product, or organizational tasks
+    assert not is_administrative_task("Build data pipeline for analytics")
+    assert not is_administrative_task("Schedule architecture review for promo packet")
+    assert not is_administrative_task("Grant Alex access to cloud console")
+    assert not is_administrative_task("Prepare sprint retrospective slides")
+
+
+def test_push_self_only_strict_identity_matching() -> None:
+    from meeting_notes import jira_pusher
+
+    # Configured with full name and email: does NOT match unrelated person with same first name
+    settings = _jira_settings(
+        JIRA_PUSH_SELF_ONLY=True,
+        JIRA_USER_IDENTITIES="alex.mercer@example.com,Alex Mercer",
+    )
+    assert jira_pusher.is_self_owned("Alex Mercer", settings)
+    assert jira_pusher.is_self_owned("alex.mercer@example.com", settings)
+    # Must NOT match bare local-part, unrelated person, or spoofed external domain
+    assert not jira_pusher.is_self_owned("alex.mercer", settings)
+    assert not jira_pusher.is_self_owned("Alex", settings)
+    assert not jira_pusher.is_self_owned("Alex Smith", settings)
+    assert not jira_pusher.is_self_owned("alex@evil.com", settings)
+    assert not jira_pusher.is_self_owned("me", settings)
+
+    # Jira service account email must NEVER be conflated with a human self-identity
+    svc_settings = _jira_settings(
+        JIRA_PUSH_SELF_ONLY=True,
+        JIRA_USER_IDENTITIES="alex.mercer@example.com,Alex Mercer",
+        JIRA_EMAIL="jira-bot@example.com",
+    )
+    assert not jira_pusher.is_self_owned("jira-bot@example.com", svc_settings)
+
+    # Google workspace user email (potentially shared inbox) is not conflated with human self-identity
+    gw_settings = _jira_settings(
+        JIRA_PUSH_SELF_ONLY=True,
+        JIRA_USER_IDENTITIES="alex.mercer@example.com,Alex Mercer",
+        GOOGLE_WORKSPACE_USER="shared-inbox@example.com",
+    )
+    assert not jira_pusher.is_self_owned("shared-inbox@example.com", gw_settings)
+
+    # Operator misconfiguration: even if service accounts are listed in JIRA_USER_IDENTITIES,
+    # they are actively stripped and excluded
+    misconfig_settings = _jira_settings(
+        JIRA_PUSH_SELF_ONLY=True,
+        JIRA_USER_IDENTITIES=(
+            "alex.mercer@example.com,Alex Mercer,jira-bot@example.com,shared-inbox@example.com"
+        ),
+        JIRA_EMAIL="jira-bot@example.com",
+        GOOGLE_WORKSPACE_USER="shared-inbox@example.com",
+    )
+    assert not jira_pusher.is_self_owned("jira-bot@example.com", misconfig_settings)
+    assert not jira_pusher.is_self_owned("shared-inbox@example.com", misconfig_settings)
+    assert jira_pusher.is_self_owned("alex.mercer@example.com", misconfig_settings)
+
+
+@pytest.mark.parametrize(
+    "keyword", ["1:1", "1-1", "one-on-one", "one on one", "catch up", "catchup", "follow-up"]
+)
+def test_one_on_one_meeting_classification_keywords(keyword: str) -> None:
+    from meeting_notes.classifier import classify
+
+    metadata = {
+        "attendees": ["alex@example.com", "jordan@example.com"],
+        "start_time": "2026-09-28T10:00:00Z",
+    }
+    baseline_text = "Weekly notes. Action item: finalize the release checklist by Monday."
+    test_text = f"Weekly {keyword} notes. Action item: finalize the release checklist by Monday."
+
+    baseline_score = classify(baseline_text, metadata)
+    score = classify(test_text, metadata)
+
+    assert score >= 0.40, f"Expected keyword '{keyword}' to score >= 0.40, got {score}"
+    assert score > baseline_score, f"Expected '{keyword}' to increase score over baseline {baseline_score}"
+
+
+async def test_push_self_only_pipeline_fails_closed_when_unconfigured() -> None:
+    """End-to-end verification that push_action_items rejects tickets when push_self_only is enabled
+    but no user identities are configured."""
+    from meeting_notes import jira_pusher
+
+    created_calls: list[dict] = []
+
+    async def create_issue(**kw):
+        created_calls.append(kw)
+        return "SCRUM-1"
+
+    settings = _jira_settings(
+        JIRA_ENABLED=True,
+        JIRA_PUSH_SELF_ONLY=True,
+        JIRA_USER_IDENTITIES="",
+        GOOGLE_WORKSPACE_USER="",
+        JIRA_EMAIL="",
+    )
+    meeting = _meeting(action_items=[
+        {"owner": "Alex Mercer", "task": "Implement critical core fix", "confidence": 0.95}
+    ])
+    keys = await jira_pusher.push_action_items(
+        meeting.action_items,
+        meeting,
+        "src-1",
+        settings=settings,
+        create_issue=create_issue,
+        get_active_sprint=lambda *a, **kw: None,
+    )
+    assert keys == []
+    assert created_calls == [], "Unconfigured self-only gate must fail closed and reject issue creation"
+
+    async def fake_sprint(*a, **kw):
+        return None
+
+    async def fake_update(*a, **kw):
+        pass
+
+    # Default opt-in behavior: when push_self_only is False, all tickets are pushed
+    default_settings = _jira_settings(
+        JIRA_ENABLED=True,
+        JIRA_DEDUP_ENABLED=False,
+        JIRA_PUSH_SELF_ONLY=False,
+    )
+    keys_default = await jira_pusher.push_action_items(
+        meeting.action_items,
+        meeting,
+        "src-1",
+        settings=default_settings,
+        create_issue=create_issue,
+        update_jira_key=fake_update,
+        get_active_sprint=fake_sprint,
+    )
+    assert keys_default == ["SCRUM-1"]
+    assert len(created_calls) == 1
+
+
+async def test_get_all_actions_deterministic_join_deduplication() -> None:
+    """Verifies that get_all_actions sends deterministic join ordering Cypher and handles results."""
+    from meeting_notes.graph_client import get_all_actions
+
+    executed_queries: list[str] = []
+
+    class FakeSession:
+        async def __aenter__(self) -> FakeSession:
+            return self
+
+        async def __aexit__(self, *args) -> None:
+            pass
+
+        async def run(self, query: str, **params) -> _FakeResult:
+            executed_queries.append(query)
+            return _FakeResult([
+                {
+                    "id": "act-1",
+                    "task": "Deduplicated action item",
+                    "owner": "Alex Mercer",
+                    "due": "2026-10-01",
+                    "created_at": "2026-09-28",
+                    "priority": "high",
+                    "jira_key": "SCRUM-1",
+                    "jira_status": "To Do",
+                    "done": False,
+                    "linear_id": None,
+                    "linear_identifier": None,
+                    "linear_url": None,
+                    "linear_state": None,
+                    "owner_email": "alex@example.com",
+                    "parent_id": None,
+                    "parent_task": None,
+                    "parent_jira_key": None,
+                }
+            ])
+
+    class FakeDriver:
+        def session(self) -> FakeSession:
+            return FakeSession()
+
+    actions = await get_all_actions(driver=FakeDriver())
+    assert len(actions) == 1
+    assert actions[0]["id"] == "act-1"
+    assert len(executed_queries) == 1
+    assert "WITH a, min(m.date) AS meeting_date" in executed_queries[0]
+    assert "ORDER BY p.name ASC" in executed_queries[0]
+    assert "WITH a, meeting_date, head(collect(p)) AS p" in executed_queries[0]
+    assert "ORDER BY parent.id ASC" in executed_queries[0]
+    assert "WITH a, meeting_date, p, head(collect(parent)) AS parent" in executed_queries[0]
+
 
 
 # ─── jira_sync ─────────────────────────────────────────────────────────────────

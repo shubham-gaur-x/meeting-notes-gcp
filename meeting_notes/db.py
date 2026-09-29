@@ -28,7 +28,7 @@ from typing import Any
 import asyncpg
 import structlog
 
-from meeting_notes.config import Settings, get_settings
+from meeting_notes.config import Settings, get_settings, resolve_max_attempts
 from meeting_notes.dev_agent.lifecycle import TERMINAL_STATES
 from meeting_notes.dev_agent.models import DevAgentRun
 from meeting_notes.models import SourceType, StagedRecord
@@ -52,6 +52,9 @@ CREATE TABLE IF NOT EXISTS staged_records (
     fetched_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     processed    BOOLEAN NOT NULL DEFAULT FALSE,
     processed_at TIMESTAMPTZ,
+    attempts     INT NOT NULL DEFAULT 0,
+    last_error   TEXT,
+    status       TEXT NOT NULL DEFAULT 'pending',
     UNIQUE (source_type, source_id)
 );
 
@@ -68,6 +71,15 @@ CREATE TABLE IF NOT EXISTS watermarks (
     value       TEXT NOT NULL,
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+"""
+
+# Backward-compatibility migrations for pre-existing tables across phases.
+MIGRATIONS_SQL = """
+-- Phase 13 DLQ columns for pre-existing staged_records tables
+ALTER TABLE staged_records ADD COLUMN IF NOT EXISTS attempts INT NOT NULL DEFAULT 0;
+ALTER TABLE staged_records ADD COLUMN IF NOT EXISTS last_error TEXT;
+ALTER TABLE staged_records ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending';
+UPDATE staged_records SET status = 'processed' WHERE processed = TRUE AND status = 'pending';
 """
 
 # Phase 11 (ADR-020): the dev agent's own run tracking. One `state` column,
@@ -144,9 +156,12 @@ UPDATE dev_agent_runs SET state_payload = $2::jsonb WHERE ticket_key = $1
 # Must be run inside a transaction — the row locks are held until it commits.
 
 CLAIM_SQL = """
-SELECT id, source_id, source_type, payload, fetched_at, processed
+SELECT id, source_id, source_type, payload, fetched_at, processed,
+       attempts, last_error, status
 FROM staged_records
 WHERE processed = FALSE
+  AND attempts < $2
+  AND status NOT IN ('dead_letter', 'processed')
 ORDER BY fetched_at
 FOR UPDATE SKIP LOCKED
 LIMIT $1
@@ -160,7 +175,8 @@ RETURNING id
 """
 
 LIST_BY_TYPE_SQL = """
-SELECT id, source_id, source_type, payload, fetched_at, processed
+SELECT id, source_id, source_type, payload, fetched_at, processed,
+       attempts, last_error, status
 FROM staged_records
 WHERE source_type = $1
 ORDER BY fetched_at
@@ -170,8 +186,19 @@ DELETE_STAGED_SQL = "DELETE FROM staged_records WHERE source_id = ANY($1::text[]
 
 _MARK_PROCESSED_SQL = """
 UPDATE staged_records
-SET processed = TRUE, processed_at = now()
+SET processed = TRUE, processed_at = now(), status = 'processed', last_error = NULL
 WHERE id = $1::uuid
+"""
+
+_RECORD_DRAIN_FAILURE_SQL = """
+UPDATE staged_records
+SET attempts = attempts + 1,
+    last_error = $2,
+    processed = FALSE,
+    processed_at = NULL,
+    status = CASE WHEN attempts + 1 >= $3 THEN 'dead_letter' ELSE 'retry' END
+WHERE id = $1::uuid
+RETURNING attempts, processed, status
 """
 
 _GET_WATERMARK_SQL = "SELECT value FROM watermarks WHERE source_type = $1"
@@ -181,6 +208,48 @@ INSERT INTO watermarks (source_type, value)
 VALUES ($1, $2)
 ON CONFLICT (source_type) DO UPDATE SET value = $2, updated_at = now()
 """
+
+_LIST_DLQ_SQL = """
+SELECT id, source_id, source_type, payload, fetched_at, processed, attempts, last_error, status
+FROM staged_records
+WHERE status = 'dead_letter'
+ORDER BY fetched_at DESC
+LIMIT $1
+"""
+
+_REPLAY_DLQ_SQL = """
+UPDATE staged_records
+SET attempts = 0,
+    processed = FALSE,
+    processed_at = NULL,
+    status = 'pending',
+    last_error = NULL
+WHERE id = $1::uuid AND status = 'dead_letter'
+RETURNING id
+"""
+
+_REPLAY_ALL_DLQ_SQL = """
+UPDATE staged_records
+SET attempts = 0,
+    processed = FALSE,
+    processed_at = NULL,
+    status = 'pending',
+    last_error = NULL
+WHERE status = 'dead_letter'
+RETURNING id
+"""
+
+_QUEUE_STATS_SQL = """
+SELECT
+    count(*) AS total,
+    count(*) FILTER (WHERE status = 'pending') AS pending,
+    count(*) FILTER (WHERE status = 'retry') AS retry,
+    count(*) FILTER (WHERE status = 'dead_letter') AS dead_letter,
+    count(*) FILTER (WHERE status = 'processed') AS processed
+FROM staged_records
+"""
+
+_LIST_RECENT_DEV_AGENT_RUNS_SQL = "SELECT * FROM dev_agent_runs ORDER BY created_at DESC LIMIT $1"
 
 
 # ─── connection (ADR-015) ─────────────────────────────────────────────────────
@@ -261,6 +330,7 @@ async def apply_migrations(pool: asyncpg.Pool | None = None) -> None:
     async with pool.acquire() as conn:
         await conn.execute(SCHEMA_SQL)
         await conn.execute(DEV_AGENT_SCHEMA_SQL)
+        await conn.execute(MIGRATIONS_SQL)
     log.info("db.migrations_applied")
 
 
@@ -281,8 +351,10 @@ async def stage_record(
     return str(row["id"]) if row else None
 
 
-async def claim_batch(limit: int, pool: asyncpg.Pool | None = None) -> list[StagedRecord]:
-    """Claim up to `limit` unprocessed records (ADR-006).
+async def claim_batch(
+    limit: int, max_attempts: int | None = None, pool: asyncpg.Pool | None = None
+) -> list[StagedRecord]:
+    """Claim up to `limit` unprocessed records (ADR-006) with attempts < max_attempts.
 
     Rows stay locked for the life of the transaction opened here, so two
     concurrent drains take disjoint batches. Note the batch is returned after
@@ -290,9 +362,10 @@ async def claim_batch(limit: int, pool: asyncpg.Pool | None = None) -> list[Stag
     marks each one done individually, so a slow record does not hold locks
     across the whole batch.
     """
+    eff_max = resolve_max_attempts(max_attempts)
     pool = pool or await get_pool()
     async with pool.acquire() as conn, conn.transaction():
-        rows = await conn.fetch(CLAIM_SQL, limit)
+        rows = await conn.fetch(CLAIM_SQL, limit, eff_max)
     return [
         StagedRecord(
             id=str(r["id"]),
@@ -301,6 +374,9 @@ async def claim_batch(limit: int, pool: asyncpg.Pool | None = None) -> list[Stag
             payload=json.loads(r["payload"]) if isinstance(r["payload"], str) else r["payload"],
             fetched_at=r["fetched_at"].isoformat(),
             processed=r["processed"],
+            attempts=r["attempts"],
+            last_error=r["last_error"],
+            status=r["status"],
         )
         for r in rows
     ]
@@ -360,6 +436,91 @@ async def mark_processed(record_id: str, pool: asyncpg.Pool | None = None) -> No
     pool = pool or await get_pool()
     async with pool.acquire() as conn:
         await conn.execute(_MARK_PROCESSED_SQL, record_id)
+
+
+async def record_drain_failure(
+    record_id: str,
+    error: str,
+    max_attempts: int | None = None,
+    pool: asyncpg.Pool | None = None,
+) -> tuple[int, bool, str]:
+    """Record a drain failure for a staged record, incrementing its attempt counter.
+
+    If attempts >= max_attempts, marks the record with status 'dead_letter'
+    to prevent poison pills from looping forever.
+    Returns (attempts, is_processed, status).
+    """
+    eff_max = resolve_max_attempts(max_attempts)
+    pool = pool or await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            _RECORD_DRAIN_FAILURE_SQL,
+            record_id,
+            error[:2000],
+            eff_max,
+        )
+    if row:
+        return row["attempts"], row["processed"], row["status"]
+    return 1, False, "retry"
+
+
+async def list_dead_letter_records(
+    limit: int = 50, pool: asyncpg.Pool | None = None
+) -> list[StagedRecord]:
+    """List quarantined dead-letter records for operator inspection."""
+    pool = pool or await get_pool()
+    rows = await pool.fetch(_LIST_DLQ_SQL, limit)
+    return [
+        StagedRecord(
+            id=str(r["id"]),
+            source_id=r["source_id"],
+            source_type=r["source_type"],
+            payload=json.loads(r["payload"]) if isinstance(r["payload"], str) else r["payload"],
+            fetched_at=r["fetched_at"].isoformat(),
+            processed=r["processed"],
+            attempts=r["attempts"],
+            last_error=r["last_error"],
+            status=r["status"],
+        )
+        for r in rows
+    ]
+
+
+async def replay_dead_letter_record(
+    record_id: str, pool: asyncpg.Pool | None = None
+) -> bool:
+    """Reset a single quarantined record back to 'pending' with 0 attempts for re-draining."""
+    pool = pool or await get_pool()
+    async with pool.acquire() as conn:
+        val = await conn.fetchval(_REPLAY_DLQ_SQL, record_id)
+    success = val is not None
+    log.info("dlq.replay_one", record_id=record_id, success=success)
+    return success
+
+
+async def replay_all_dead_letter_records(pool: asyncpg.Pool | None = None) -> int:
+    """Reset all quarantined dead-letter records back to 'pending' with 0 attempts."""
+    pool = pool or await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(_REPLAY_ALL_DLQ_SQL)
+    count = len(rows)
+    log.info("dlq.replay_all", replayed_count=count)
+    return count
+
+
+async def get_queue_stats(pool: asyncpg.Pool | None = None) -> dict[str, int]:
+    """Retrieve aggregate staged queue stats (total, pending, retry, dead_letter, processed)."""
+    pool = pool or await get_pool()
+    row = await pool.fetchrow(_QUEUE_STATS_SQL)
+    if not row:
+        return {"total": 0, "pending": 0, "retry": 0, "dead_letter": 0, "processed": 0}
+    return {
+        "total": int(row["total"] or 0),
+        "pending": int(row["pending"] or 0),
+        "retry": int(row["retry"] or 0),
+        "dead_letter": int(row["dead_letter"] or 0),
+        "processed": int(row["processed"] or 0),
+    }
 
 
 async def get_watermark(source_type: str, pool: asyncpg.Pool | None = None) -> str | None:
@@ -501,9 +662,7 @@ async def list_recent_dev_agent_runs(
     """Recent runs, newest first — the dashboard's dev-agent panel."""
     pool = pool or await get_pool()
     async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            "SELECT * FROM dev_agent_runs ORDER BY created_at DESC LIMIT $1", limit
-        )
+        rows = await conn.fetch(_LIST_RECENT_DEV_AGENT_RUNS_SQL, limit)
     return [_row_to_dev_agent_run(r) for r in rows]
 
 

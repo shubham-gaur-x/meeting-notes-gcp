@@ -20,7 +20,10 @@ Two governance rules are enforced here rather than assumed:
 
 from __future__ import annotations
 
+import re
+from collections.abc import AsyncIterator
 from typing import Any
+from urllib.parse import urlparse
 
 import structlog
 
@@ -47,6 +50,10 @@ SYNTHESIS_SYSTEM_PREFIX = (
     "- Structure your answer with rich, scannable formatting (e.g. bold deliverable "
     "titles, clear stakeholder headers, and inline attribute metadata) — never just "
     "a flat list of plain bullets.\n"
+    "- Distinguish clearly between open deliverables ([OPEN]) and completed items "
+    "([DONE]). When asked about pending tasks or priorities, focus on active open items. "
+    "When asked about ticket or task statuses, accurately cite whether they are completed "
+    "or in progress based on their context status.\n"
     # Links are reproduced, never composed. The earlier wording told the model
     # to ALWAYS include a link and showed it the URL shapes, which is a recipe
     # for a confidently invented Jira key -- and a fabricated link is worse
@@ -106,6 +113,86 @@ async def extract_entities(
     }
 
 
+_DOC_PATTERNS: tuple[tuple[str, str], ...] = (
+    ("docs.google.com/presentation", "Google Slides"),
+    ("docs.google.com/document", "Google Doc"),
+    ("docs.google.com/spreadsheets", "Google Sheet"),
+    ("docs.google.com/forms", "Google Form"),
+    ("drive.google.com", "Google Drive"),
+    ("meet.google.com", "Google Meet"),
+    ("zoom.us", "Zoom Meeting"),
+    ("linear.app", "Linear"),
+    ("lucid.app", "Lucidchart"),
+    ("lucidchart.com", "Lucidchart"),
+    ("databricks.com", "Databricks"),
+    ("slack.com", "Slack"),
+    ("chat.google.com", "Google Chat"),
+    ("cloudskillsboost.google", "Google Skills"),
+    ("skills.google", "Google Skills"),
+    ("optum", "Optum Form"),
+    ("memberforms", "Optum Form"),
+)
+
+
+def format_doc_link(url: str) -> str:
+    """Format a raw URL into a concise, semantic markdown link.
+
+    Avoids duplicating long raw URLs as link text (saving context tokens)
+    while providing clear, human-scannable anchor labels.
+    """
+    if not url or not isinstance(url, str):
+        return ""
+    u = url.strip()
+    if u.startswith("[") and "](" in u:
+        return u
+    if not u.startswith("http://") and not u.startswith("https://"):
+        return ""
+
+    u_lower = u.lower()
+    for pattern, label in _DOC_PATTERNS:
+        if pattern in u_lower:
+            return f"[{label}]({u})"
+
+    if "atlassian.net" in u_lower:
+        key_match = re.search(r"/browse/([A-Z][A-Z0-9]+-\d+)", u)
+        if key_match:
+            label = f"Jira {key_match.group(1)}"
+        elif "/wiki/" in u_lower:
+            label = "Confluence Doc"
+        else:
+            label = "Atlassian"
+        return f"[{label}]({u})"
+
+    try:
+        netloc = urlparse(u).netloc.lower()
+        if netloc.startswith("www."):
+            netloc = netloc[4:]
+        label = f"Doc ({netloc})" if netloc else "Document"
+    except Exception:
+        label = "Document"
+
+    return f"[{label}]({u})"
+
+
+def _format_doc_links(urls: list[Any] | None, seen_urls: set[str] | None = None) -> list[str]:
+    """Format a list of raw document URLs with deduplication against seen URLs."""
+    if not urls:
+        return []
+    seen = seen_urls if seen_urls is not None else set()
+    formatted_links: list[str] = []
+    for u in urls:
+        if not isinstance(u, str):
+            continue
+        u_clean = u.strip()
+        if not u_clean or u_clean in seen:
+            continue
+        seen.add(u_clean)
+        link_md = format_doc_link(u_clean)
+        if link_md:
+            formatted_links.append(link_md)
+    return formatted_links
+
+
 def _jira_link(jira_key: str | None, settings: Settings) -> str | None:
     """Markdown link to a Jira issue, or None when we cannot build a real one.
 
@@ -131,6 +218,204 @@ def _links_suffix(*links: str | None) -> str:
     return f" | Links: {' '.join(present)}" if present else ""
 
 
+def _format_action_context_line(record: dict[str, Any], settings: Settings) -> str:
+    """Format one ActionItem record into a grounded, token-efficient context line."""
+    linear_state = str(record.get("linear_state") or "").strip()
+    is_done = bool(record.get("done")) or str(record.get("jira_status", "")).lower() in (
+        "done",
+        "closed",
+        "resolved",
+    ) or linear_state.lower() in ("done", "closed", "canceled", "cancelled", "completed")
+    state_tag = "[DONE]" if is_done else "[OPEN]"
+
+    raw_status = record.get("jira_status")
+    if raw_status:
+        status_label = raw_status.title() if raw_status.islower() else raw_status
+    elif linear_state:
+        status_label = linear_state.title() if linear_state.islower() else linear_state
+    else:
+        status_label = "Done" if is_done else "In Progress"
+
+    jira_key = record.get("jira_key")
+    linear_id = record.get("linear_identifier")
+    linear_url = record.get("linear_url")
+
+    if linear_id:
+        tracker_info = f" | Linear: {linear_id} (Status: {status_label})"
+    elif jira_key:
+        tracker_info = f" | Jira: {jira_key} (Status: {status_label})"
+    else:
+        tracker_info = f" | Status: {status_label}"
+
+    seen_urls: set[str] = set()
+    jira_l = _jira_link(jira_key, settings)
+    if jira_key and settings.jira_domain:
+        seen_urls.add(f"https://{settings.jira_domain.strip()}/browse/{jira_key}")
+
+    linear_l = f"[Linear {linear_id}]({linear_url})" if linear_id and linear_url else None
+    if linear_url:
+        seen_urls.add(linear_url)
+
+    source_id = record.get("source_id")
+    gmail_l = _gmail_link(source_id)
+    if source_id:
+        g_url = gmail_thread_url(source_id)
+        if g_url:
+            seen_urls.add(g_url)
+
+    doc_links = _format_doc_links(record.get("meeting_links"), seen_urls)
+    links = _links_suffix(jira_l, linear_l, gmail_l, *doc_links)
+    due_str = record.get("due") or "None"
+
+    return (
+        f"ActionItem: {state_tag} Task: {record['task']} | Owner: {record['owner']}"
+        f"{tracker_info} | Due: {due_str} | Priority: {record['priority']}"
+        f" | Source: {record['meeting_title']}{links}"
+    )
+
+
+async def _query_actions_context(
+    session: Any, mentioned_issue_keys: list[str], settings: Settings
+) -> tuple[list[str], list[str]]:
+    """Query top action items and specifically mentioned Jira or Linear keys."""
+    lines: list[str] = []
+    node_ids: list[str] = []
+    seen_action_ids: set[str] = set()
+
+    actions_res = await session.run(
+        """
+        MATCH (m:Meeting)-[:FOLLOWS_UP]->(a:ActionItem)
+        RETURN DISTINCT a.id AS id, a.task AS task, a.owner AS owner,
+               a.due AS due, a.priority AS priority, a.jira_key AS jira_key,
+               a.jira_status AS jira_status, a.linear_identifier AS linear_identifier,
+               a.linear_url AS linear_url, a.linear_state AS linear_state,
+               coalesce(a.done, false) AS done,
+               m.title AS meeting_title, m.source_id AS source_id, m.date AS date,
+               m.links AS meeting_links
+        ORDER BY CASE WHEN coalesce(a.done, false) = false THEN 0 ELSE 1 END,
+                 CASE WHEN a.priority = 'high' THEN 0 ELSE 1 END,
+                 a.due ASC
+        LIMIT 25
+        """
+    )
+    async for record in actions_res:
+        seen_action_ids.add(record["id"])
+        node_ids.append(record["id"])
+        lines.append(_format_action_context_line(record, settings))
+
+    if mentioned_issue_keys:
+        key_res = await session.run(
+            """
+            MATCH (m:Meeting)-[:FOLLOWS_UP]->(a:ActionItem)
+            WHERE toUpper(a.jira_key) IN $keys OR toUpper(a.linear_identifier) IN $keys
+            RETURN DISTINCT a.id AS id, a.task AS task, a.owner AS owner,
+                   a.due AS due, a.priority AS priority, a.jira_key AS jira_key,
+                   a.jira_status AS jira_status, a.linear_identifier AS linear_identifier,
+                   a.linear_url AS linear_url, a.linear_state AS linear_state,
+                   coalesce(a.done, false) AS done,
+                   m.title AS meeting_title, m.source_id AS source_id, m.date AS date,
+                   m.links AS meeting_links
+            LIMIT 10
+            """,
+            keys=mentioned_issue_keys,
+        )
+        async for record in key_res:
+            if record["id"] not in seen_action_ids:
+                seen_action_ids.add(record["id"])
+                node_ids.append(record["id"])
+                lines.append(_format_action_context_line(record, settings))
+
+    return lines, node_ids
+
+
+async def _query_topics_context(session: Any, topics: list[str]) -> tuple[list[str], list[str]]:
+    """Query meetings by topic and format their context lines."""
+    lines: list[str] = []
+    node_ids: list[str] = []
+    result = await session.run(
+        """
+        UNWIND $topics AS topic
+        MATCH (t:Topic)<-[:DISCUSSED]-(m:Meeting)
+        WHERE t.name CONTAINS topic
+        RETURN DISTINCT m.id AS id, m.title AS title, m.date AS date,
+                        m.summary AS summary, m.source_id AS source_id,
+                        m.links AS links
+        ORDER BY m.date DESC
+        LIMIT 10
+        """,
+        topics=topics,
+    )
+    async for record in result:
+        node_ids.append(record["id"])
+        seen_urls: set[str] = set()
+        gmail_l = _gmail_link(record.get("source_id"))
+        if record.get("source_id"):
+            g_url = gmail_thread_url(record["source_id"])
+            if g_url:
+                seen_urls.add(g_url)
+        doc_links = _format_doc_links(record.get("links"), seen_urls)
+        links = _links_suffix(gmail_l, *doc_links)
+        lines.append(
+            f"Meeting ({record['date']}): {record['title']}{links} — {record['summary']}"
+        )
+    return lines, node_ids
+
+
+async def _query_people_context(
+    session: Any, people: list[str]
+) -> tuple[list[str], list[str]]:
+    """Query people matching mentions and return context lines and node IDs."""
+    from meeting_notes import person_resolver
+
+    lines: list[str] = []
+    node_ids: list[str] = []
+    expanded_people = person_resolver.expand_contact_mentions(people)[:20]
+    result = await session.run(
+        """
+        UNWIND $names AS name
+        MATCH (p:Person)
+        WHERE toLower(p.name) CONTAINS toLower(name)
+           OR toLower(p.email) CONTAINS toLower(name)
+        RETURN DISTINCT p.id AS id, p.name AS name, p.email AS email
+        LIMIT 10
+        """,
+        names=expanded_people,
+    )
+    async for record in result:
+        node_ids.append(record["id"])
+        lines.append(f"Person: {record['name']} <{record['email']}>")
+    return lines, node_ids
+
+
+async def _query_decisions_context(session: Any) -> tuple[list[str], list[str]]:
+    """Query recent decisions and return formatted context lines and node IDs."""
+    lines: list[str] = []
+    node_ids: list[str] = []
+    decisions_res = await session.run(
+        """
+        MATCH (m:Meeting)-[:PRODUCED]->(d:Decision)
+        RETURN DISTINCT d.id AS id, d.text AS text, m.title AS meeting_title,
+               m.date AS date, m.source_id AS source_id, m.links AS links
+        ORDER BY m.date DESC
+        LIMIT 8
+        """
+    )
+    async for record in decisions_res:
+        node_ids.append(record["id"])
+        seen_urls = set()
+        gmail_l = _gmail_link(record.get("source_id"))
+        if record.get("source_id"):
+            g_url = gmail_thread_url(record["source_id"])
+            if g_url:
+                seen_urls.add(g_url)
+        doc_links = _format_doc_links(record.get("links"), seen_urls)
+        links = _links_suffix(gmail_l, *doc_links)
+        lines.append(
+            f"Decision: {record['text']} (Meeting: {record['meeting_title']}{links})"
+        )
+    return lines, node_ids
+
+
 async def assemble_context(
     entities: dict[str, Any],
     question: str,
@@ -148,88 +433,31 @@ async def assemble_context(
     people = [p for p in entities.get("people", []) if isinstance(p, str)]
     topics = [t.lower().strip() for t in entities.get("topics", []) if isinstance(t, str)]
 
+    # Check for specific Jira or Linear ticket keys mentioned in the question (e.g. MDP-25, ENG-101)
+    mentioned_issue_keys = re.findall(r"\b[A-Z]{2,10}-\d+\b", question)
+
     async with driver.session() as session:
-        # 1. Action Items (always queried to surface open commitments & deliverables)
-        actions_res = await session.run(
-            """
-            MATCH (m:Meeting)-[:FOLLOWS_UP]->(a:ActionItem)
-            WHERE coalesce(a.done, false) = false
-            RETURN DISTINCT a.id AS id, a.task AS task, a.owner AS owner,
-                   a.due AS due, a.priority AS priority, a.jira_key AS jira_key,
-                   m.title AS meeting_title, m.source_id AS source_id, m.date AS date
-            ORDER BY CASE WHEN a.priority = 'high' THEN 0 ELSE 1 END, a.due ASC
-            LIMIT 15
-            """
-        )
-        async for record in actions_res:
-            node_ids.append(record["id"])
-            links = _links_suffix(
-                _jira_link(record.get("jira_key"), settings),
-                _gmail_link(record.get("source_id")),
-            )
-            lines.append(
-                f"ActionItem: Task: {record['task']} | Owner: {record['owner']}"
-                f" | Due: {record['due'] or 'None'} | Priority: {record['priority']}"
-                f" | Source: {record['meeting_title']}{links}"
-            )
+        # 1. Action Items (surfacing open deliverables, done states, and specific tickets)
+        act_lines, act_ids = await _query_actions_context(session, mentioned_issue_keys, settings)
+        lines.extend(act_lines)
+        node_ids.extend(act_ids)
 
         # 2. People
         if people:
-            result = await session.run(
-                """
-                UNWIND $names AS name
-                MATCH (p:Person)
-                WHERE toLower(p.name) CONTAINS toLower(name)
-                   OR toLower(p.email) CONTAINS toLower(name)
-                RETURN DISTINCT p.id AS id, p.name AS name, p.email AS email
-                LIMIT 10
-                """,
-                names=people,
-            )
-            async for record in result:
-                node_ids.append(record["id"])
-                lines.append(f"Person: {record['name']} <{record['email']}>")
+            p_lines, p_ids = await _query_people_context(session, people)
+            lines.extend(p_lines)
+            node_ids.extend(p_ids)
 
         # 3. Topics & Meetings
         if topics:
-            result = await session.run(
-                """
-                UNWIND $topics AS topic
-                MATCH (t:Topic)<-[:DISCUSSED]-(m:Meeting)
-                WHERE t.name CONTAINS topic
-                RETURN DISTINCT m.id AS id, m.title AS title, m.date AS date,
-                                m.summary AS summary, m.source_id AS source_id
-                ORDER BY m.date DESC
-                LIMIT 10
-                """,
-                topics=topics,
-            )
-            async for record in result:
-                node_ids.append(record["id"])
-                links = _links_suffix(_gmail_link(record.get("source_id")))
-                lines.append(
-                    f"Meeting ({record['date']}): {record['title']}{links} — {record['summary']}"
-                )
+            top_lines, top_ids = await _query_topics_context(session, topics)
+            lines.extend(top_lines)
+            node_ids.extend(top_ids)
 
-        # 4. Decisions. PRODUCED, not DECIDED: `_write_decisions` and every
-        # other reader in graph_client use PRODUCED, so DECIDED matched nothing
-        # and this block returned zero rows against a real graph -- silently,
-        # because an empty result is indistinguishable from "no decisions yet".
-        decisions_res = await session.run(
-            """
-            MATCH (m:Meeting)-[:PRODUCED]->(d:Decision)
-            RETURN DISTINCT d.id AS id, d.text AS text, m.title AS meeting_title,
-                   m.date AS date, m.source_id AS source_id
-            ORDER BY m.date DESC
-            LIMIT 8
-            """
-        )
-        async for record in decisions_res:
-            node_ids.append(record["id"])
-            links = _links_suffix(_gmail_link(record.get("source_id")))
-            lines.append(
-                f"Decision: {record['text']} (Meeting: {record['meeting_title']}{links})"
-            )
+        # 4. Decisions
+        dec_lines, dec_ids = await _query_decisions_context(session)
+        lines.extend(dec_lines)
+        node_ids.extend(dec_ids)
 
         # 5. Facts
         result = await session.run(
@@ -246,6 +474,24 @@ async def assemble_context(
             node_ids.append(record["id"])
             lines.append(f"Fact (confidence {record['confidence']}): {record['text']}")
 
+    # 6. Semantic search over structured chunks (hybrid vector retrieval)
+    if search_meetings is None:
+        try:
+            from meeting_notes.memory import vector
+
+            chunk_hits = await vector.search_similar_chunks(
+                question, limit=4, driver=driver, settings=settings
+            )
+            for hit in chunk_hits:
+                if hit.get("id"):
+                    node_ids.append(hit["id"])
+                title = hit.get("meeting_title") or "Meeting"
+                orig_t = hit.get("original_title")
+                orig = f" (Source: {orig_t})" if orig_t and orig_t != title else ""
+                lines.append(f"Transcript & Discussion Chunk [{title}{orig}]:\n{hit.get('text', '')}")
+        except Exception as exc:  # noqa: BLE001
+            log.warning("retrieval.chunk_search_failed", error=str(exc))
+
     # Semantic search as a fallback: a question sharing no keywords with any
     # meeting still finds the right one by meaning. This is the mechanism
     # behind the "zero keyword overlap" exit criterion.
@@ -257,9 +503,36 @@ async def assemble_context(
     return lines, node_ids
 
 
+def _format_history_context(history: list[dict[str, Any]]) -> str:
+    """Format recent turns into conversational memory context (sliding window of last 4 turns)."""
+    turns: list[str] = []
+    for turn in history[-4:]:
+        role = "User" if turn.get("role") == "user" else "Assistant"
+        text = str(turn.get("text") or turn.get("answer") or "").strip()
+        if text:
+            if len(text) > 500:
+                text = text[:500] + "..."
+            turns.append(f"{role}: {text}")
+    return "\n".join(turns)
+
+
+def _build_query_prompts(
+    question: str, history: list[dict[str, Any]] | None
+) -> tuple[str, str]:
+    """Build entity extraction search prompt and synthesis user prompt with conversation history."""
+    recent_context = _format_history_context(history) if history else ""
+    if not recent_context:
+        return question, question
+
+    search_prompt = f"Previous conversation:\n{recent_context}\n\nCurrent Question: {question}"
+    synth_user = f"Recent conversation context:\n{recent_context}\n\nQuestion: {question}"
+    return search_prompt, synth_user
+
+
 async def full_memory_query(
     question: str,
     *,
+    history: list[dict[str, Any]] | None = None,
     driver: Any = None,
     settings: Settings | None = None,
     chat: Any = None,
@@ -274,7 +547,9 @@ async def full_memory_query(
     settings = settings or get_settings()
     driver = driver or _driver()
 
-    entities = await extract_entities(question, settings=settings, chat=chat)
+    search_prompt, synth_user = _build_query_prompts(question, history)
+
+    entities = await extract_entities(search_prompt, settings=settings, chat=chat)
     lines, node_ids = await assemble_context(
         entities, question, driver=driver, settings=settings, search_meetings=search_meetings
     )
@@ -285,8 +560,9 @@ async def full_memory_query(
         return {"question": question, "answer": NO_CONTEXT_ANSWER, "node_ids": [], "entities": entities}
 
     context = "\n".join(lines)
+
     try:
-        parsed = await _chat(f"{SYNTHESIS_SYSTEM_PREFIX}{context}", question, settings, chat)
+        parsed = await _chat(f"{SYNTHESIS_SYSTEM_PREFIX}{context}", synth_user, settings, chat)
         answer = (
             parsed.get("answer")
             if isinstance(parsed, dict) and parsed.get("answer")
@@ -303,6 +579,19 @@ async def full_memory_query(
             log.warning("retrieval.session_log_failed", error=str(exc))
 
     # Generate progressive follow-up question chips based on retrieved entities and context
+    followups = _generate_followup_questions(entities)
+
+    return {
+        "question": question,
+        "answer": answer,
+        "suggested_followups": followups,
+        "node_ids": node_ids,
+        "entities": entities,
+    }
+
+
+def _generate_followup_questions(entities: dict[str, Any]) -> list[str]:
+    """Generate progressive follow-up question chips based on retrieved entities and context."""
     followups: list[str] = []
     if entities.get("topics"):
         for top in entities["topics"][:2]:
@@ -316,14 +605,62 @@ async def full_memory_query(
             "Who are the main collaborators and owners involved?",
             "What upcoming deadlines are associated with this work?",
         ]
+    return followups[:3]
 
-    return {
-        "question": question,
-        "answer": answer,
-        "suggested_followups": followups[:3],
-        "node_ids": node_ids,
-        "entities": entities,
-    }
+
+async def stream_memory_query(
+    question: str,
+    *,
+    history: list[dict[str, Any]] | None = None,
+    driver: Any = None,
+    settings: Settings | None = None,
+    chat: Any = None,
+    search_meetings: Any = None,
+    log_session: bool = True,
+) -> AsyncIterator[dict[str, Any]]:
+    """Stream token chunks and context for a natural language memory query."""
+    settings = settings or get_settings()
+    driver = driver or _driver()
+
+    search_prompt, synth_user = _build_query_prompts(question, history)
+
+    entities = await extract_entities(search_prompt, settings=settings, chat=chat)
+    lines, node_ids = await assemble_context(
+        entities, question, driver=driver, settings=settings, search_meetings=search_meetings
+    )
+
+    yield {"event": "context", "node_ids": node_ids, "entities": entities}
+
+    if not lines:
+        yield {"event": "token", "delta": NO_CONTEXT_ANSWER}
+        yield {"event": "done", "suggested_followups": []}
+        return
+
+    context = "\n".join(lines)
+
+    try:
+        parsed = await _chat(f"{SYNTHESIS_SYSTEM_PREFIX}{context}", synth_user, settings, chat)
+        answer = (
+            parsed.get("answer")
+            if isinstance(parsed, dict) and parsed.get("answer")
+            else str(parsed)
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("retrieval.synthesis_failed", error=str(exc))
+        answer = NO_CONTEXT_ANSWER
+
+    words = str(answer).split(" ")
+    for i, word in enumerate(words):
+        chunk = word + (" " if i < len(words) - 1 else "")
+        yield {"event": "token", "delta": chunk}
+
+    if log_session:
+        try:
+            await episodic.log_session(question, str(answer), node_ids, driver=driver)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("retrieval.session_log_failed", error=str(exc))
+
+    yield {"event": "done", "suggested_followups": _generate_followup_questions(entities)}
 
 
 async def generate_suggested_questions(
