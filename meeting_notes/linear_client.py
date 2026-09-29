@@ -152,6 +152,129 @@ def linear_priority_from_name(priority: str) -> int:
     return _PRIORITY_MAP.get(priority.strip().lower(), 0)
 
 
+DEV_AGENT_LABEL = "dev-agent"
+MEETING_ACTION_ITEM_LABEL = "meeting-action-item"
+
+_issue_labels_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+
+
+async def list_issue_labels(
+    team_id: str | None = None,
+    *,
+    use_cache: bool = True,
+    settings: Settings | None = None,
+    transport: Transport | None = None,
+) -> list[dict[str, Any]]:
+    """List issue labels available for a team or workspace in Linear, with caching."""
+    import time
+
+    settings = settings or get_settings()
+    team_id = team_id or settings.linear_team_id
+
+    cache_key = team_id or "__global__"
+    now = time.time()
+    if use_cache and cache_key in _issue_labels_cache:
+        cached_time, cached_labels = _issue_labels_cache[cache_key]
+        if now - cached_time < _CACHE_TTL_SECONDS:
+            return cached_labels
+
+    query = """
+    query IssueLabels($teamId: ID) {
+      issueLabels(filter: { team: { id: { eq: $teamId } } }) {
+        nodes {
+          id
+          name
+          color
+        }
+      }
+    }
+    """
+    try:
+        data = await execute_graphql(
+            query, {"teamId": team_id} if team_id else {}, settings=settings, transport=transport
+        )
+        labels: list[dict[str, Any]] = data.get("issueLabels", {}).get("nodes", [])
+        if labels:
+            _issue_labels_cache[cache_key] = (now, labels)
+        return labels
+    except Exception as exc:  # noqa: BLE001 - label lookup resilience
+        log.warning("linear.list_issue_labels_failed", error=str(exc))
+        return []
+
+
+async def resolve_or_create_label_id(
+    name: str,
+    *,
+    team_id: str | None = None,
+    settings: Settings | None = None,
+    transport: Transport | None = None,
+) -> str | None:
+    """Find label ID by name (case-insensitive) or create it if missing."""
+    settings = settings or get_settings()
+    team_id = team_id or settings.linear_team_id
+
+    existing = await list_issue_labels(team_id=team_id, settings=settings, transport=transport)
+    for lbl in existing:
+        if (lbl.get("name") or "").strip().lower() == name.strip().lower():
+            return str(lbl.get("id"))
+
+    mutation = """
+    mutation IssueLabelCreate($input: IssueLabelCreateInput!) {
+      issueLabelCreate(input: $input) {
+        success
+        issueLabel {
+          id
+          name
+        }
+      }
+    }
+    """
+    input_data: dict[str, Any] = {"name": name}
+    if team_id:
+        input_data["teamId"] = team_id
+
+    try:
+        data = await execute_graphql(mutation, {"input": input_data}, settings=settings, transport=transport)
+        created = data.get("issueLabelCreate", {}).get("issueLabel") or {}
+        lbl_id = created.get("id")
+        if lbl_id:
+            cache_key = team_id or "__global__"
+            if cache_key in _issue_labels_cache:
+                _issue_labels_cache[cache_key][1].append(created)
+            return str(lbl_id)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("linear.create_label_failed", name=name, error=str(exc))
+    return None
+
+
+async def _resolve_issue_label_ids(
+    *,
+    labels: list[str] | None,
+    label_ids: list[str] | None,
+    is_engineering_task: bool,
+    team_id: str,
+    settings: Settings,
+    transport: Transport | None,
+) -> list[str]:
+    """Resolve label names and IDs into unique Linear label IDs."""
+    target_labels = list(labels or [])
+    if is_engineering_task and DEV_AGENT_LABEL not in target_labels:
+        target_labels.append(DEV_AGENT_LABEL)
+
+    effective_label_ids = list(label_ids or [])
+    for lbl_name in target_labels:
+        try:
+            resolved_id = await resolve_or_create_label_id(
+                lbl_name, team_id=team_id, settings=settings, transport=transport
+            )
+            if resolved_id and resolved_id not in effective_label_ids:
+                effective_label_ids.append(resolved_id)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("linear.label_resolution_skipped", label=lbl_name, error=str(exc))
+
+    return list(dict.fromkeys(effective_label_ids))
+
+
 async def create_issue(
     title: str,
     *,
@@ -163,11 +286,13 @@ async def create_issue(
     due_date: str | None = None,
     assignee_id: str | None = None,
     label_ids: list[str] | None = None,
+    labels: list[str] | None = None,
+    is_engineering_task: bool = False,
     state_id: str | None = None,
     settings: Settings | None = None,
     transport: Transport | None = None,
 ) -> dict[str, Any]:
-    """Create an issue in Linear, optionally attached to a project or parent issue."""
+    """Create an issue in Linear, optionally attached to a project, parent issue, or labels."""
     settings = settings or get_settings()
     team_id = team_id or settings.linear_team_id
     if not team_id:
@@ -219,8 +344,18 @@ async def create_issue(
         input_data["dueDate"] = due_date
     if assignee_id:
         input_data["assigneeId"] = assignee_id
-    if label_ids:
-        input_data["labelIds"] = label_ids
+
+    effective_label_ids = await _resolve_issue_label_ids(
+        labels=labels,
+        label_ids=label_ids,
+        is_engineering_task=is_engineering_task,
+        team_id=team_id,
+        settings=settings,
+        transport=transport,
+    )
+    if effective_label_ids:
+        input_data["labelIds"] = effective_label_ids
+
     if state_id:
         input_data["stateId"] = state_id
 
@@ -463,7 +598,7 @@ async def list_workflow_states(
             return cached_states
 
     query = """
-    query WorkflowStates($teamId: String) {
+    query WorkflowStates($teamId: ID) {
       workflowStates(filter: { team: { id: { eq: $teamId } } }) {
         nodes {
           id
@@ -618,25 +753,29 @@ async def list_projects(
     return projects
 
 
-async def search_issues(
-    term: str,
+async def list_issues(
     *,
     team_id: str | None = None,
+    label: str | None = None,
+    state_types: list[str] | None = None,
+    first: int = 50,
     settings: Settings | None = None,
     transport: Transport | None = None,
 ) -> list[dict[str, Any]]:
-    """Search issues by query string in Linear."""
+    """List issues from Linear using root issues query with schema-compliant filters."""
     settings = settings or get_settings()
     team_id = team_id or settings.linear_team_id
+
     query = """
-    query IssueSearch($term: String!, $teamId: String) {
-      issueSearch(query: $term, filter: { team: { id: { eq: $teamId } } }, first: 25) {
+    query Issues($filter: IssueFilter, $first: Int) {
+      issues(filter: $filter, first: $first) {
         nodes {
           id
           identifier
           title
           description
           url
+          priority
           state {
             id
             name
@@ -646,8 +785,36 @@ async def search_issues(
       }
     }
     """
-    data = await execute_graphql(
-        query, {"term": term, "teamId": team_id}, settings=settings, transport=transport
-    )
-    issues: list[dict[str, Any]] = data.get("issueSearch", {}).get("nodes", [])
+    filter_dict: dict[str, Any] = {}
+    if team_id:
+        filter_dict["team"] = {"id": {"eq": team_id}}
+    if label:
+        filter_dict["labels"] = {"name": {"eq": label}}
+    if state_types:
+        filter_dict["state"] = {"type": {"in": state_types}}
+
+    variables: dict[str, Any] = {"first": first}
+    if filter_dict:
+        variables["filter"] = filter_dict
+
+    data = await execute_graphql(query, variables, settings=settings, transport=transport)
+    issues: list[dict[str, Any]] = data.get("issues", {}).get("nodes", [])
     return issues
+
+
+async def search_issues(
+    term: str,
+    *,
+    team_id: str | None = None,
+    settings: Settings | None = None,
+    transport: Transport | None = None,
+) -> list[dict[str, Any]]:
+    """Search or list issues in Linear. If term is 'label:<name>', uses schema-compliant label filter."""
+    if term.startswith("label:"):
+        return await list_issues(
+            team_id=team_id,
+            label=term.split(":", 1)[1].strip(),
+            settings=settings,
+            transport=transport,
+        )
+    return await list_issues(team_id=team_id, settings=settings, transport=transport)

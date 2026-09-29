@@ -275,6 +275,9 @@ async def test_workflow_state_resolution_and_caching() -> None:
     ) -> tuple[int, Any]:
         nonlocal call_count
         call_count += 1
+        query = (json_body or {}).get("query", "")
+        # Linear schema comparator requires $teamId: ID, not $teamId: String
+        assert "WorkflowStates($teamId: ID)" in query, f"Expected ID type in query: {query}"
         return 200, {
             "data": {
                 "workflowStates": {
@@ -375,3 +378,184 @@ async def test_create_issue_relation_and_attachment() -> None:
 async def test_close_shared_client() -> None:
     await linear_client.close_shared_client()
     assert linear_client._shared_client is None
+
+
+@pytest.mark.asyncio
+async def test_list_issue_labels_and_resolve_or_create_label() -> None:
+    recorded_queries: list[str] = []
+
+    async def mock_transport(
+        method: str,
+        url: str,
+        headers: dict[str, str],
+        params: dict[str, Any] | None,
+        json_body: dict[str, Any] | None,
+    ) -> tuple[int, Any]:
+        assert json_body is not None
+        query = json_body.get("query", "")
+        recorded_queries.append(query)
+        if "query IssueLabels(" in query:
+            assert "IssueLabels($teamId: ID)" in query
+            return 200, {
+                "data": {
+                    "issueLabels": {
+                        "nodes": [
+                            {"id": "lbl_1", "name": "meeting-action-item", "color": "#112233"},
+                        ]
+                    }
+                }
+            }
+        if "mutation IssueLabelCreate(" in query:
+            name = json_body.get("variables", {}).get("input", {}).get("name")
+            return 200, {
+                "data": {
+                    "issueLabelCreate": {
+                        "success": True,
+                        "issueLabel": {"id": "lbl_created_2", "name": name},
+                    }
+                }
+            }
+        return 400, {"errors": [{"message": "Unknown query"}]}
+
+    settings = Settings(linear_api_key="test_key", linear_team_id="team_lbl_test")
+
+    # 1. Existing label found
+    lbl_id = await linear_client.resolve_or_create_label_id(
+        "meeting-action-item", team_id="team_lbl_test", settings=settings, transport=mock_transport
+    )
+    assert lbl_id == "lbl_1"
+
+    # 2. Non-existent label created via mutation
+    lbl_dev_id = await linear_client.resolve_or_create_label_id(
+        "dev-agent", team_id="team_lbl_test", settings=settings, transport=mock_transport
+    )
+    assert lbl_dev_id == "lbl_created_2"
+
+
+@pytest.mark.asyncio
+async def test_create_issue_with_label_names_and_engineering_flag() -> None:
+    recorded_inputs: list[dict[str, Any]] = []
+
+    async def mock_transport(
+        method: str,
+        url: str,
+        headers: dict[str, str],
+        params: dict[str, Any] | None,
+        json_body: dict[str, Any] | None,
+    ) -> tuple[int, Any]:
+        assert json_body is not None
+        query = json_body.get("query", "")
+        if "query IssueLabels(" in query:
+            return 200, {
+                "data": {
+                    "issueLabels": {
+                        "nodes": [
+                            {"id": "lbl_eng", "name": "dev-agent", "color": "#ff0000"},
+                            {"id": "lbl_action", "name": "meeting-action-item", "color": "#00ff00"},
+                        ]
+                    }
+                }
+            }
+        if "mutation IssueCreate(" in query:
+            inp = json_body.get("variables", {}).get("input", {})
+            recorded_inputs.append(inp)
+            return 200, {
+                "data": {
+                    "issueCreate": {
+                        "success": True,
+                        "issue": {
+                            "id": "iss_lbl_1",
+                            "identifier": "ENG-99",
+                            "title": inp.get("title"),
+                            "url": "https://linear.app/team/issue/ENG-99",
+                            "priority": 2,
+                            "state": {"id": "st_1", "name": "Todo", "type": "unstarted"},
+                        },
+                    }
+                }
+            }
+        return 400, {"errors": [{"message": "Unknown query"}]}
+
+    settings = Settings(linear_api_key="test_key", linear_team_id="team_eng_1")
+
+    # Creating engineering task automatically resolves and includes 'dev-agent' label
+    await linear_client.create_issue(
+        "Implement auth middleware",
+        is_engineering_task=True,
+        settings=settings,
+        transport=mock_transport,
+    )
+    assert len(recorded_inputs) == 1
+    assert recorded_inputs[0]["labelIds"] == ["lbl_eng"]
+
+
+@pytest.mark.asyncio
+async def test_list_issues_with_label_filter() -> None:
+    recorded_variables: list[dict[str, Any]] = []
+
+    async def mock_transport(
+        method: str,
+        url: str,
+        headers: dict[str, str],
+        params: dict[str, Any] | None,
+        json_body: dict[str, Any] | None,
+    ) -> tuple[int, Any]:
+        assert json_body is not None
+        query = json_body.get("query", "")
+        assert "query Issues($filter: IssueFilter" in query
+        vars_dict = json_body.get("variables", {})
+        recorded_variables.append(vars_dict)
+        return 200, {
+            "data": {
+                "issues": {
+                    "nodes": [
+                        {
+                            "id": "iss_dev_1",
+                            "identifier": "ENG-50",
+                            "title": "Autonomous agent task",
+                            "description": "Fix memory leak",
+                            "url": "https://linear.app/team/issue/ENG-50",
+                            "priority": 1,
+                            "state": {"id": "st_todo", "name": "Todo", "type": "unstarted"},
+                        }
+                    ]
+                }
+            }
+        }
+
+    settings = Settings(linear_api_key="test_key", linear_team_id="team_eng_1")
+    issues = await linear_client.list_issues(
+        label="dev-agent",
+        settings=settings,
+        transport=mock_transport,
+    )
+
+    assert len(issues) == 1
+    assert issues[0]["identifier"] == "ENG-50"
+    assert len(recorded_variables) == 1
+    flt = recorded_variables[0].get("filter", {})
+    assert flt["team"]["id"]["eq"] == "team_eng_1"
+    assert flt["labels"]["name"]["eq"] == "dev-agent"
+
+
+@pytest.mark.asyncio
+async def test_linear_opt_in_live_smoke() -> None:
+    """Opt-in live smoke check against real Linear workspace.
+
+    Skipped unless LINEAR_API_KEY and LINEAR_TEAM_ID are set in the environment.
+    Verifies live GraphQL schema compatibility: $teamId: ID and label filtering.
+    """
+    import os
+
+    api_key = os.getenv("LINEAR_API_KEY")
+    team_id = os.getenv("LINEAR_TEAM_ID")
+    if not api_key or not team_id:
+        pytest.skip("LINEAR_API_KEY and LINEAR_TEAM_ID not provided (opt-in smoke check)")
+
+    settings = Settings(linear_api_key=api_key, linear_team_id=team_id)
+    states = await linear_client.list_workflow_states(team_id=team_id, use_cache=False, settings=settings)
+    assert len(states) > 0, "Real Linear API returned 0 states for configured team"
+
+    issues = await linear_client.list_issues(label="dev-agent", settings=settings)
+    assert isinstance(issues, list)
+

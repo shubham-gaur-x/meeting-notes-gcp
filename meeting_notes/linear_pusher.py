@@ -12,6 +12,7 @@ import structlog
 
 from meeting_notes import dedup
 from meeting_notes.config import Settings, get_settings
+from meeting_notes.linear_client import DEV_AGENT_LABEL, MEETING_ACTION_ITEM_LABEL
 from meeting_notes.models import ActionItem, ExtractedMeeting
 from meeting_notes.utils import gmail_thread_url, uuid5_id
 
@@ -235,6 +236,7 @@ async def _create_linear_issue(
 
     description = "\n\n".join(desc_lines)
     parent_id = getattr(action, "parent_id", None)
+    labels = [DEV_AGENT_LABEL] if action.is_engineering_task else [MEETING_ACTION_ITEM_LABEL]
 
     try:
         issue = await create_issue(
@@ -243,6 +245,8 @@ async def _create_linear_issue(
             priority=action.priority,
             parent_id=parent_id,
             due_date=action.due,
+            labels=labels,
+            is_engineering_task=action.is_engineering_task,
             settings=settings,
         )
         linear_id = issue.get("id", "")

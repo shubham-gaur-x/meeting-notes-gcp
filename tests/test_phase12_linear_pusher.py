@@ -81,6 +81,8 @@ async def test_linear_pusher_creates_issues_and_gates_low_confidence() -> None:
     assert len(created_issues) == 1
     assert created_issues[0]["title"] == "Deploy Linear GraphQL client"
     assert created_issues[0]["priority"] == "high"
+    assert created_issues[0]["labels"] == ["meeting-action-item"]
+    assert created_issues[0]["is_engineering_task"] is False
     assert "Engineering Weekly Sync" in created_issues[0]["description"]
     assert "https://linear.app/team/project/cloud-migration" in created_issues[0]["description"]
 
@@ -182,4 +184,53 @@ async def test_linear_pusher_idempotent_skip() -> None:
 
     assert created_ids == ["ENG-EXISTING"]
     assert len(created_issues) == 0
+
+
+@pytest.mark.asyncio
+async def test_linear_pusher_labels_engineering_tasks_for_dev_agent() -> None:
+    """Engineering tasks must receive 'dev-agent' label so agent pickup loop sees them."""
+    created_issues: list[dict[str, Any]] = []
+
+    async def mock_create_issue(**kwargs: Any) -> dict[str, Any]:
+        created_issues.append(kwargs)
+        return {
+            "id": "iss_eng_1",
+            "identifier": "ENG-201",
+            "url": "https://linear.app/team/issue/ENG-201",
+            "state": {"name": "Todo"},
+        }
+
+    settings = Settings(
+        linear_api_key="test_api_key",
+        linear_team_id="team_1",
+        linear_dedup_enabled=False,
+    )
+    meeting = _sample_meeting()
+    meeting.action_items = [
+        ActionItem(
+            task="Refactor database connection pool",
+            owner="Michael Baylard",
+            confidence=0.95,
+            priority="high",
+            is_engineering_task=True,
+        )
+    ]
+
+    async def mock_update(*a: Any, **k: Any) -> None:
+        pass
+
+    created_ids = await linear_pusher.push_action_items_to_linear(
+        meeting.action_items,
+        meeting,
+        source_id="gmail_thread_eng123",
+        settings=settings,
+        create_issue=mock_create_issue,
+        update_linear_info=mock_update,
+    )
+
+    assert created_ids == ["ENG-201"]
+    assert len(created_issues) == 1
+    assert created_issues[0]["labels"] == ["dev-agent"]
+    assert created_issues[0]["is_engineering_task"] is True
+
 
