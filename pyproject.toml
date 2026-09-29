@@ -50,6 +50,7 @@ include = ["meeting_notes*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 # Every test must run with no live GCP, no database, no LLM. v5 achieved this for
 # 363 tests. A test needing live credentials is a broken test.
 # async def tests need no per-test marker.

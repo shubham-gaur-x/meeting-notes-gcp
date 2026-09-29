@@ -9,6 +9,7 @@ the one route whose cost a caller can choose.
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 import json
 from typing import Any
@@ -17,7 +18,7 @@ import structlog
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 
 from api.deps import settings_dep
-from meeting_notes import github_webhook
+from meeting_notes import github_webhook, graph_client
 from meeting_notes.config import Settings, get_settings
 from meeting_notes.graph_client import close_agent_run_on_merge
 
@@ -174,3 +175,90 @@ async def webhook_jira_sync(
 
     result = await jira_sync.sync_open_jira_tickets()
     return {"status": "ok", **result}
+
+
+def is_linear_state_done(state_name: str, state_type: str | None = None) -> bool:
+    """Determine whether a Linear issue state represents completion or cancellation."""
+    st = (state_type or "").strip().lower()
+    sn = (state_name or "").strip().lower()
+    return st in ("completed", "canceled", "cancelled") or sn in (
+        "done",
+        "completed",
+        "closed",
+        "canceled",
+        "cancelled",
+    )
+
+
+def verify_linear_signature(raw_body: bytes, signature: str | None, secret: str) -> bool:
+    """Validate Linear-Signature header using HMAC SHA-256."""
+    if not signature or not secret:
+        return False
+
+    expected = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, signature)
+
+
+@router.post("/linear")
+async def webhook_linear(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    settings: Settings = Depends(settings_dep),
+) -> dict[str, Any]:
+    """Linear webhook event listener.
+
+    Verified via HMAC SHA-256 (Linear-Signature header).
+    Updates ActionItem nodes in Memgraph when Linear issues change state.
+    """
+    secret = settings.linear_webhook_secret.strip()
+    raw = await request.body()
+    sig = request.headers.get("Linear-Signature") or request.headers.get("linear-signature")
+
+    if secret:
+        if not verify_linear_signature(raw, sig, secret):
+            log.warning("webhook.linear.bad_signature")
+            raise HTTPException(status_code=401, detail="bad signature")
+    elif settings.gcp_project_id.strip():
+        log.error("webhook.linear.no_secret_configured")
+        raise HTTPException(
+            status_code=503, detail="LINEAR_WEBHOOK_SECRET not configured"
+        )
+    else:
+        log.warning("webhook.linear.unauthenticated_local")
+
+    try:
+        payload = json.loads(raw or b"{}")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="bad json") from exc
+
+    action = payload.get("action", "")
+    event_type = payload.get("type", "")
+    log.info("webhook.linear.received", linear_action=action, linear_type=event_type)
+
+    if event_type == "Issue":
+        data = payload.get("data") or {}
+        issue_id = data.get("id", "")
+        identifier = data.get("identifier", "")
+        state_data = data.get("state") or {}
+        state_name = state_data.get("name", "")
+        state_type = str(state_data.get("type", "")).lower()
+
+        is_done = is_linear_state_done(state_name, state_type)
+
+        ref = identifier or issue_id
+        if ref and state_name:
+            background_tasks.add_task(
+                graph_client.update_action_linear_status_by_ref,
+                ref,
+                state_name,
+                is_done,
+            )
+            return {
+                "status": "accepted",
+                "linear_event": action,
+                "issue": ref,
+                "state": state_name,
+                "done": is_done,
+            }
+
+    return {"status": "accepted", "linear_event": action, "type": event_type}

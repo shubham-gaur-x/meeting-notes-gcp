@@ -1,22 +1,23 @@
-"""Drain one claimed batch: route each record to the pipeline or jira_sync.
+"""Drain one claimed batch: route each record to the pipeline or jira_sync with bounded concurrency.
 
 Exists so `jobs/pipeline_drain.py` stays thin (CLAUDE.md). `staged_records`
 holds every source in one table (ADR-018); `jira` rows are status
-sync-back, everything else goes through `pipeline.process`.
+sync-back, everything else goes through `pipeline.process` claimed with SKIP LOCKED (ADR-006).
 
-Errors are per-record, not per-batch — carried from v5's
-`asyncio.gather(..., return_exceptions=True)` pattern in `process_new_emails`
-et al. One exploding record must not silently drop every other record queued
-behind it in the same claim.
+Errors are per-record, not per-batch: one exploding record must not silently
+drop every other record queued behind it in the same claim. Bounded concurrency
+via drain_concurrency ensures high throughput without exceeding connection limits.
 """
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from typing import Any
 
 import structlog
 
+from meeting_notes.config import resolve_max_attempts
 from meeting_notes.models import StagedRecord
 from meeting_notes.pipeline import adapter_for
 
@@ -42,31 +43,63 @@ async def _default_sync_jira(payload: dict[str, Any], *, record_id: str) -> bool
     return await sync_one(payload, record_id=record_id)
 
 
+async def _default_record_failure(
+    record_id: str, error: str, max_attempts: int | None = None
+) -> tuple[int, bool, str]:
+    from meeting_notes import db
+
+    return await db.record_drain_failure(record_id, error, max_attempts=max_attempts)
+
+
 async def drain_batch(
     records: list[StagedRecord],
     *,
     process: Any = None,
     sync_jira: Any = None,
+    record_failure: Any = None,
+    concurrency_limit: int = 5,
+    max_attempts: int | None = None,
 ) -> DrainResult:
-    """Route and process every record in a claimed batch."""
+    """Route and process every record in a claimed batch with bounded concurrency."""
     process = process or _default_process
     sync_jira = sync_jira or _default_sync_jira
+    record_failure = record_failure or _default_record_failure
+    eff_max = resolve_max_attempts(max_attempts)
 
+    sem = asyncio.Semaphore(max(1, concurrency_limit))
     result = DrainResult()
-    for record in records:
-        try:
-            if record.source_type == "jira":
-                await sync_jira(record.payload, record_id=record.id)
-            else:
-                await process(record, adapter_for(record.source_type))
-            result.processed += 1
-        except Exception as exc:  # noqa: BLE001 - one bad record must not sink the batch
-            result.errors += 1
-            result.error_details.append(f"{record.id}: {exc}")
-            log.error(
-                "pipeline_drain.record_error",
-                record_id=record.id, source=record.source_type, error=str(exc), exc_info=True,
-            )
+    lock = asyncio.Lock()
+
+    async def _handle_record(record: StagedRecord) -> None:
+        async with sem:
+            try:
+                if record.source_type == "jira":
+                    await sync_jira(record.payload, record_id=record.id)
+                else:
+                    await process(record, adapter_for(record.source_type))
+                async with lock:
+                    result.processed += 1
+            except Exception as exc:  # noqa: BLE001 - one bad record must not sink the batch
+                async with lock:
+                    result.errors += 1
+                    result.error_details.append(f"{record.id}: {exc}")
+                log.error(
+                    "pipeline_drain.record_error",
+                    record_id=record.id, source=record.source_type, error=str(exc), exc_info=True,
+                )
+                try:
+                    await record_failure(
+                        record.id, str(exc), max_attempts=eff_max
+                    )
+                except Exception as rec_exc:
+                    log.error(
+                        "pipeline_drain.record_failure_failed",
+                        record_id=record.id,
+                        error=str(rec_exc),
+                        exc_info=True,
+                    )
+
+    await asyncio.gather(*[_handle_record(r) for r in records])
 
     log.info(
         "pipeline_drain.batch_done",

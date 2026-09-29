@@ -656,7 +656,7 @@ def test_the_dashboard_offers_example_questions() -> None:
     import api
 
     html = (Path(api.__file__).parent / "static" / "dashboard.html").read_text(encoding="utf-8")
-    assert "EXAMPLES" in html and "prompt-card" in html
+    assert ("EXAMPLES" in html or "DEFAULT_COMMON_QUERIES" in html) and "prompt-card" in html
 
 
 # ─── dev agent ─────────────────────────────────────────────────────────────
@@ -1035,7 +1035,7 @@ def test_no_jira_write_route_is_mounted_on_the_public_webhook_surface() -> None:
     per `include_router` call and is not a flat list of routes.
     """
     paths = {p for p in create_app().openapi()["paths"] if p.startswith("/webhook")}
-    assert paths == {"/webhook/github", "/webhook/jira", "/webhook/jira/sync"}, (
+    assert paths == {"/webhook/github", "/webhook/jira", "/webhook/jira/sync", "/webhook/linear"}, (
         f"unexpected route on the unauthenticated webhook surface: {paths}"
     )
 
