@@ -170,6 +170,10 @@ class Settings(BaseSettings):
     api_url: str = ""
     gcs_backup_bucket: str = ""
 
+    # ─── Build Identity ───────────────────────────────────────────────────
+    commit_sha: str = "unknown"
+    build_timestamp: str = "unknown"
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

@@ -132,6 +132,28 @@ async def test_health_reports_degraded_rather_than_failing(app: Any) -> None:
     assert response.json()["status"] in ("ok", "degraded")
 
 
+async def test_version_endpoint_returns_build_identity(app: Any, monkeypatch: Any) -> None:
+    import api.main as main_api
+    from meeting_notes.config import Settings
+
+    monkeypatch.setattr(
+        main_api,
+        "get_settings",
+        lambda: Settings(
+            _env_file=None,
+            commit_sha="abc1234",
+            build_timestamp="2026-09-10T12:00:00Z",
+            gcp_project_id="test"
+        ),
+    )
+    response = await _get(app, "/version")
+    assert response.status_code == 200
+    assert response.json() == {
+        "commit": "abc1234",
+        "timestamp": "2026-09-10T12:00:00Z",
+    }
+
+
 @pytest.mark.parametrize(
     "path",
     [
