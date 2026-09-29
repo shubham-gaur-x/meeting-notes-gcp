@@ -33,7 +33,10 @@ async def find_open_pr(
     """Return {number, html_url} for the first open PR on this branch, or None."""
     import httpx
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    client_kwargs: dict[str, Any] = {"timeout": 30.0}
+    if transport is not None:
+        client_kwargs["transport"] = transport
+    async with httpx.AsyncClient(**client_kwargs) as client:
         resp = await client.get(
             f"https://api.github.com/repos/{owner}/{repo}/pulls",
             params={"head": f"{owner}:{branch}", "state": "open"},

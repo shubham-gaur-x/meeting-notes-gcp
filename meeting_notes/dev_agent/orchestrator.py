@@ -243,7 +243,6 @@ def _resolve_dependencies(overrides: dict[str, Any]) -> _Dependencies:
 async def _run_coding_agent(
     key: str, detail: dict[str, Any], settings: Settings, deps: _Dependencies,
     *, work_dir: str, branch_name: str, dev_backend: str, repo: tuple[str, str],
-    logger: Any,
 ) -> AgentRunResult:
     """Take the ticket from PLANNED to a finished agent run."""
     owner, name = repo
@@ -520,7 +519,6 @@ async def process_ticket(
         result = await _run_coding_agent(
             key, detail, settings, deps, work_dir=work_dir,
             branch_name=branch_name, dev_backend=dev_backend, repo=repo,
-            logger=bound_log,
         )
 
         # The PR check gates the outcome, not result.success: a run can push a

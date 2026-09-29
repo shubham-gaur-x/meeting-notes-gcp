@@ -27,7 +27,7 @@ STATIC = Path(__file__).parent / "static"
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
+async def lifespan(_app: FastAPI):  # type: ignore[no-untyped-def]
     configure_logging()
     settings = get_settings()
     log.info("api.startup", backend=settings.llm_backend, memgraph=settings.memgraph_host)
