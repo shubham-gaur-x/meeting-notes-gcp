@@ -93,6 +93,12 @@ async def _post(app: Any, path: str, **kw: Any) -> httpx.Response:
         return await client.post(path, **kw)
 
 
+async def _delete(app: Any, path: str, **kw: Any) -> httpx.Response:
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        return await client.delete(path, **kw)
+
+
 @pytest.fixture(autouse=True)
 def stub_graph(monkeypatch: Any) -> None:
     """Replace every graph read with a shaped stub, so routes are driven for
@@ -656,7 +662,7 @@ def test_the_dashboard_offers_example_questions() -> None:
     import api
 
     html = (Path(api.__file__).parent / "static" / "dashboard.html").read_text(encoding="utf-8")
-    assert "EXAMPLES" in html and "prompt-card" in html
+    assert ("EXAMPLES" in html or "DEFAULT_COMMON_QUERIES" in html) and "prompt-card" in html
 
 
 # ─── dev agent ─────────────────────────────────────────────────────────────
@@ -1035,7 +1041,7 @@ def test_no_jira_write_route_is_mounted_on_the_public_webhook_surface() -> None:
     per `include_router` call and is not a flat list of routes.
     """
     paths = {p for p in create_app().openapi()["paths"] if p.startswith("/webhook")}
-    assert paths == {"/webhook/github", "/webhook/jira", "/webhook/jira/sync"}, (
+    assert paths == {"/webhook/github", "/webhook/jira", "/webhook/jira/sync", "/webhook/linear"}, (
         f"unexpected route on the unauthenticated webhook surface: {paths}"
     )
 
@@ -1357,3 +1363,761 @@ async def test_a_configured_policy_file_is_still_enforced(
     )
     response = await _get(app, "/graph/meetings/recent")
     assert response.status_code == 401
+
+
+async def test_resolve_person_review_endpoint(app: Any, monkeypatch: Any) -> None:
+    captured: dict[str, Any] = {}
+
+    async def mock_resolve(
+        review_id: str, name: str, email: str | None = None, driver: Any = None
+    ) -> dict[str, Any]:
+        captured.update({"review_id": review_id, "name": name, "email": email})
+        return {"name": name, "email": email or "", "meeting_id": "m1"}
+
+    monkeypatch.setattr(graph_client, "resolve_person_review", mock_resolve)
+    resp = await _post(
+        app,
+        "/review/people/rev-123/resolve",
+        json={"name": "Alice Smith", "email": "alice@example.com"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "ok"
+    assert data["person"]["name"] == "Alice Smith"
+    assert captured["review_id"] == "rev-123"
+    assert captured["name"] == "Alice Smith"
+    assert captured["email"] == "alice@example.com"
+
+
+async def test_delete_person_review_endpoint(app: Any, monkeypatch: Any) -> None:
+    captured: dict[str, Any] = {}
+
+    async def mock_delete(review_id: str, delete_actions: bool = True, driver: Any = None) -> bool:
+        captured.update({"review_id": review_id, "delete_actions": delete_actions})
+        return True
+
+    monkeypatch.setattr(graph_client, "delete_person_review", mock_delete)
+    resp = await _delete(app, "/review/people/rev-123?delete_actions=true")
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "ok", "deleted": True}
+    assert captured["review_id"] == "rev-123"
+    assert captured["delete_actions"] is True
+
+
+async def test_add_meeting_attendee_endpoint(app: Any, monkeypatch: Any) -> None:
+    captured: dict[str, Any] = {}
+
+    async def mock_add(meeting_id: str, name: str, email: str, driver: Any = None) -> dict[str, Any]:
+        captured.update({"meeting_id": meeting_id, "name": name, "email": email})
+        return {"name": name, "email": email, "meeting_id": meeting_id}
+
+    monkeypatch.setattr(graph_client, "add_meeting_attendee", mock_add)
+    resp = await _post(
+        app,
+        "/review/meeting/meet-456/attendee",
+        json={"name": "Bob Builder", "email": "bob@example.com"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "ok"
+    assert data["attendee"]["email"] == "bob@example.com"
+    assert captured["meeting_id"] == "meet-456"
+    assert captured["name"] == "Bob Builder"
+    assert captured["email"] == "bob@example.com"
+
+
+async def test_contacts_directory_endpoint(app: Any, monkeypatch: Any) -> None:
+    from meeting_notes import person_resolver
+
+    monkeypatch.setattr(
+        person_resolver,
+        "get_contact_directory_list",
+        lambda: [{"name": "Alice Smith", "email": "alice@example.com"}],
+    )
+    resp = await _get(app, "/graph/contacts")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["count"] == 1
+    contact = data["contacts"][0]
+    assert contact["name"] == "Alice Smith"
+    assert contact["email"] == "alice@example.com"
+    assert "organization" in contact
+    assert "role" in contact
+
+
+@pytest.mark.asyncio
+async def test_resolve_person_review_no_email_synthesis() -> None:
+    """Invariant: resolve_person_review must NEVER synthesize email, keying by name."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from meeting_notes import graph_client
+    from meeting_notes.utils import uuid5_id
+
+    mock_driver = MagicMock()
+    mock_session = AsyncMock()
+    mock_driver.session.return_value.__aenter__.return_value = mock_session
+
+    class FakeResult:
+        def __init__(self, items: list[dict[str, Any]]) -> None:
+            self.items = items
+
+        def __aiter__(self):
+            async def gen():
+                for item in self.items:
+                    yield item
+            return gen()
+
+    expected_person_id = uuid5_id("person", "name:carol danvers")
+    executed_queries: list[str] = []
+    query_params: list[dict[str, Any]] = []
+
+    def record_run(query: str, **kwargs: Any) -> Any:
+        executed_queries.append(query)
+        query_params.append(kwargs)
+        if "MERGE (p:Person" in query:
+            return FakeResult([{
+                "person_id": expected_person_id,
+                "name": "Carol Danvers",
+                "email": None,
+                "meeting_id": "meet-1",
+            }])
+        else:
+            return FakeResult([{
+                "review_id": "rev-999",
+                "old_name": "Carol Danvers",
+                "meeting_id": "meet-1",
+                "title": "Review",
+            }])
+
+    mock_session.run = AsyncMock(side_effect=record_run)
+
+    result = await graph_client.resolve_person_review(
+        review_id="rev-999",
+        name="Carol Danvers",
+        email=None,
+        driver=mock_driver,
+    )
+
+    assert result["person_id"] == expected_person_id
+    assert result["email"] is None
+
+    # Assert exactly two queries: find meeting review and MERGE person
+    assert len(executed_queries) == 2
+    for q in executed_queries:
+        assert "toLower(p.name)" not in q, "Must never attempt to guess/borrow email from same-named Person"
+
+    merge_params = [p for p in query_params if "person_id" in p][0]
+    assert merge_params["email"] is None
+    assert merge_params["person_id"] == expected_person_id
+
+
+@pytest.mark.asyncio
+async def test_resolve_person_review_does_not_borrow_existing_person_email() -> None:
+    """Verify that resolving a person review without email never borrows an existing Person node's email."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from meeting_notes import graph_client
+    from meeting_notes.utils import uuid5_id
+
+    mock_driver = MagicMock()
+    mock_session = AsyncMock()
+    mock_driver.session.return_value.__aenter__.return_value = mock_session
+
+    class FakeResult:
+        def __init__(self, items: list[dict[str, Any]]) -> None:
+            self.items = items
+
+        def __aiter__(self):
+            async def gen():
+                for item in self.items:
+                    yield item
+            return gen()
+
+    expected_person_id = uuid5_id("person", "name:alex mercer")
+    executed_queries: list[str] = []
+    query_params: list[dict[str, Any]] = []
+
+    def record_run(query: str, **kwargs: Any) -> Any:
+        executed_queries.append(query)
+        query_params.append(kwargs)
+        if "MERGE (p:Person" in query:
+            return FakeResult([{
+                "person_id": expected_person_id,
+                "name": "Alex Mercer",
+                "email": None,
+                "meeting_id": "meet-2",
+            }])
+        return FakeResult([{
+            "review_id": "rev-100",
+            "old_name": "Alex Mercer",
+            "meeting_id": "meet-2",
+            "title": "Review 2",
+        }])
+
+    mock_session.run = AsyncMock(side_effect=record_run)
+
+    result = await graph_client.resolve_person_review(
+        review_id="rev-100",
+        name="Alex Mercer",
+        email=None,
+        driver=mock_driver,
+    )
+
+    assert result["person_id"] == expected_person_id
+    assert result["email"] is None
+    # No query should search for existing persons to copy their email
+    for q in executed_queries:
+        assert "p.email IS NOT NULL" not in q
+        assert "coalesce($email, p.email)" not in q
+
+
+@pytest.mark.asyncio
+async def test_add_meeting_attendee_no_email_synthesis() -> None:
+    """Invariant: add_meeting_attendee must NEVER synthesize email, keying by name."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from meeting_notes import graph_client
+    from meeting_notes.utils import uuid5_id
+
+    mock_driver = MagicMock()
+    mock_session = AsyncMock()
+    mock_driver.session.return_value.__aenter__.return_value = mock_session
+
+    class FakeResult:
+        def __init__(self, items: list[dict[str, Any]]) -> None:
+            self.items = items
+
+        def __aiter__(self):
+            async def gen():
+                for item in self.items:
+                    yield item
+            return gen()
+
+    expected_person_id = uuid5_id("person", "name:alex mercer")
+    executed_queries: list[str] = []
+    query_params: list[dict[str, Any]] = []
+
+    def record_run(query: str, **kwargs: Any) -> Any:
+        executed_queries.append(query)
+        query_params.append(kwargs)
+        return FakeResult([{
+            "person_id": expected_person_id,
+            "name": "Alex Mercer",
+            "email": None,
+            "meeting_id": "meet-123",
+        }])
+
+    mock_session.run = AsyncMock(side_effect=record_run)
+
+    result = await graph_client.add_meeting_attendee(
+        meeting_id="meet-123",
+        name="Alex Mercer",
+        email=None,
+        driver=mock_driver,
+    )
+
+    assert result["person_id"] == expected_person_id
+    assert result["email"] is None
+
+    # Verify query semantics: CASE WHEN guard preserves verified emails without borrowing
+    assert len(executed_queries) == 1
+    q = executed_queries[0]
+    assert "CASE WHEN $email IS NOT NULL THEN $email ELSE p.email END" in q
+    assert "coalesce($email, p.email)" not in q
+
+    params = query_params[0]
+    assert params["email"] is None
+    assert params["person_id"] == expected_person_id
+
+
+@pytest.mark.asyncio
+async def test_add_meeting_attendee_with_verified_email() -> None:
+    """Verify add_meeting_attendee when explicit verified email is provided."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from meeting_notes import graph_client
+    from meeting_notes.utils import uuid5_id
+
+    mock_driver = MagicMock()
+    mock_session = AsyncMock()
+    mock_driver.session.return_value.__aenter__.return_value = mock_session
+
+    class FakeResult:
+        def __init__(self, items: list[dict[str, Any]]) -> None:
+            self.items = items
+
+        def __aiter__(self):
+            async def gen():
+                for item in self.items:
+                    yield item
+            return gen()
+
+    expected_person_id = uuid5_id("person", "alex.mercer@example.com")
+    query_params: list[dict[str, Any]] = []
+
+    def record_run(query: str, **kwargs: Any) -> Any:
+        query_params.append(kwargs)
+        return FakeResult([{
+            "person_id": expected_person_id,
+            "name": "Alex Mercer",
+            "email": "alex.mercer@example.com",
+            "meeting_id": "meet-123",
+        }])
+
+    mock_session.run = AsyncMock(side_effect=record_run)
+
+    result = await graph_client.add_meeting_attendee(
+        meeting_id="meet-123",
+        name="Alex Mercer",
+        email="alex.mercer@example.com",
+        driver=mock_driver,
+    )
+
+    assert result["person_id"] == expected_person_id
+    assert result["email"] == "alex.mercer@example.com"
+    assert query_params[0]["email"] == "alex.mercer@example.com"
+    assert query_params[0]["person_id"] == expected_person_id
+
+
+async def test_add_attendee_endpoint_without_email(app: Any, monkeypatch: Any) -> None:
+    """Verify POST /review/meeting/{meeting_id}/attendee succeeds when email is omitted."""
+    from meeting_notes import graph_client
+    from meeting_notes.utils import uuid5_id
+
+    captured: dict[str, Any] = {}
+
+    async def mock_add(
+        meeting_id: str, name: str, email: str | None = None, driver: Any = None
+    ) -> dict[str, Any]:
+        captured.update({"meeting_id": meeting_id, "name": name, "email": email})
+        return {
+            "person_id": uuid5_id("person", f"name:{name.lower()}"),
+            "name": name,
+            "email": email,
+            "meeting_id": meeting_id,
+        }
+
+    monkeypatch.setattr(graph_client, "add_meeting_attendee", mock_add)
+    resp = await _post(
+        app,
+        "/review/meeting/meet-789/attendee",
+        json={"name": "Alex Mercer"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "ok"
+    assert data["attendee"]["email"] is None
+    assert captured["meeting_id"] == "meet-789"
+    assert captured["name"] == "Alex Mercer"
+    assert captured["email"] is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_person_review_second_call_preserves_verified_email() -> None:
+    """Verify that a second resolve call with email=None preserves a previously verified email."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from meeting_notes import graph_client
+    from meeting_notes.utils import uuid5_id
+
+    mock_driver = MagicMock()
+    mock_session = AsyncMock()
+    mock_driver.session.return_value.__aenter__.return_value = mock_session
+
+    class FakeResult:
+        def __init__(self, items: list[dict[str, Any]]) -> None:
+            self.items = items
+
+        def __aiter__(self):
+            async def gen():
+                for item in self.items:
+                    yield item
+            return gen()
+
+    person_state: dict[str, Any] = {
+        "id": uuid5_id("person", "alex.mercer@example.com"),
+        "name": "Alex Mercer",
+        "email": "alex.mercer@example.com",
+    }
+
+    def record_run(query: str, **kwargs: Any) -> Any:
+        if "MERGE (p:Person" in query:
+            # Emulate Cypher ON MATCH: CASE WHEN $email IS NOT NULL THEN $email ELSE p.email END
+            if kwargs.get("email") is not None:
+                person_state["email"] = kwargs["email"]
+            return FakeResult([{
+                "person_id": person_state["id"],
+                "name": person_state["name"],
+                "email": person_state["email"],
+                "meeting_id": kwargs.get("meeting_id", "m-1"),
+            }])
+        return FakeResult([{
+            "review_id": kwargs.get("review_id", "rev-1"),
+            "old_name": "Alex Mercer",
+            "meeting_id": "m-1",
+            "title": "Planning",
+        }])
+
+    mock_session.run = AsyncMock(side_effect=record_run)
+
+    # First call: resolved with verified email
+    res1 = await graph_client.resolve_person_review(
+        review_id="rev-1",
+        name="Alex Mercer",
+        email="alex.mercer@example.com",
+        driver=mock_driver,
+    )
+    assert res1["email"] == "alex.mercer@example.com"
+
+    # Second call for the same person, but caller provides email=None
+    res2 = await graph_client.resolve_person_review(
+        review_id="rev-2",
+        name="Alex Mercer",
+        email=None,
+        driver=mock_driver,
+    )
+    assert (
+        res2["email"] == "alex.mercer@example.com"
+    ), "Must NOT null out or clobber verified email on re-resolution"
+
+
+@pytest.mark.asyncio
+async def test_add_meeting_attendee_second_call_preserves_verified_email() -> None:
+    """Verify that a second add call with email=None preserves a previously verified email."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from meeting_notes import graph_client
+    from meeting_notes.utils import uuid5_id
+
+    mock_driver = MagicMock()
+    mock_session = AsyncMock()
+    mock_driver.session.return_value.__aenter__.return_value = mock_session
+
+    class FakeResult:
+        def __init__(self, items: list[dict[str, Any]]) -> None:
+            self.items = items
+
+        def __aiter__(self):
+            async def gen():
+                for item in self.items:
+                    yield item
+            return gen()
+
+    person_state: dict[str, Any] = {
+        "id": uuid5_id("person", "alex.mercer@example.com"),
+        "name": "Alex Mercer",
+        "email": "alex.mercer@example.com",
+    }
+
+    def record_run(query: str, **kwargs: Any) -> Any:
+        if kwargs.get("email") is not None:
+            person_state["email"] = kwargs["email"]
+        return FakeResult([{
+            "person_id": person_state["id"],
+            "name": person_state["name"],
+            "email": person_state["email"],
+            "meeting_id": kwargs.get("meeting_id", "m-1"),
+        }])
+
+    mock_session.run = AsyncMock(side_effect=record_run)
+
+    res = await graph_client.add_meeting_attendee(
+        meeting_id="m-2",
+        name="Alex Mercer",
+        email=None,
+        driver=mock_driver,
+    )
+    assert (
+        res["email"] == "alex.mercer@example.com"
+    ), "Must NOT null out verified email when added without email"
+
+
+def test_extractor_repair_date_fallback_preservation() -> None:
+    """Verify that repair() preserves date fallback when ctx date is empty or None."""
+    from datetime import UTC, datetime
+
+    from meeting_notes.extractor import repair
+
+    today = datetime.now(UTC).strftime("%Y-%m-%d")
+
+    # Empty string in context date
+    data1 = {"title": "Sprint Planning", "date": None}
+    repaired1 = repair(data1, context={"date": ""})
+    assert repaired1["date"] == today
+
+    # None in context date
+    data2 = {"title": "Architecture Review", "date": "null"}
+    repaired2 = repair(data2, context={"date": None})
+    assert repaired2["date"] == today
+
+
+def test_initials_matching_single_and_ambiguous() -> None:
+    """Verify that unique initials resolve, while ambiguous multi-person initials route to review."""
+    from meeting_notes.person_resolver import Roster, resolve
+
+    known_single = [
+        {"name": "Alex Mercer", "email": "alex@example.com", "tracked": False},
+        {"name": "Diana Prince", "email": "diana@example.com", "tracked": False},
+    ]
+
+    # Single match resolves
+    r_single = resolve({"name": "AM", "email": None}, roster=Roster([]), known_people=known_single)
+    assert r_single.status == "resolved"
+    assert r_single.name == "Alex Mercer"
+    assert r_single.email == "alex@example.com"
+    assert r_single.reason == "person-initials"
+
+    # Ambiguous initials (Alex Mercer and Alice Miller both have initials "AM") route to review
+    known_ambiguous = [
+        {"name": "Alex Mercer", "email": "alex@example.com", "tracked": False},
+        {"name": "Alice Miller", "email": "alice@example.com", "tracked": False},
+    ]
+    r_ambiguous = resolve({"name": "AM", "email": None}, roster=Roster([]), known_people=known_ambiguous)
+    assert r_ambiguous.status == "review"
+    assert r_ambiguous.reason == "ambiguous-initials"
+
+
+def test_person_resolver_roster_load_failure_logs_warning(monkeypatch: Any) -> None:
+    """Verify that an invalid roster path logs structured warning instead of silent swallow."""
+    from meeting_notes import person_resolver
+
+    person_resolver.reset_roster_cache()
+    warnings: list[str] = []
+
+    def mock_warning(event: str, **kwargs: Any) -> None:
+        warnings.append(event)
+
+    monkeypatch.setattr(person_resolver.log, "warning", mock_warning)
+    monkeypatch.setattr(person_resolver, "CONTACT_PROFILES", {})
+
+    def bad_load(path: Any) -> Any:
+        raise OSError("Permission denied on roster file")
+
+    monkeypatch.setattr(person_resolver, "load_roster", bad_load)
+
+    class FakeSettings:
+        person_roster_path = "/bad/roster.json"
+
+    monkeypatch.setattr("meeting_notes.config.get_settings", lambda: FakeSettings())
+
+    res = person_resolver.resolve_to_full_name("Unknown Colleague")
+    assert res == "Unknown Colleague"
+    assert "person_resolver.roster_load_failed" in warnings
+    person_resolver.reset_roster_cache()
+
+
+def test_roster_loaded_flag_prevents_redundant_load_retries(monkeypatch: Any) -> None:
+    """Verify that _ROSTER_LOADED flag prevents repeated filesystem/config loads on empty roster."""
+    from meeting_notes import person_resolver
+
+    load_calls = 0
+
+    def mock_load(path: Any) -> Any:
+        nonlocal load_calls
+        load_calls += 1
+        return person_resolver.Roster([])
+
+    person_resolver.reset_roster_cache()
+    monkeypatch.setattr(person_resolver, "load_roster", mock_load)
+
+    class FakeSettings:
+        person_roster_path = "/valid/empty_roster.json"
+
+    monkeypatch.setattr("meeting_notes.config.get_settings", lambda: FakeSettings())
+
+    # First call loads once
+    person_resolver._ensure_roster_loaded()
+    assert load_calls == 1
+
+    # Second and third calls must NOT re-attempt load even though CONTACT_PROFILES is empty
+    person_resolver._ensure_roster_loaded()
+    person_resolver._ensure_roster_loaded()
+    assert load_calls == 1
+    person_resolver.reset_roster_cache()
+
+
+def test_resolve_to_full_name_ambiguity_gating() -> None:
+    """Verify resolve_to_full_name preserves raw mention when nickname collides across contacts."""
+    from meeting_notes import person_resolver
+    from meeting_notes.person_resolver import ContactProfile
+
+    person_resolver.reset_roster_cache()
+    p1 = ContactProfile(full_name="Alex Mercer", email="alex@example.com", nicknames=["Al"])
+    p2 = ContactProfile(full_name="Alice Miller", email="alice@example.com", nicknames=["Al"])
+    person_resolver.CONTACT_PROFILES["alex@example.com"] = p1
+    person_resolver.CONTACT_PROFILES["alice@example.com"] = p2
+
+    # Colliding nickname "Al" must NOT guess; it must return the raw mention "Al"
+    res = person_resolver.resolve_to_full_name("Al")
+    assert res == "Al", "Ambiguous nickname collision must return raw mention, not guess first"
+
+    # Unique mention resolves cleanly
+    res_unique = person_resolver.resolve_to_full_name("Alex Mercer")
+    assert res_unique == "Alex Mercer"
+    person_resolver.reset_roster_cache()
+
+
+def test_initials_matching_preempts_fuzzy_sequence_matching() -> None:
+    """Verify that 2-3 letter initials route to ambiguous-initials before fuzzy name matching."""
+    from meeting_notes.person_resolver import Roster, resolve
+
+    # Known people where fuzzy sequence matcher might yield partial ratio on short token
+    known = [
+        {"name": "Adam Miller", "email": "adam@example.com", "tracked": False},
+        {"name": "Alex Mercer", "email": "alex@example.com", "tracked": False},
+    ]
+
+    # "AM" matches initials for both Adam Miller and Alex Mercer -> routes to ambiguous-initials
+    res = resolve({"name": "AM", "email": None}, roster=Roster([]), known_people=known)
+    assert res.status == "review"
+    assert res.reason == "ambiguous-initials", "Initials check must run before fuzzy matching on short tokens"
+
+
+def test_expand_contact_mentions() -> None:
+    """Verify expand_contact_mentions expands full names, emails, and aliases."""
+    from meeting_notes import person_resolver
+    from meeting_notes.person_resolver import ContactProfile
+
+    person_resolver.reset_roster_cache()
+    p = ContactProfile(
+        full_name="Alex Mercer",
+        email="alex@example.com",
+        nicknames=["Lex"],
+        initials=["AM"],
+    )
+    person_resolver.CONTACT_PROFILES["alex@example.com"] = p
+
+    expanded = person_resolver.expand_contact_mentions(["Lex"])
+    assert "Alex Mercer" in expanded
+    assert "alex@example.com" in expanded
+    assert "Lex" in expanded
+    assert "AM" in expanded
+    person_resolver.reset_roster_cache()
+
+
+def test_expand_contact_mentions_ambiguity_gating() -> None:
+    """Verify expand_contact_mentions does NOT expand ambiguous mentions across multiple contacts."""
+    from meeting_notes import person_resolver
+    from meeting_notes.person_resolver import ContactProfile
+
+    person_resolver.reset_roster_cache()
+    p1 = ContactProfile(
+        full_name="Alex Mercer",
+        email="alex@example.com",
+        nicknames=["Al"],
+        initials=["AM"],
+    )
+    p2 = ContactProfile(
+        full_name="Alice Miller",
+        email="alice@example.com",
+        nicknames=["Al"],
+        initials=["AM"],
+    )
+    person_resolver.CONTACT_PROFILES["alex@example.com"] = p1
+    person_resolver.CONTACT_PROFILES["alice@example.com"] = p2
+
+    # "Al" is ambiguous across both Alex and Alice -> must NOT expand aliases of either
+    expanded = person_resolver.expand_contact_mentions(["Al"])
+    assert expanded == ["Al"]
+    assert "alex@example.com" not in expanded
+    assert "alice@example.com" not in expanded
+    person_resolver.reset_roster_cache()
+
+
+def test_register_roster_contact_duplicate_email_ignored() -> None:
+    """Verify that registering a second contact with an existing email logs warning and does not clobber."""
+    from meeting_notes import person_resolver
+    from meeting_notes.person_resolver import _register_roster_contact
+
+    person_resolver.reset_roster_cache()
+    _register_roster_contact("Primary Person", "test@example.com", [], {})
+    assert person_resolver.CONTACT_PROFILES["test@example.com"].full_name == "Primary Person"
+
+    # Attempt to register duplicate with differing name
+    _register_roster_contact("Imposter Person", "test@example.com", [], {})
+    assert person_resolver.CONTACT_PROFILES["test@example.com"].full_name == "Primary Person"
+    person_resolver.reset_roster_cache()
+
+
+def test_gitignore_protects_roster_secrets() -> None:
+    """Verify that .gitignore excludes roster json files while preserving example templates."""
+    import subprocess
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parent.parent
+    check_ignored = subprocess.run(
+        ["git", "check-ignore", "roster.json", "company_roster.json"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+    )
+    assert "roster.json" in check_ignored.stdout
+    assert "company_roster.json" in check_ignored.stdout
+
+    # Verify negation rule: *roster*.example.json is NOT ignored
+    check_example = subprocess.run(
+        ["git", "check-ignore", "roster.example.json", "company_roster.example.json"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+    )
+    assert check_example.returncode != 0
+    assert "roster.example.json" not in check_example.stdout
+
+
+def test_resolve_attendees_drops_junk_speakers_from_both_queues() -> None:
+    """Verify that resolve_attendees excludes junk placeholder speakers from both resolved and reviews."""
+    from meeting_notes.models import Attendee
+    from meeting_notes.person_resolver import Roster, resolve_attendees
+
+    attendees = [
+        Attendee(name="Speaker 1", role="attendee", email=None),
+        Attendee(name="Unknown", role="attendee", email=None),
+        Attendee(name="Alex Mercer", role="attendee", email="alex@example.com"),
+    ]
+    resolved, reviews = resolve_attendees(attendees, roster=Roster([]))
+    resolved_names = [r.name for r in resolved]
+    review_names = [r.name for r in reviews]
+
+    assert "Alex Mercer" in resolved_names
+    assert "Speaker 1" not in resolved_names
+    assert "Speaker 1" not in review_names
+    assert "Unknown" not in resolved_names
+    assert "Unknown" not in review_names
+
+
+@pytest.mark.asyncio
+async def test_add_meeting_attendee_coalesce_preserves_existing_name() -> None:
+    """Verify that add_meeting_attendee preserves existing Person name via coalesce(p.name, $name)."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from meeting_notes import graph_client
+
+    mock_driver = MagicMock()
+    mock_session = AsyncMock()
+    mock_driver.session.return_value.__aenter__.return_value = mock_session
+
+    executed_queries: list[str] = []
+
+    def record_run(query: str, **kwargs: Any) -> Any:
+        executed_queries.append(query)
+
+        class FakeResult:
+            def __aiter__(self):
+                async def gen():
+                    yield {"person_id": "p-1", "name": "Alex Mercer", "email": None, "meeting_id": "m-1"}
+                return gen()
+
+        return FakeResult()
+
+    mock_session.run = AsyncMock(side_effect=record_run)
+    await graph_client.add_meeting_attendee("m-1", "Al Mercer", None, driver=mock_driver)
+    merge_query = executed_queries[0]
+    assert "ON MATCH SET p.name = coalesce(p.name, $name)" in merge_query
+
+
+
+
+
+
+

@@ -670,6 +670,98 @@ async def update_action_jira_key(action_id: str, jira_key: str, driver: Any | No
         )
 
 
+async def update_action_linear_info(
+    action_id: str,
+    linear_id: str,
+    linear_identifier: str,
+    linear_url: str,
+    linear_state: str = "Todo",
+    driver: Any | None = None,
+) -> None:
+    """Record filed Linear issue details on the ActionItem."""
+    driver = driver or get_driver()
+    async with driver.session() as session:
+        await session.run(
+            """
+            MATCH (a:ActionItem {id: $id})
+            SET a.linear_id = $linear_id,
+                a.linear_identifier = $linear_identifier,
+                a.linear_url = $linear_url,
+                a.linear_state = $linear_state
+            """,
+            id=action_id,
+            linear_id=linear_id,
+            linear_identifier=linear_identifier,
+            linear_url=linear_url,
+            linear_state=linear_state,
+        )
+
+
+async def update_action_linear_state(
+    action_id: str,
+    linear_state: str,
+    done: bool = False,
+    driver: Any | None = None,
+) -> None:
+    """Update the linear_state and done flag on the ActionItem."""
+    driver = driver or get_driver()
+    async with driver.session() as session:
+        await session.run(
+            """
+            MATCH (a:ActionItem {id: $id})
+            SET a.linear_state = $linear_state,
+                a.done = $done
+            """,
+            id=action_id,
+            linear_state=linear_state,
+            done=done,
+        )
+
+
+async def update_action_linear_status_by_ref(
+    linear_ref: str,
+    linear_state: str,
+    done: bool = False,
+    driver: Any | None = None,
+) -> bool:
+    """Update linear_state and done flag on ActionItem matching linear_id or linear_identifier."""
+    driver = driver or get_driver()
+    async with driver.session() as session:
+        result = await session.run(
+            """
+            MATCH (a:ActionItem)
+            WHERE a.linear_id = $linear_ref OR a.linear_identifier = $linear_ref
+            SET a.linear_state = $linear_state,
+                a.done = $done
+            RETURN a.id AS id
+            """,
+            linear_ref=linear_ref,
+            linear_state=linear_state,
+            done=done,
+        )
+        return bool([r async for r in result])
+
+
+async def link_action_linear_parent(
+    parent_linear_ref: str, child_action_id: str, driver: Any | None = None
+) -> bool:
+    """MERGE `(parent)-[:PARENT_OF]->(child)` where parent is identified by linear_id or linear_identifier."""
+    driver = driver or get_driver()
+    async with driver.session() as session:
+        result = await session.run(
+            """
+            MATCH (parent:ActionItem)
+            WHERE parent.linear_id = $parent_ref OR parent.linear_identifier = $parent_ref
+            MATCH (child:ActionItem {id: $child_id})
+            MERGE (parent)-[:PARENT_OF]->(child)
+            RETURN child.id AS id
+            """,
+            parent_ref=parent_linear_ref,
+            child_id=child_action_id,
+        )
+        return bool([r async for r in result])
+
+
 async def get_open_actions_for_owner(
     owner_email: str | None = None,
     *,
@@ -677,14 +769,7 @@ async def get_open_actions_for_owner(
     meeting_id: str | None = None,
     driver: Any | None = None,
 ) -> list[dict[str, Any]]:
-    """Same-owner open items, the dedup candidate set jira_pusher scores against.
-
-    `exclude_id` matters: by the time jira_pusher runs, upsert_meeting_graph
-    has already written every action item in the meeting, including the one
-    currently being evaluated. Without excluding it, an item can match itself
-    at similarity 1.0 and link MENTIONED_IN to its own node (v5 excluded this
-    for the same reason, via a.id <> $exclude_id).
-    """
+    """Same-owner open items, the dedup candidate set jira_pusher and linear_pusher score against."""
     driver = driver or get_driver()
     async with driver.session() as session:
         if owner_email:
@@ -692,7 +777,10 @@ async def get_open_actions_for_owner(
                 """
                 MATCH (a:ActionItem)-[:ASSIGNED_TO]->(p:Person {email: $email})
                 WHERE coalesce(a.done, false) = false AND a.id <> $exclude_id
-                RETURN a.id AS id, a.task AS task, a.jira_key AS jira_key, a.embedding AS embedding
+                RETURN a.id AS id, a.task AS task, a.jira_key AS jira_key,
+                       a.linear_id AS linear_id, a.linear_identifier AS linear_identifier,
+                       a.linear_url AS linear_url, a.linear_state AS linear_state,
+                       a.embedding AS embedding
                 """,
                 email=owner_email,
                 exclude_id=exclude_id,
@@ -702,7 +790,10 @@ async def get_open_actions_for_owner(
                 """
                 MATCH (m:Meeting {id: $meeting_id})-[:DISCUSSED*0..1]->(a:ActionItem)
                 WHERE coalesce(a.done, false) = false AND a.id <> $exclude_id
-                RETURN a.id AS id, a.task AS task, a.jira_key AS jira_key, a.embedding AS embedding
+                RETURN a.id AS id, a.task AS task, a.jira_key AS jira_key,
+                       a.linear_id AS linear_id, a.linear_identifier AS linear_identifier,
+                       a.linear_url AS linear_url, a.linear_state AS linear_state,
+                       a.embedding AS embedding
                 """,
                 meeting_id=meeting_id,
                 exclude_id=exclude_id,
@@ -916,13 +1007,20 @@ async def get_all_actions(
             MATCH (a:ActionItem)
             {where_clause}
             OPTIONAL MATCH (m:Meeting)-[:FOLLOWS_UP]->(a)
+            WITH a, min(m.date) AS meeting_date
             OPTIONAL MATCH (a)-[:ASSIGNED_TO]->(p:Person)
+            ORDER BY p.name ASC
+            WITH a, meeting_date, head(collect(p)) AS p
             OPTIONAL MATCH (parent:ActionItem)-[:PARENT_OF]->(a)
+            ORDER BY parent.id ASC
+            WITH a, meeting_date, p, head(collect(parent)) AS parent
             RETURN a.id AS id, a.task AS task, coalesce(p.name, a.owner) AS owner,
                    a.due AS due,
-                   coalesce(substring(a.created_at, 0, 10), m.date, '') AS created_at,
+                   coalesce(substring(a.created_at, 0, 10), meeting_date, '') AS created_at,
                    a.priority AS priority, a.jira_key AS jira_key,
                    a.jira_status AS jira_status, coalesce(a.done, false) AS done,
+                   a.linear_id AS linear_id, a.linear_identifier AS linear_identifier,
+                   a.linear_url AS linear_url, a.linear_state AS linear_state,
                    p.email AS owner_email,
                    parent.id AS parent_id, parent.task AS parent_task,
                    parent.jira_key AS parent_jira_key
@@ -1603,3 +1701,174 @@ async def close_agent_run_on_merge(
         )
         rows = [dict(r) async for r in result]
     return rows[0] if rows else None
+
+
+async def resolve_person_review(
+    review_id: str, name: str, email: str | None = None, driver: Any | None = None
+) -> dict[str, Any]:
+    """Resolve a PersonReview node into a verified Person node and link them to the meeting.
+
+    Invariant (Blocker 2):
+    Never synthesize or guess an email address. If no email is provided or resolved from
+    an existing Person record with the exact same name, key the Person node deterministically
+    by canonical name: `uuid5_id("person", f"name:{norm_name.lower()}")`, leaving `p.email = NULL`.
+    """
+    driver = driver or get_driver()
+    norm_email = email.strip().lower() if email and email.strip() else None
+    norm_name = name.strip()
+
+    async with driver.session() as session:
+        find_res = await session.run(
+            """
+            MATCH (m:Meeting)-[rel:NEEDS_REVIEW]->(r:PersonReview {id: $review_id})
+            RETURN r.id AS review_id, r.name AS old_name, m.id AS meeting_id, m.title AS meeting_title
+            """,
+            review_id=review_id,
+        )
+        record = None
+        async for rec in find_res:
+            record = dict(rec)
+            break
+        if not record:
+            return {}
+
+        old_name = record["old_name"]
+        meeting_id = record["meeting_id"]
+
+        if norm_email:
+            person_id = uuid5_id("person", norm_email)
+        else:
+            # Deterministic uuid5 keyed on canonical name when no email exists
+            person_id = uuid5_id("person", f"name:{norm_name.lower()}")
+
+        res = await session.run(
+            """
+            MATCH (m:Meeting {id: $meeting_id})
+            MATCH (r:PersonReview {id: $review_id})
+            MERGE (p:Person {id: $person_id})
+            ON CREATE SET p.name = $name, p.email = $email, p.created_at = datetime()
+            ON MATCH SET p.name = coalesce(p.name, $name),
+                         p.email = CASE WHEN $email IS NOT NULL THEN $email ELSE p.email END
+            MERGE (p)-[:ATTENDED]->(m)
+            SET r.status = 'resolved'
+            WITH m, p
+            OPTIONAL MATCH (m)-[:FOLLOWS_UP]->(a:ActionItem)
+            WHERE toLower(a.owner) = toLower($old_name)
+            SET a.owner = p.name
+            FOREACH (_ IN CASE WHEN a IS NOT NULL THEN [1] ELSE [] END |
+                MERGE (a)-[:ASSIGNED_TO]->(p)
+            )
+            RETURN p.id AS person_id, p.name AS name, p.email AS email, m.id AS meeting_id
+            """,
+            meeting_id=meeting_id,
+            review_id=review_id,
+            email=norm_email,
+            name=norm_name,
+            person_id=person_id,
+            old_name=old_name,
+        )
+        resolved_rec = None
+        async for r in res:
+            resolved_rec = dict(r)
+            break
+        return resolved_rec or {
+            "review_id": review_id,
+            "status": "resolved",
+            "name": norm_name,
+            "email": norm_email,
+        }
+
+
+async def delete_person_review(
+    review_id: str, delete_actions: bool = True, driver: Any | None = None
+) -> bool:
+    """Permanently delete a PersonReview node and optionally remove erroneous actions."""
+    driver = driver or get_driver()
+    async with driver.session() as session:
+        find_res = await session.run(
+            """
+            MATCH (m:Meeting)-[rel:NEEDS_REVIEW]->(r:PersonReview {id: $review_id})
+            RETURN r.name AS name, m.id AS meeting_id
+            """,
+            review_id=review_id,
+        )
+        record = None
+        async for rec in find_res:
+            record = dict(rec)
+            break
+
+        if not record:
+            del_res = await session.run(
+                "MATCH (r:PersonReview {id: $review_id}) DETACH DELETE r",
+                review_id=review_id,
+            )
+            await del_res.consume()
+            return True
+
+        name = record["name"]
+        meeting_id = record["meeting_id"]
+
+        if delete_actions and name:
+            del_act = await session.run(
+                """
+                MATCH (m:Meeting {id: $meeting_id})-[:FOLLOWS_UP]->(a:ActionItem)
+                WHERE toLower(a.owner) = toLower($name) AND a.jira_key IS NULL
+                DETACH DELETE a
+                """,
+                meeting_id=meeting_id,
+                name=name,
+            )
+            await del_act.consume()
+
+        del_rev = await session.run(
+            "MATCH (r:PersonReview {id: $review_id}) DETACH DELETE r",
+            review_id=review_id,
+        )
+        await del_rev.consume()
+        return True
+
+
+async def add_meeting_attendee(
+    meeting_id: str, name: str, email: str | None = None, driver: Any | None = None
+) -> dict[str, Any]:
+    """Add an attendee to a meeting directly.
+
+    Invariant:
+    Never synthesize or guess email addresses. If no verified email is provided by the
+    caller, key the Person node deterministically by canonical name:
+    `uuid5_id("person", f"name:{norm_name.lower()}")`, leaving `p.email = NULL`.
+    """
+    driver = driver or get_driver()
+    norm_email = email.strip().lower() if email and email.strip() else None
+    norm_name = name.strip()
+    if norm_email:
+        person_id = uuid5_id("person", norm_email)
+    else:
+        person_id = uuid5_id("person", f"name:{norm_name.lower()}")
+
+    async with driver.session() as session:
+        res = await session.run(
+            """
+            MATCH (m:Meeting {id: $meeting_id})
+            MERGE (p:Person {id: $person_id})
+            ON CREATE SET p.name = $name, p.email = $email, p.created_at = datetime()
+            ON MATCH SET p.name = coalesce(p.name, $name),
+                         p.email = CASE WHEN $email IS NOT NULL THEN $email ELSE p.email END
+            MERGE (p)-[:ATTENDED]->(m)
+            RETURN p.id AS person_id, p.name AS name, p.email AS email, m.id AS meeting_id
+            """,
+            meeting_id=meeting_id,
+            email=norm_email,
+            name=norm_name,
+            person_id=person_id,
+        )
+        rec = None
+        async for r in res:
+            rec = dict(r)
+            break
+        return rec or {
+            "person_id": person_id,
+            "name": norm_name,
+            "email": norm_email,
+            "meeting_id": meeting_id,
+        }

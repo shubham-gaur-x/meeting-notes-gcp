@@ -1150,6 +1150,97 @@ model, where it can be validated against a real re-embed.
 
 ---
 
+## ADR-028 — Scope boundary: Chat and groupchat ingestion deferred to future phase
+
+**Date:** 2026-09-22 · **Status:** Accepted
+
+**Context.** Inquiries arose regarding whether Google Chat (spaces/DMs), Slack groupchats,
+and Google Meet in-call text chats are ingested into the meeting-memory knowledge graph.
+
+**Decision.** Chat and groupchat ingestion is explicitly out of scope for v6. The four-source
+ingestion contract remains:
+1. Google Meet (`sources/meet.py`): Spoken audio transcripts via `google.workspace.meet.transcript.v2.fileGenerated` Pub/Sub events.
+2. Gmail (`sources/gmail.py`): Email threads.
+3. Google Calendar (`sources/calendar.py`): Calendar events and invitees.
+4. Jira (`sources/jira.py`): Issues and bidirectional task status.
+
+**Consequences.** No chat messages are ingested or processed. The dashboard UI safely
+handles this boundary by hiding the chat filter pill when 0 chat items exist. Adding chat in
+a future phase requires:
+- Requesting Google Workspace OAuth scopes `https://www.googleapis.com/auth/chat.messages.readonly` and `chat.spaces.readonly` (or Slack Bot scopes).
+- Creating a new `sources/chat.py` adapter conforming to the `Source` protocol.
+- Deploying an `ingest-chat` Cloud Run Job and Cloud Scheduler trigger.
+
+**Rejected:** *Attempting ad-hoc scraping of Google Meet in-call sidechats.* Google Meet's
+Workspace Events API delivers transcripts only; in-meeting chat logs are stored separately
+and cannot be reliably fetched with the current `meetings.space.readonly` scope.
+
+---
+
+## ADR-029 — Linear issue tracking alongside Jira, with issue_tracker:"both" deduplication
+
+### Context
+Delivery teams increasingly use Linear for engineering sprint execution while enterprise client
+reporting remains anchored in Jira. To support both ecosystems without forcing an either-or
+compromise, meeting-notes-gcp needs first-class Linear issue creation, status synchronization,
+and issue-to-meeting graph provenance.
+
+### Decision
+1. Add `issue_tracker: Literal["jira", "linear", "both", "none"] = "jira"` to application settings (`config.py`).
+2. Enumeration of routing modes:
+   - `"jira"` (default): Action items push to Jira only (`jira_pusher.py`), preserving established v6 behavior.
+   - `"linear"`: Action items push to Linear only (`linear_pusher.py`) via the Linear GraphQL client (`linear_client.py`).
+   - `"both"`: Action items push to both Jira and Linear. In Memgraph, the `ActionItem` node gains dual tracker provenance with Linear properties (`linear_id`, `linear_identifier`, `linear_url`, `linear_state`) alongside Jira keys, with `[:PARENT_OF]` edges preserving subtask hierarchy.
+   - `"none"`: Disables external tracker pushing entirely (useful for offline testing and fixture replays).
+3. Implement deduplication checks: prior to creating an issue on either platform, verify whether
+   an issue with identical summary or provenance already exists on that tracker.
+
+### Consequences
+- Added `linear_client.py` implementing connection pooling, query batching, and exponential
+  backoff retry for rate limits.
+- Graph schema explicitly supports dual tracker tracking with zero cross-tracker key collisions.
+- Lays the foundation for autonomous agent task pickup in Phase 14 (`dev_agent`).
+
+---
+
+## ADR-030 — Opportunistic vector chunk retrieval with fail-soft degradation to graph context
+
+**Date:** 2026-09-24 · **Status:** Accepted
+
+**Context.** The Ask RAG conversational endpoint combines Memgraph Cypher traversals with chunk-level
+vector similarity search over meeting transcripts and discussions. External vector embedding calls
+(e.g. Vertex AI text-embedding-004) or local vector indexes may experience cold starts, transient
+timeouts, or uninitialized vector tables during initial boot.
+
+**Decision.** Hybrid RAG retrieval treats chunk-level vector search as an opportunistic enrichment layer:
+1. Vector similarity search (`search_similar_chunks`) is bounded (`limit=4`) and executes within a protected block.
+2. If vector search encounters an uninitialized index, timeout, or external provider error, it logs a structured warning (`retrieval.chunk_search_failed`) and degrades gracefully to deterministic Cypher graph traversals and keyword/semantic meeting search.
+3. In contrast, Cypher graph query syntax and database connection errors fail loudly to avoid silent data corruption.
+
+**Consequences.** Chat answers remain available with verified meeting metadata, decisions, and action items even during transient vector API latency or before background chunk embedding completes.
+
+**Rejected:** *Hard failure on missing vector index.* Would cause the primary chat interface to return 500 errors on cold start or when external embedding APIs hit rate limits.
+
+---
+
+## ADR-031 — Filtering synthetic transcript artifacts (junk speakers) from review queues
+
+**Date:** 2026-09-24 · **Status:** Accepted
+
+**Context.** Speech-to-text engines and Google Meet transcripts frequently introduce synthetic placeholder tokens for unassigned audio streams (e.g. `Speaker 1`, `Unknown`, `Unidentified`, `Call Participant`). Under the original v6 contract, every string entered the review queue, flooding operators with dozens of junk placeholder review items that represent non-humans.
+
+**Decision.**
+1. `person_resolver.is_junk_name()` identifies generic audio stream tokens (`speaker \d+`, `unknown`, `null`, etc.).
+2. In `resolve()`, junk names are classified as `status="dropped"` with reason `"junk-name"`.
+3. In `resolve_attendees()`, dropped junk speaker artifacts are filtered out of both the `resolved` and `needs_review` queues.
+4. Real human names that cannot be matched continue to be preserved in the `needs_review` queue without data loss ("never drop real human names").
+
+**Consequences.** Operators only see real, ambiguous human names in review queues, eliminating review noise from transcript artifacts.
+
+**Rejected:** *Keeping synthetic speaker tokens in the review queue.* Clogs human operator review with dozens of non-actionable "Speaker 1" prompts.
+
+---
+
 ## Template
 
 ```

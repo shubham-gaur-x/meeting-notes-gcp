@@ -15,15 +15,27 @@ from __future__ import annotations
 import re
 from typing import Any
 
+# Pure alphanumeric single-word meeting tokens matched via set intersection
+# with words extracted by re.findall(r"\b\w+\b", text).
 _MEETING_KEYWORDS = {
     "meeting", "call", "standup", "sync", "review", "demo", "interview",
     "discussion", "conference", "webinar", "workshop", "session", "agenda",
-    "minutes", "recap", "follow-up", "followup",
+    "minutes", "recap", "followup",
     # additional work meeting terms
     "touchpoint", "touchpoints", "update", "updates", "pilot", "kickoff",
     "onboarding", "training", "debrief", "retrospective", "retro", "planning",
     "sprint", "checkin", "handoff", "walkthrough", "briefing", "alignment",
+    "catchup",
 }
+
+# Multi-word or punctuated meeting terms not extractable by \b\w+\b word tokenization.
+# Evaluated via regex word boundaries to prevent false negatives on hyphenated/colon phrases.
+_MEETING_PHRASE_PATTERNS = [
+    re.compile(r"\b1[:\-]1\b"),
+    re.compile(r"\bone[- ]on[- ]one\b", re.I),
+    re.compile(r"\bcatch[- ]up\b", re.I),
+    re.compile(r"\bfollow[- ]up\b", re.I),
+]
 
 _ACTION_PATTERNS = [
     re.compile(r"\baction item\b", re.I),
@@ -154,7 +166,8 @@ def classify(text: str, metadata: dict[str, Any]) -> float:
 
     # Signal 1: meeting keywords in subject/title (strong signal)
     keyword_hits = len(words & _MEETING_KEYWORDS)
-    score += min(keyword_hits * 0.12, 0.35)
+    phrase_hits = sum(1 for p in _MEETING_PHRASE_PATTERNS if p.search(text))
+    score += min((keyword_hits + phrase_hits) * 0.12, 0.35)
 
     # Signal 2: has attendees metadata
     if metadata.get("attendees") or metadata.get("attendees_count", 0) > 0:

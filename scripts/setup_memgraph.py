@@ -41,6 +41,8 @@ _ID_CONSTRAINED = (
     # review / governance
     "PersonReview",
     "Blocker",
+    # semantic chunks
+    "Chunk",
     # provenance — schema in v1, writers in v2 (ADR-008)
     "Ticket",
     "PullRequest",
@@ -86,7 +88,11 @@ def statements(embedding_dimension: int) -> list[str]:
 
     # Vector indexes for semantic search. CREATE VECTOR INDEX is naturally
     # idempotent in Memgraph, unlike constraints.
-    for name, label in (("meeting_embedding_idx", "Meeting"), ("fact_embedding_idx", "Fact")):
+    for name, label in (
+        ("meeting_embedding_idx", "Meeting"),
+        ("fact_embedding_idx", "Fact"),
+        ("chunk_embedding_idx", "Chunk"),
+    ):
         out.append(
             f"CREATE VECTOR INDEX {name} ON :{label}(embedding) "
             f'WITH CONFIG {{"dimension": {embedding_dimension}, '

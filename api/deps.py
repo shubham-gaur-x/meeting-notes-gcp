@@ -8,7 +8,7 @@ carry a bearer token and are HMAC-verified instead.
 from __future__ import annotations
 
 import structlog
-from fastapi import Header, HTTPException
+from fastapi import Depends, Header, HTTPException
 
 from meeting_notes import access_control
 from meeting_notes.access_control import Principal
@@ -72,3 +72,13 @@ async def principal(authorization: str | None = Header(default=None)) -> Princip
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except KeyError as exc:
         raise HTTPException(status_code=403, detail="unknown principal") from exc
+
+
+async def require_admin(user: Principal = Depends(principal)) -> Principal:
+    """Resolve the caller and enforce administrative role."""
+    if user.role != access_control.ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail="Forbidden: administrative role required",
+        )
+    return user
