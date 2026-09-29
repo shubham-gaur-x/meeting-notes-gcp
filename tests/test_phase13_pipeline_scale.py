@@ -401,7 +401,12 @@ def test_should_use_linear_fail_safe_routing() -> None:
     from meeting_notes.dev_agent.orchestrator import _should_use_linear
 
     # 1. Jira only mode
-    jira_settings = Settings(issue_tracker="jira", jira_project_key="SCRUM", linear_api_key="lin-key")
+    jira_settings = Settings(
+        issue_tracker="jira",
+        jira_enabled=True,
+        jira_project_key="SCRUM",
+        linear_api_key="lin-key",
+    )
     assert _should_use_linear("SCRUM-12", jira_settings) is False
     assert _should_use_linear("ENG-42", jira_settings) is False
 
