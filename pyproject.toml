@@ -98,3 +98,24 @@ python_version = "3.11"
 warn_return_any = true
 disallow_untyped_defs = true        # CLAUDE.md: type hints on ALL signatures
 ignore_missing_imports = true
+
+[tool.deptry]
+optional_dependencies_dev_groups = ["dev"]
+
+[tool.deptry.package_module_name_map]
+cloud-sql-python-connector = "google"
+google-auth = "google"
+python-dotenv = "dotenv"
+
+[tool.deptry.per_rule_ignores]
+DEP001 = ["yaml"]
+DEP002 = [
+    "uvicorn",
+    "cloud-sql-python-connector",
+    "google-cloud-secret-manager",
+    "google-cloud-pubsub",
+    "google-auth-oauthlib",
+    "google-api-python-client",
+    "google-cloud-aiplatform",
+]
+DEP003 = ["yaml"]
