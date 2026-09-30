@@ -35,3 +35,12 @@ Read `CLAUDE.md` before any task, then `docs/PHASE_PLAN.md`. The short version:
 
 Phase 0.5 (the OAuth spike) gates every other phase. Do not build infrastructure or connectors
 until a real Workspace token has been held in hand — see `docs/GOOGLE_AUTH.md`.
+
+## Canonical Spelling & Enterprise Terminology
+Enforce canonical spellings across transcripts, graph nodes, schemas, and PRs:
+- **`Onix`**: Always with an **`i`**. Never *Onyx* or *ONIX*.
+- **`Chick-fil-A`**: Always hyphenated, lowercase **`fil`**, capital **`A`** (Acronym: **`CFA`**).
+- **`gym-wise`**: Hyphenated lowercase. Never *GymWise*.
+- **`BigQuery`** / **`ScaNN`** / **`AlloyDB for PostgreSQL`** / **`Vertex AI`** / **`Dataplex`** / **`Dataflow`** / **`Dataproc`** / **`phData`** / **`Teradata`** / **`BTEQ`**.
+- Consult global rule: `~/.gemini/config/rules/enterprise-terminology.md` or skill `enterprise-terminology`.
+
