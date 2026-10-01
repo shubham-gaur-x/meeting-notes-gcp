@@ -19,14 +19,11 @@ dependencies = [
     "cloud-sql-python-connector[asyncpg]",
     "neo4j",                        # Bolt driver for Memgraph
     # GCP
-    "google-cloud-secret-manager",
-    "google-cloud-pubsub",
     "google-auth",
-    "google-auth-oauthlib",
-    "google-api-python-client",
-    "google-cloud-aiplatform",      # Vertex AI
     # Logging
     "structlog",
+    # Access control
+    "pyyaml>=6.0.0",
     # .env loading for local development. Cloud Run injects env vars directly,
     # so this is a local-only convenience — never a production dependency.
     "python-dotenv",
